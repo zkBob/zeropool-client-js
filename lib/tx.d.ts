@@ -1,5 +1,5 @@
 import Web3 from 'web3';
-import { TransactionData, Params, SnarkProof, UserAccount, VK } from 'libzeropool-rs-wasm-web';
+import { TransactionData, SnarkProof, UserAccount, VK } from 'libzeropool-rs-wasm-web';
 export declare class InvalidNumberOfOutputs extends Error {
     numOutputs: number;
     constructor(numOutputs: number);
@@ -26,8 +26,6 @@ export declare class ShieldedTx {
     memo: string;
     extra: string;
     static fromData(txData: TransactionData, txType: TxType, acc: UserAccount, snarkParams: {
-        transferParams: Params;
-        treeParams: Params;
         transferVk?: VK;
         treeVk?: VK;
     }, web3: Web3, worker: any): Promise<ShieldedTx>;
