@@ -1,14 +1,17 @@
 import { expose } from 'comlink';
 import { Proof, Params, TxParser, IndexedTx, ParseTxsResult, default as init, initThreadPool } from 'libzkbob-rs-wasm-web';
-
-import { FileCache } from './file-cache';
+import { FileCache, LoadingProgressCallback } from './file-cache';
 
 let txParams: Params;
 let treeParams: Params;
 let txParser: TxParser;
 
 const obj = {
-  async initWasm(url: string, paramUrls: { txParams: string; treeParams: string }) {
+  async initWasm(
+    url: string,
+    paramUrls: { txParams: string; treeParams: string },
+    loadingCallback: LoadingProgressCallback | undefined = undefined
+  ) {
     console.info('Initializing web worker...');
     await init(url);
     await initThreadPool(navigator.hardwareConcurrency);
