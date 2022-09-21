@@ -44,7 +44,7 @@ export async function init(
       const progress = await worker.getProgress();
       if (progress.total > 0 && progress.loaded != lastLoadedBytes) {
         loadingCallback(progress.loaded, progress.total);
-        lastLoadedBytes = progress.loading;
+        lastLoadedBytes = progress.loaded;
       }
 
       await new Promise(resolve => setTimeout(resolve, 10));
