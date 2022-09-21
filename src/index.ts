@@ -25,12 +25,34 @@ export async function init(
 ): Promise<ZkBobLibState> {
   const fileCache = await FileCache.init();
 
+  let loaded = false;
   const worker: any = wrap(new Worker(workerPath));
-  await worker.initWasm(wasmPath, {
+  let initializer: Promise<void> = worker.initWasm(wasmPath, {
     txParams: snarkParams.transferParamsUrl,
     treeParams: snarkParams.treeParamsUrl,
-    loadingCallback
   });
+
+  
+  initializer.then(() => {
+    loaded = true
+  });
+
+  if (loadingCallback !== undefined) {
+    // progress pseudo callback
+    let lastLoadedBytes = -1;
+    while (loaded == false) {
+      const progress = await worker.getProgress();
+      if (progress.total > 0 && progress.loaded != lastLoadedBytes) {
+        loadingCallback(progress.loaded, progress.total);
+        lastLoadedBytes = progress.loading;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+
+    const progress = await worker.getProgress();
+    loadingCallback(progress.loaded, progress.total);
+  }
 
   await initWasm(wasmPath);
   const transferVk = await (await fetch(snarkParams.transferVkUrl)).json();

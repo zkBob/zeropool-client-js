@@ -6,11 +6,13 @@ let txParams: Params;
 let treeParams: Params;
 let txParser: TxParser;
 
+let loadedBytes: number = 0;
+let totalBytes: number = 0;
+
 const obj = {
   async initWasm(
     url: string,
-    paramUrls: { txParams: string; treeParams: string },
-    loadingCallback: LoadingProgressCallback | undefined = undefined
+    paramUrls: { txParams: string; treeParams: string }
   ) {
     console.info('Initializing web worker...');
     await init(url);
@@ -18,28 +20,41 @@ const obj = {
 
     const cache = await FileCache.init();
 
+    loadedBytes = 0;
+    totalBytes = 0;
+
     let txParamsData = await cache.get(paramUrls.txParams);
     if (!txParamsData) {
       console.log(`Caching ${paramUrls.txParams}`)
-      txParamsData = await cache.cache(paramUrls.txParams);
+      txParamsData = await cache.cache(paramUrls.txParams, (loaded, total) => {
+        loadedBytes = loaded;
+        totalBytes = total;
+      });
       txParams = Params.fromBinary(new Uint8Array(txParamsData!));
     } else {
+      loadedBytes = txParamsData.byteLength;
+      totalBytes = txParamsData.byteLength;
+
       console.log(`File ${paramUrls.txParams} is present in cache, no need to fetch`);
       txParams = Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false);
     }
 
-    let treeParamsData = await cache.get(paramUrls.treeParams);
+    /*let treeParamsData = await cache.get(paramUrls.treeParams);
     if (!treeParamsData) {
       console.log(`Caching ${paramUrls.treeParams}`)
-      treeParamsData = await cache.cache(paramUrls.treeParams);
+      treeParamsData = await cache.cache(paramUrls.treeParams, loadingCallback);
       treeParams = Params.fromBinary(new Uint8Array(treeParamsData!));
     } else {
       console.log(`File ${paramUrls.treeParams} is present in cache, no need to fetch`);
       treeParams = Params.fromBinaryExtended(new Uint8Array(treeParamsData!), false, false);
-    }
+    }*/
 
     txParser = TxParser._new()
     console.info('Web worker init complete.');
+  },
+
+  getProgress() {
+    return {loaded: loadedBytes, total: totalBytes};
   },
 
   async proveTx(pub, sec) {
