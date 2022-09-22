@@ -6,6 +6,16 @@ let txParams: Params;
 let treeParams: Params;
 let txParser: TxParser;
 
+enum LoadingStage {
+  Unknown = 0,
+  Init = 1,
+  Download,
+  CheckingHash,
+  LoadObjects,
+  Completed,
+}
+
+let loadingStage: LoadingStage = LoadingStage.Unknown;
 let loadedBytes: number = 0;
 let totalBytes: number = 0;
 
@@ -14,6 +24,7 @@ const obj = {
     url: string,
     paramUrls: { txParams: string; treeParams: string }
   ) {
+    loadingStage = LoadingStage.Init;
     console.info('Initializing web worker...');
     await init(url);
     await initThreadPool(navigator.hardwareConcurrency);
@@ -30,7 +41,9 @@ const obj = {
         loadedBytes = loaded;
         totalBytes = total;
       });
+      console.log(`Parameter file returned`);
       txParams = Params.fromBinary(new Uint8Array(txParamsData!));
+      console.log(`Parameter object created`);
     } else {
       loadedBytes = txParamsData.byteLength;
       totalBytes = txParamsData.byteLength;
