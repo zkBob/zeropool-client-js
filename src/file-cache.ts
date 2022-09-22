@@ -1,8 +1,10 @@
 import { openDB, IDBPDatabase } from 'idb';
+import sha256 from 'fast-sha256';
 
 export type LoadingProgressCallback = (loadedBytes: number, totalBytes: number) => void;
 
-const STORE_NAME = 'files';
+const STORE_FILES = 'files';
+const STORE_HASHES = 'hashes';
 
 export class FileCache {
   private db: IDBPDatabase;
@@ -12,9 +14,10 @@ export class FileCache {
   }
 
   static async init(): Promise<FileCache> {
-    const db = await openDB('zp.file_cache', 1, {
+    const db = await openDB('zp.file_cache', 2, {
       upgrade(db) {
-        db.createObjectStore(STORE_NAME);
+        db.createObjectStore(STORE_FILES);
+        db.createObjectStore(STORE_HASHES);
       }
     });
 
@@ -48,7 +51,6 @@ export class FileCache {
       let chunks: Array<Uint8Array> = []; // array of received binary chunks (comprises the body)
       while(true) {
         const res = await reader.read();
-
         if (res.done) {
           break;
         }
@@ -60,11 +62,8 @@ export class FileCache {
           if (loadingCallback !== undefined) {
             loadingCallback(loadedBytes, totalBytes)
           }
-          console.log(`Received ${loadedBytes} of ${totalBytes} (${(loadedBytes / totalBytes) * 100.0} %)`)
         }
       }
-
-      console.log(`Concatenating chunks...`);
 
       // Concatenate data chunks into single Uint8Array
       let chunksAll = new Uint8Array(loadedBytes);
@@ -73,27 +72,49 @@ export class FileCache {
         chunksAll.set(chunk, position); // (4.2)
         position += chunk.length;
       }
-
-      console.log(`Saving buffer to the database`);
-
       const data = chunksAll.buffer;
-      await this.db.put(STORE_NAME, data, path);
 
-      console.log(`Parameter file loaded`);
+      console.time(`Saving ${path} to the database`);
+      await this.db.put(STORE_FILES, data, path);
+      console.timeEnd(`Saving ${path} to the database`);
+
+      // Calculate and write params hash without waiting
+      this.saveHash(path, data);
 
       return data;
-
     } else {
       throw Error(`Cannot get response body for ${path}`);
     }
-
-    const data = await (await fetch(path)).arrayBuffer();
-    await this.db.put(STORE_NAME, data, path);
-    return data;
   }
 
   public async get(path: string): Promise<ArrayBuffer | null> {
-    let data = await this.db.get(STORE_NAME, path);
+    let data = await this.db.get(STORE_FILES, path);
     return data;
+  }
+
+  public async getHash(path: string): Promise<string | null> {
+    let data = await this.db.get(STORE_HASHES, path);
+    return data;
+  }
+
+  public async calcHash(data: ArrayBuffer): Promise<string> {
+    console.time(`Compute hash for ${data.byteLength} bytes`);
+    const sha = sha256(new Uint8Array(data));
+    const computedHash = [...new Uint8Array(sha)].map(x => x.toString(16).padStart(2, '0')).join('');
+    console.timeEnd(`Compute hash for ${data.byteLength} bytes`);
+
+    return computedHash;
+  }
+
+  public async saveHash(path: string, data: ArrayBuffer): Promise<string> {
+    const computedHash = await this.calcHash(data);
+    await this.db.put(STORE_HASHES, computedHash, path);
+
+    return computedHash;
+  }
+
+  public async remove(path: string): Promise<void> {
+    await this.db.delete(STORE_FILES, path);
+    await this.db.delete(STORE_HASHES, path);
   }
 }
