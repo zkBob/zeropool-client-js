@@ -71,32 +71,23 @@ const obj = {
       console.timeEnd(`Download params`);
 
       loadingStage = LoadingStage.LoadObjects;
-
+      await new Promise(resolve => setTimeout(resolve, 20)); // workaround to proper stage updating
       console.time(`Creating Params object`);
       txParams = Params.fromBinary(new Uint8Array(txParamsData!));
       console.timeEnd(`Creating Params object`);
-    } else {
-      loadingStage = LoadingStage.LoadObjects;
 
+    } else {
       loadedBytes = txParamsData.byteLength;
       totalBytes = txParamsData.byteLength;
 
       console.log(`File ${paramUrls.txParams} is present in cache, no need to fetch`);
 
+      loadingStage = LoadingStage.LoadObjects;
+      await new Promise(resolve => setTimeout(resolve, 20)); // workaround to proper stage updating
       console.time(`Creating Params object`);
       txParams = Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false);
       console.timeEnd(`Creating Params object`);
     }
-
-    /*let treeParamsData = await cache.get(paramUrls.treeParams);
-    if (!treeParamsData) {
-      console.log(`Caching ${paramUrls.treeParams}`)
-      treeParamsData = await cache.cache(paramUrls.treeParams, loadingCallback);
-      treeParams = Params.fromBinary(new Uint8Array(treeParamsData!));
-    } else {
-      console.log(`File ${paramUrls.treeParams} is present in cache, no need to fetch`);
-      treeParams = Params.fromBinaryExtended(new Uint8Array(treeParamsData!), false, false);
-    }*/
 
     txParser = TxParser._new()
     console.info('Web worker init complete.');

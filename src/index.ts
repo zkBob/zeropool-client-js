@@ -42,7 +42,7 @@ export async function init(
   wasmPath: string,
   workerPath: string,
   snarkParams: SnarkConfigParams,
-  relayerURL: string | undefined = undefined,
+  relayerURL: string | undefined = undefined, // we'll try to fetch parameters hash for verification
   statusCallback: InitLibCallback | undefined = undefined 
 ): Promise<ZkBobLibState> {
   const fileCache = await FileCache.init();
@@ -53,6 +53,8 @@ export async function init(
     statusCallback({ state: InitState.Started, download: lastProgress });
   }
 
+  // Get tx parameters hash from the relayer
+  // to check local params consistence
   let txParamsHash: string | undefined = undefined;
   if (relayerURL !== undefined) {
     try {
@@ -62,57 +64,73 @@ export async function init(
     }
   }
 
-  let loaded = false;
-  const worker: any = wrap(new Worker(workerPath));
-  let initializer: Promise<void> = worker.initWasm(wasmPath, {
-    txParams: snarkParams.transferParamsUrl,
-    treeParams: snarkParams.treeParamsUrl,
-  }, txParamsHash);
+  let worker: any;
+  let transferVk: any;
+  let treeVk: any;
 
-  
-  initializer.then(() => {
-    loaded = true
-  });
+  // Intercept all possible exceptions to process `Failed` status
+  try {
+    let loaded = false;
+    worker = wrap(new Worker(workerPath));
+    let initializer: Promise<void> = worker.initWasm(wasmPath, {
+      txParams: snarkParams.transferParamsUrl,
+      treeParams: snarkParams.treeParamsUrl,
+    }, txParamsHash);
 
-  if (statusCallback !== undefined) {
-    // progress pseudo callback
-    while (loaded == false) {
-      const progress = await worker.getProgress();
-      const stage = await worker.getLoadingStage();
-      switch(stage) {
-        case 4: //LoadingStage.Download: // we cannot import LoadingStage in runtime
-          if (progress.total > 0 && progress.loaded != lastProgress.loaded) {
-            lastProgress = progress;
-            statusCallback({ state: InitState.DownloadingParams, download: lastProgress });
-          }
-          break;
+    
+    initializer.then(() => {
+      loaded = true
+    });
 
-        case 5: //LoadingStage.LoadObjects: // we cannot import LoadingStage in runtime
-          lastProgress = progress;
-          statusCallback({ state: InitState.InitWorker, download: lastProgress });
-          break;
+    if (statusCallback !== undefined) {
+      // progress pseudo callback
+      let lastStage = 0;
+      while (loaded == false) {
+        const progress = await worker.getProgress();
+        const stage = await worker.getLoadingStage();
+        switch(stage) {
+          case 4: //LoadingStage.Download: // we cannot import LoadingStage in runtime
+            if (progress.total > 0 && progress.loaded != lastProgress.loaded) {
+              lastProgress = progress;
+              statusCallback({ state: InitState.DownloadingParams, download: lastProgress });
+            }
+            break;
 
-        default: break;
+          case 5: //LoadingStage.LoadObjects: // we cannot import LoadingStage in runtime
+            if(lastStage != stage) {  // switch to this state just once
+              lastProgress = progress;
+              statusCallback({ state: InitState.InitWorker, download: lastProgress });
+            }
+            break;
+
+          default: break;
+        }
+        lastStage = stage;
+
+        await new Promise(resolve => setTimeout(resolve, 50));
       }
 
-      await new Promise(resolve => setTimeout(resolve, 10));
+      lastProgress = await worker.getProgress();
+      statusCallback({ state: InitState.InitWasm, download: lastProgress });
+    } else {
+      // we should wait worker init completed in case of callback absence
+      await initializer;
     }
 
-    lastProgress = await worker.getProgress();
-    statusCallback({ state: InitState.InitWasm, download: lastProgress });
-  }
+    console.time(`Wasm engine initializing`);
+    await initWasm(wasmPath);
+    transferVk = await (await fetch(snarkParams.transferVkUrl)).json();
+    treeVk = await (await fetch(snarkParams.treeVkUrl)).json();
+    console.timeEnd(`Wasm engine initializing`);
 
-  console.time(`Wasm engine initializing`);
-  await initWasm(wasmPath);
-  console.timeEnd(`Wasm engine initializing`);
-
-  console.time(`Load VKs`);
-  const transferVk = await (await fetch(snarkParams.transferVkUrl)).json();
-  const treeVk = await (await fetch(snarkParams.treeVkUrl)).json();
-  console.timeEnd(`Load VKs`);
-
-  if (statusCallback !== undefined) {
-    statusCallback({ state: InitState.Completed, download: lastProgress });
+    if (statusCallback !== undefined) {
+      statusCallback({ state: InitState.Completed, download: lastProgress });
+    }
+  } catch(err) {
+    console.error(`Cannot initialize client library: ${err.message}`);
+    if (statusCallback !== undefined) {
+      statusCallback({ state: InitState.Failed, download: lastProgress, error: err });
+    }
   }
 
   return {
