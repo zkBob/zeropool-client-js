@@ -16,9 +16,10 @@ export class FileCache {
   static async init(): Promise<FileCache> {
     const db = await openDB('zp.file_cache', 2, {
       upgrade(db, oldVersion, newVersions) {
-        if (oldVersion == 0) {
+        if (oldVersion < 1) {
           db.createObjectStore(STORE_FILES);
-        } else if (oldVersion == 1) {
+        }
+        if (oldVersion < 2) {
           db.createObjectStore(STORE_HASHES);
         }
       }
