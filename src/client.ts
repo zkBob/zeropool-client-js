@@ -12,6 +12,8 @@ import { IndexedTx } from 'libzkbob-rs-wasm-web';
 const MIN_TX_AMOUNT = BigInt(50000000);
 const DEFAULT_TX_FEE = BigInt(100000000);
 const BATCH_SIZE = 100;
+const PERMIT_DEADLINE_INTERVAL = 900;   // permit deadline is current time + 15 min
+const PERMIT_DEADLINE_THRESHOLD = 120;  // minimum time to deadline before tx sending
 
 export interface RelayerInfo {
   root: string;
@@ -343,7 +345,7 @@ export class ZkBobClient {
 
     let txData;
     if (fromAddress) {
-      const deadline:bigint = BigInt(Math.floor(Date.now() / 1000) + 900)
+      const deadline:bigint = BigInt(Math.floor(Date.now() / 1000) + PERMIT_DEADLINE_INTERVAL)
       const holder = ethAddrToBuf(fromAddress);
       txData = await state.account.createDepositPermittable({ 
         amount: (amountGwei + feeGwei).toString(),
@@ -366,6 +368,12 @@ export class ZkBobClient {
       const value = (amountGwei + feeGwei) * state.denominator;
       const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
       let signature = truncateHexPrefix(await signTypedData(deadline, value, salt));
+
+      // We should check deadline here because the user could introduce great delay
+      const curTimestamp = BigInt(Math.floor(Date.now() / 1000));
+      if (curTimestamp > deadline - BigInt(PERMIT_DEADLINE_THRESHOLD)) {
+        // need to sign again
+      }
 
       if (this.config.network.isSignatureCompact()) {
         signature = toCompactSignature(signature);
