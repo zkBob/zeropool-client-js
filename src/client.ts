@@ -11,7 +11,7 @@ import { IndexedTx } from 'libzkbob-rs-wasm-web';
 
 const MIN_TX_AMOUNT = BigInt(50000000);
 const DEFAULT_TX_FEE = BigInt(100000000);
-const BATCH_SIZE = 100;
+const BATCH_SIZE = 1000;
 
 export interface RelayerInfo {
   root: string;
