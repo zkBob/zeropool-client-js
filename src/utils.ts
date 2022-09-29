@@ -3,6 +3,7 @@ import { numberToHex, padLeft } from 'web3-utils';
 import { validateAddress } from 'libzkbob-rs-wasm-web';
 
 import { NetworkType } from './network-type';
+import { InternalError } from './errors';
 
 const util = require('ethereumjs-util');
 
@@ -79,7 +80,7 @@ export function ethAddrToBuf(address: string): Uint8Array {
 // output buffer to the bytesCnt bytes (only when bytesCnt > 0)
 export function hexToBuf(hex: string, bytesCnt: number = 0): Uint8Array {
   if (hex.length % 2 !== 0) {
-    throw new Error('Invalid hex string');
+    throw new InternalError('Invalid hex string');
   }
 
   if (hex.startsWith('0x')) {
