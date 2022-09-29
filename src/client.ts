@@ -73,13 +73,14 @@ export interface PoolLimits { // all values are in Gwei
       daylyForAll: Limit;
       poolLimit: Limit;
     };
-  };
+  }
   withdraw: {
     total: bigint;
     components: {
       daylyForAll: Limit;
     };
   }
+  tier: number;
 }
 
 export interface LimitsFetch { 
@@ -92,6 +93,7 @@ export interface LimitsFetch {
   withdraw: {
     daylyForAll: Limit;
   }
+  tier: number;
 }
 
 export interface ClientConfig {
@@ -925,7 +927,8 @@ export class ZkBobClient {
             total:      BigInt(poolLimits.dailyWithdrawalCap),
             available:  BigInt(poolLimits.dailyWithdrawalCap) - BigInt(poolLimits.dailyWithdrawalCapUsage),
           },
-        }
+        },
+        tier: poolLimits.tier === undefined ? 0 : Number(poolLimits.tier)
       };
     }
 
@@ -952,7 +955,8 @@ export class ZkBobClient {
             total:      BigInt(100000000000000),  // 100k tokens
             available:  BigInt(100000000000000),  // 100k tokens
           },
-        }
+        },
+        tier: 0
       };
     }
 
@@ -962,7 +966,7 @@ export class ZkBobClient {
       try {
         currentLimits = await fetchLimitsFromContract(this.config.network);
       } catch (e) {
-        console.error(`Cannot fetch limits from the contracct (${e}). Try to get them from relayer`);
+        console.error(`Cannot fetch limits from the contract (${e}). Try to get them from relayer`);
         try {
           currentLimits = await this.limits(token.relayerUrl, address)
         } catch (err) {
@@ -1008,7 +1012,8 @@ export class ZkBobClient {
       withdraw: {
         total: totalWithdrawLimit >= 0 ? totalWithdrawLimit : BigInt(0),
         components: currentLimits.withdraw,
-      }
+      },
+      tier: currentLimits.tier
     }
   }
 
@@ -1400,7 +1405,8 @@ export class ZkBobClient {
           total:      BigInt(res.withdraw.daylyForAll.total),
           available:  BigInt(res.withdraw.daylyForAll.available),
         },
-      }
+      },
+      tier: res.tier === undefined ? 0 : Number(res.tier)
     };
   }
 
