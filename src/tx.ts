@@ -3,18 +3,11 @@ import Web3 from 'web3';
 import { TransactionData, Proof, Params, SnarkProof, UserAccount, VK } from 'libzkbob-rs-wasm-web';
 import { HexStringReader, HexStringWriter } from './utils';
 import { CONSTANTS } from './constants';
+import { InternalError } from './errors';
 
 // Sizes in bytes
 const MEMO_META_SIZE: number = 8; // fee (u64)
 const MEMO_META_WITHDRAW_SIZE: number = 8 + 8 + 20; // fee (u64) + amount + address (u160)
-
-export class InvalidNumberOfOutputs extends Error {
-  public numOutputs: number;
-  constructor(numOutputs: number) {
-    super(`Invalid transaction: invalid number of outputs ${numOutputs}`);
-    this.numOutputs = numOutputs;
-  }
-}
 
 export enum TxType {
   Deposit = '0000',
@@ -86,12 +79,12 @@ export class ShieldedTx {
 
     const txValid = Proof.verify(snarkParams.transferVk!, txProof.inputs, txProof.proof);
     if (!txValid) {
-      throw new Error('invalid tx proof');
+      throw new InternalError('invalid tx proof');
     }
 
     const treeValid = Proof.verify(snarkParams.treeVk!, treeProof.inputs, treeProof.proof);
     if (!treeValid) {
-      throw new Error('invalid tree proof');
+      throw new InternalError('invalid tree proof');
     }
 
     tx.selector = web3.eth.abi.encodeFunctionSignature('transact()').slice(2);
@@ -194,7 +187,7 @@ export function parseHashes(ciphertext: string): string[] {
   const reader = new HexStringReader(ciphertext);
   let numItems = reader.readNumber(4, true);
   if (!numItems || numItems > CONSTANTS.OUT + 1) {
-    throw new InvalidNumberOfOutputs(numItems!);
+    throw new InternalError(`Invalid transaction: invalid number of outputs ${numItems}`);
   }
 
   const hashes = reader.readBigIntArray(numItems, 32, true).map(num => num.toString());
@@ -210,6 +203,6 @@ export function flattenSnarkProof(p: SnarkProof): bigint[] {
 
 function assertNotNull<T>(val: T): asserts val is NonNullable<T> {
   if (val === undefined || val === null) {
-    throw new Error('Unexpected null');
+    throw new InternalError('Unexpected null');
   }
 }

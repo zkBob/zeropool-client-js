@@ -4,6 +4,7 @@ import { Account, Note, assembleAddress } from 'libzkbob-rs-wasm-web';
 import { ShieldedTx, TxType } from './tx';
 import { toCanonicalSignature } from './utils';
 import { CONSTANTS } from './constants';
+import { InternalError } from './errors';
 
 export enum HistoryTransactionType {
 	Deposit = 1,
@@ -396,7 +397,7 @@ export class HistoryStorage {
                         
                       } else {
                         //incorrect signature
-                        throw new Error(`no signature for approvable deposit`);
+                        throw new InternalError(`no signature for approvable deposit`);
                       }
 
                     } else if (tx.txType == TxType.BridgeDeposit) {
@@ -447,15 +448,15 @@ export class HistoryStorage {
                     return allRecords;
 
                 } else {
-                  throw new Error(`Cannot decode calldata for tx ${txHash}: incorrect selector ${tx.selector}`);
+                  throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${tx.selector}`);
                 }
               }
               catch (e) {
-                throw new Error(`Cannot decode calldata for tx ${txHash}: ${e}`);
+                throw new InternalError(`Cannot decode calldata for tx ${txHash}: ${e}`);
               }
           }
 
-          throw new Error(`Unable to get timestamp for block ${txData.blockNumber}`);
+          throw new InternalError(`Unable to get timestamp for block ${txData.blockNumber}`);
       } else {
         // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
         let sendedRecords = this.sendedTxs[txHash];
@@ -465,13 +466,13 @@ export class HistoryStorage {
         }
       }
 
-      //throw new Error(`Unable to get transaction details (${txHash})`);
+      //throw new InternalError(`Unable to get transaction details (${txHash})`);
       // TODO: make it more precisely
       return [];
 
     }
 
-    throw new Error(`Cannot find txHash for memo at index ${memo.index}`);
+    throw new InternalError(`Cannot find txHash for memo at index ${memo.index}`);
   }
 
 }
