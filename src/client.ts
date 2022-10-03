@@ -866,8 +866,10 @@ export class ZkBobClient {
 
         oneTxPart -= noteAmount;
         remainRequestAmount -= noteAmount;
-        if(remainRequestAmount == BigInt(0) && requestIdx < transfers.length - 1) {
-          remainRequestAmount = transfers[++requestIdx].amountGwei;
+        if(remainRequestAmount == BigInt(0)) {
+          if (++requestIdx < transfers.length) {
+            remainRequestAmount = transfers[requestIdx].amountGwei;
+          }
         }
       }
 
