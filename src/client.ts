@@ -438,7 +438,7 @@ export class ZkBobClient {
       }
 
       if (aTx.amountGwei < MIN_TX_AMOUNT) {
-        throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
+        throw new TxSmallAmount(aTx.amountGwei, MIN_TX_AMOUNT);
       }
     })
 
@@ -446,8 +446,10 @@ export class ZkBobClient {
 
     if (txParts.length == 0) {
       const available = await this.calcMaxAvailableTransfer(tokenAddress, false);
-      const feeEst = await this.feeEstimate(tokenAddress, amountGwei, TxType.Transfer, false);
-      throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
+      const amounts = transfers.map((aTx) => aTx.amountGwei);
+      const totalAmount = amounts.reduce((acc, cur) => acc + cur, BigInt(0));
+      const feeEst = await this.feeEstimate(tokenAddress, amounts, TxType.Transfer, false);
+      throw new TxInsufficientFundsError(totalAmount + feeEst.total, available);
     }
 
     var jobsIds: string[] = [];
@@ -528,7 +530,7 @@ export class ZkBobClient {
 
     if (txParts.length == 0) {
       const available = await this.calcMaxAvailableTransfer(tokenAddress, false);
-      const feeEst = await this.feeEstimate(tokenAddress, amountGwei, TxType.Withdraw, false);
+      const feeEst = await this.feeEstimate(tokenAddress, [amountGwei], TxType.Withdraw, false);
       throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
 
