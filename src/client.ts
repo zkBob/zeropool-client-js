@@ -855,7 +855,7 @@ export class ZkBobClient {
 
       oneTxPart -= feeGwei; // available token amount for tx (account + notes)
       // create output notes for the transaction
-      while(oneTxPart >= 0 && requestIdx < transfers.length) {
+      while(oneTxPart > 0 && requestIdx < transfers.length) {
         let noteAmount = oneTxPart;
         if (oneTxPart > remainRequestAmount) {
           noteAmount = remainRequestAmount;
@@ -880,6 +880,7 @@ export class ZkBobClient {
       }
 
       result.push({outNotes: txNotes, fee: feeGwei, accountLimit: BigInt(0)});
+      txNotes = [];
       txIdx++;
     } while(requestIdx < transfers.length && txIdx < notesParts.length && remainRequestAmount > 0);
 
