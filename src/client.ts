@@ -1,5 +1,3 @@
-import { validateAddress, Output, Proof, DecryptedMemo, ITransferData, IWithdrawData, ParseTxsResult, StateUpdate } from 'libzkbob-rs-wasm-web';
-
 import { SnarkParams, Tokens } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix, toTwosComplementHex, addressFromSignature } from './utils';
 import { ZkBobState } from './state';
@@ -7,18 +5,36 @@ import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryTransactionType } from './history'
-import { IndexedTx } from 'libzkbob-rs-wasm-web';
+
+import { 
+  validateAddress, Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
+  ParseTxsResult, StateUpdate, IndexedTx 
+} from 'libzkbob-rs-wasm-web';
+
+import { 
+  NetworkError, RelayerError, RelayerJobError, TxDepositDeadlineExpiredError,
+  TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
+} from './errors';
 
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const MIN_TX_AMOUNT = BigInt(50000000);
 const DEFAULT_TX_FEE = BigInt(100000000);
-const BATCH_SIZE = 100;
+const BATCH_SIZE = 1000;
+const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
+const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
 
 export interface RelayerInfo {
   root: string;
   optimisticRoot: string;
-  deltaIndex: string;
-  optimisticDeltaIndex: string;
+  deltaIndex: bigint;
+  optimisticDeltaIndex: bigint;
+}
+const isRelayerInfo = (obj: any): obj is RelayerInfo => {
+  return typeof obj === 'object' && obj !== null &&
+    obj.hasOwnProperty('root') && typeof obj.root === 'string' &&
+    obj.hasOwnProperty('optimisticRoot') && typeof obj.optimisticRoot === 'string' &&
+    obj.hasOwnProperty('deltaIndex') && typeof obj.deltaIndex === 'number' &&
+    obj.hasOwnProperty('optimisticDeltaIndex') && typeof obj.optimisticDeltaIndex === 'number';
 }
 
 export interface BatchResult {
@@ -58,9 +74,15 @@ export interface TxToRelayer {
 export interface JobInfo {
   state: string;
   txHash: string[];
-  createdOn: BigInt;
-  finishedOn?: BigInt;
+  createdOn: number;
+  finishedOn?: number;
   failedReason?: string;
+}
+const isJobInfo = (obj: any): obj is JobInfo => {
+  return typeof obj === 'object' && obj !== null &&
+    obj.hasOwnProperty('state') && typeof obj.state === 'string' &&
+    obj.hasOwnProperty('txHash') && (!obj.txHash || Array.isArray(obj.txHash)) &&
+    obj.hasOwnProperty('createdOn') && typeof obj.createdOn === 'number';
 }
 
 export interface FeeAmount { // all values are in Gwei
@@ -86,13 +108,14 @@ export interface PoolLimits { // all values are in Gwei
       daylyForAll: Limit;
       poolLimit: Limit;
     };
-  };
+  }
   withdraw: {
     total: bigint;
     components: {
       daylyForAll: Limit;
     };
   }
+  tier: number;
 }
 
 export interface LimitsFetch { 
@@ -105,6 +128,7 @@ export interface LimitsFetch {
   withdraw: {
     daylyForAll: Limit;
   }
+  tier: number;
 }
 
 export interface ClientConfig {
@@ -276,10 +300,9 @@ export class ZkBobClient {
       const job = await this.getJob(token.relayerUrl, jobId);
 
       if (job === null) {
-        console.error(`Job ${jobId} not found.`);
-        throw new Error(`Job ${jobId} not found`);
-      } else if (job.state === 'failed') {
-        throw new Error(`Transaction [job ${jobId}] failed with reason: '${job.failedReason}'`);
+        throw new RelayerJobError(Number(jobId), 'not found');
+      } else if (job.state === 'failed')  {
+        throw new RelayerJobError(Number(jobId), job.failedReason !== undefined ? job.failedReason : 'unknown reason');
       } else if (job.state === 'completed') {
         hashes = job.txHash;
         break;
@@ -307,12 +330,11 @@ export class ZkBobClient {
     let hashes: string[];
     while (true) {
       const job = await this.getJob(token.relayerUrl, jobId);
-
+      
       if (job === null) {
-        console.error(`Job ${jobId} not found.`);
-        throw new Error(`Job ${jobId} not found`);
+        throw new RelayerJobError(Number(jobId), 'not found');
       } else if (job.state === 'failed') {
-        throw new Error(`Transaction [job ${jobId}] failed with reason: '${job.failedReason}'`);
+        throw new RelayerJobError(Number(jobId), job.failedReason !== undefined ? job.failedReason : 'unknown reason');
       } else if (job.state === 'completed') {
         hashes = job.txHash;
         break;
@@ -344,19 +366,19 @@ export class ZkBobClient {
     const state = this.zpStates[tokenAddress];
 
     if (amountGwei < MIN_TX_AMOUNT) {
-      throw new Error(`Deposit is too small (less than ${MIN_TX_AMOUNT.toString()})`);
+      throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
     }
 
     const limits = await this.getLimits(tokenAddress, (fromAddress !== null) ? fromAddress : undefined);
     if (amountGwei > limits.deposit.total) {
-      throw new Error(`Deposit is greater than current limit (${limits.deposit.total.toString()})`);
+      throw new TxLimitError(amountGwei, limits.deposit.total);
     }
 
     await this.updateState(tokenAddress);
 
     let txData;
     if (fromAddress) {
-      const deadline:bigint = BigInt(Math.floor(Date.now() / 1000) + 900)
+      let deadline = Math.floor(Date.now() / 1000) + PERMIT_DEADLINE_INTERVAL;
       const holder = ethAddrToBuf(fromAddress);
       txData = await state.account.createDepositPermittable({ 
         amount: (amountGwei + feeGwei).toString(),
@@ -365,6 +387,19 @@ export class ZkBobClient {
         holder
       });
 
+      // permittable deposit signature should be calculated for the typed data
+      const value = (amountGwei + feeGwei) * state.denominator;
+      const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
+      let signature = truncateHexPrefix(await signTypedData(BigInt(deadline), value, salt));
+      if (this.config.network.isSignatureCompact()) {
+        signature = toCompactSignature(signature);
+      }
+
+      // We should check deadline here because the user could introduce great delay
+      if (Math.floor(Date.now() / 1000) > deadline - PERMIT_DEADLINE_THRESHOLD) {
+        throw new TxDepositDeadlineExpiredError(deadline);
+      }
+
       const startProofDate = Date.now();
       const txProof = await this.worker.proveTx(txData.public, txData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
@@ -372,16 +407,7 @@ export class ZkBobClient {
 
       const txValid = Proof.verify(this.snarkParams.transferVk!, txProof.inputs, txProof.proof);
       if (!txValid) {
-        throw new Error('invalid tx proof');
-      }
-
-      // permittable deposit signature should be calculated for the typed data
-      const value = (amountGwei + feeGwei) * state.denominator;
-      const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
-      let signature = truncateHexPrefix(await signTypedData(deadline, value, salt));
-
-      if (this.config.network.isSignatureCompact()) {
-        signature = toCompactSignature(signature);
+        throw new TxProofError();
       }
 
       let tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
@@ -395,7 +421,7 @@ export class ZkBobClient {
       return jobId;
 
     } else {
-      throw new Error('You must provide fromAddress for bridge deposit transaction ');
+      throw new TxInvalidArgumentError('You must provide fromAddress for deposit transaction');
     }
   }
 
@@ -408,18 +434,20 @@ export class ZkBobClient {
 
     transfers.forEach((aTx) => {
       if (!validateAddress(aTx.destination)) {
-        throw new Error('Invalid address. Expected a shielded address.');
+        throw new TxInvalidArgumentError('Invalid address. Expected a shielded address.');
       }
 
       if (aTx.amountGwei < MIN_TX_AMOUNT) {
-        throw new Error(`Transfer amount is too small (less than ${MIN_TX_AMOUNT.toString()})`);
+        throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
       }
     })
 
     const txParts = await this.getTransactionParts(tokenAddress, transfers, feeGwei);
 
     if (txParts.length == 0) {
-      throw new Error('Cannot find appropriate multitransfer configuration (insufficient funds?)');
+      const available = await this.calcMaxAvailableTransfer(tokenAddress, false);
+      const feeEst = await this.feeEstimate(tokenAddress, amountGwei, TxType.Transfer, false);
+      throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
 
     var jobsIds: string[] = [];
@@ -447,7 +475,7 @@ export class ZkBobClient {
 
       const txValid = Proof.verify(this.snarkParams.transferVk!, txProof.inputs, txProof.proof);
       if (!txValid) {
-        throw new Error('invalid tx proof');
+        throw new TxProofError();
       }
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Transfer};
@@ -488,18 +516,20 @@ export class ZkBobClient {
     const state = this.zpStates[tokenAddress];
 
     if (amountGwei < MIN_TX_AMOUNT) {
-      throw new Error(`Withdraw amount is too small (less than ${MIN_TX_AMOUNT.toString()})`);
+      throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
     }
 
     const limits = await this.getLimits(tokenAddress, address);
     if (amountGwei > limits.withdraw.total) {
-      throw new Error(`Withdraw is greater than current limit (${limits.withdraw.total.toString()})`);
+      throw new TxLimitError(amountGwei, limits.withdraw.total);
     }
 
     const txParts = await this.getTransactionParts(tokenAddress, [{amountGwei, destination: address}], feeGwei);
 
     if (txParts.length == 0) {
-      throw new Error('Cannot find appropriate multitransfer configuration (insufficient funds?)');
+      const available = await this.calcMaxAvailableTransfer(tokenAddress, false);
+      const feeEst = await this.feeEstimate(tokenAddress, amountGwei, TxType.Withdraw, false);
+      throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
 
     const addressBin = ethAddrToBuf(address);
@@ -533,7 +563,7 @@ export class ZkBobClient {
 
       const txValid = Proof.verify(this.snarkParams.transferVk!, txProof.inputs, txProof.proof);
       if (!txValid) {
-        throw new Error('invalid tx proof');
+        throw new TxProofError();
       }
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Withdraw};
@@ -575,7 +605,7 @@ export class ZkBobClient {
     const state = this.zpStates[tokenAddress];
 
     if (amountGwei < MIN_TX_AMOUNT) {
-      throw new Error(`Deposit is too small (less than ${MIN_TX_AMOUNT.toString()})`);
+      throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
     }
 
     await this.updateState(tokenAddress);
@@ -592,7 +622,7 @@ export class ZkBobClient {
 
     const txValid = Proof.verify(this.snarkParams.transferVk!, txProof.inputs, txProof.proof);
     if (!txValid) {
-      throw new Error('invalid tx proof');
+      throw new TxProofError();
     }
 
     // regular deposit through approve allowance: sign transaction nullifier
@@ -605,7 +635,7 @@ export class ZkBobClient {
     const addrFromSig = addressFromSignature(signature, dataToSign);
     const limits = await this.getLimits(tokenAddress, addrFromSig);
     if (amountGwei > limits.deposit.total) {
-      throw new Error(`Deposit is greater than current limit (${limits.deposit.total.toString()})`);
+      throw new TxLimitError(amountGwei, limits.deposit.total);
     }
 
     let fullSignature = signature;
@@ -642,11 +672,11 @@ export class ZkBobClient {
 
     const outGwei = outsGwei.map(({ to, amount }) => {
       if (!validateAddress(to)) {
-        throw new Error('Invalid address. Expected a shielded address.');
+        throw new TxInvalidArgumentError('Invalid address. Expected a shielded address.');
       }
 
       if (BigInt(amount) < MIN_TX_AMOUNT) {
-        throw new Error(`One of the values is too small (less than ${MIN_TX_AMOUNT.toString()})`);
+        throw new TxSmallAmount(amount, MIN_TX_AMOUNT);
       }
 
       return { to, amount };
@@ -661,7 +691,7 @@ export class ZkBobClient {
 
     const txValid = Proof.verify(this.snarkParams.transferVk!, txProof.inputs, txProof.proof);
     if (!txValid) {
-      throw new Error('invalid tx proof');
+      throw new TxProofError();
     }
 
     let tx = { txType: TxType.Transfer, memo: txData.memo, proof: txProof };
@@ -681,57 +711,6 @@ export class ZkBobClient {
 
     return jobId;
   }
-
-  // DEPRECATED. Please use withdrawMulti methos instead
-  // Simple withdraw to the native address
-  // This method will fail when insufficent input notes (constants::IN) for withdrawal
-  public async withdrawSingle(tokenAddress: string, address: string, amountGwei: bigint, feeGwei: bigint = BigInt(0)): Promise<string> {
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
-
-    if (amountGwei < MIN_TX_AMOUNT) {
-      throw new Error(`Withdraw amount is too small (less than ${MIN_TX_AMOUNT.toString()})`);
-    }
-
-    const limits = await this.getLimits(tokenAddress, address);
-    if (amountGwei > limits.withdraw.total) {
-      throw new Error(`Withdraw is greater than current limit (${limits.withdraw.total.toString()})`);
-    }
-
-    await this.updateState(tokenAddress);
-
-    const txType = TxType.Withdraw;
-    const addressBin = ethAddrToBuf(address);
-
-    const txData = await state.account.createWithdraw({
-      amount: (amountGwei + feeGwei).toString(),
-      to: addressBin,
-      fee: feeGwei.toString(),
-      native_amount: '0',
-      energy_amount: '0'
-    });
-
-    const startProofDate = Date.now();
-    const txProof = await this.worker.proveTx(txData.public, txData.secret);
-    const proofTime = (Date.now() - startProofDate) / 1000;
-    console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-    
-    const txValid = Proof.verify(this.snarkParams.transferVk!, txProof.inputs, txProof.proof);
-    if (!txValid) {
-      throw new Error('invalid tx proof');
-    }
-
-    let tx = { txType: TxType.Withdraw, memo: txData.memo, proof: txProof };
-    const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
-
-    // Temporary save transaction in the history module (to prevent history delays)
-    const ts = Math.floor(Date.now() / 1000);
-    let rec = HistoryRecord.withdraw(address, amountGwei, feeGwei, ts, "0", true);
-    state.history.keepQueuedTransactions([rec], jobId);
-
-    return jobId;
-  }
-
 
   // ------------------=========< Transaction configuration >=========-------------------
   // | These methods includes fee estimation, multitransfer estimation and other inform |
@@ -961,7 +940,8 @@ export class ZkBobClient {
             total:      BigInt(poolLimits.dailyWithdrawalCap),
             available:  BigInt(poolLimits.dailyWithdrawalCap) - BigInt(poolLimits.dailyWithdrawalCapUsage),
           },
-        }
+        },
+        tier: poolLimits.tier === undefined ? 0 : Number(poolLimits.tier)
       };
     }
 
@@ -988,7 +968,8 @@ export class ZkBobClient {
             total:      BigInt(100000000000000),  // 100k tokens
             available:  BigInt(100000000000000),  // 100k tokens
           },
-        }
+        },
+        tier: 0
       };
     }
 
@@ -998,7 +979,7 @@ export class ZkBobClient {
       try {
         currentLimits = await fetchLimitsFromContract(this.config.network);
       } catch (e) {
-        console.error(`Cannot fetch limits from the contracct (${e}). Try to get them from relayer`);
+        console.error(`Cannot fetch limits from the contract (${e}). Try to get them from relayer`);
         try {
           currentLimits = await this.limits(token.relayerUrl, address)
         } catch (err) {
@@ -1044,7 +1025,8 @@ export class ZkBobClient {
       withdraw: {
         total: totalWithdrawLimit >= 0 ? totalWithdrawLimit : BigInt(0),
         components: currentLimits.withdraw,
-      }
+      },
+      tier: currentLimits.tier
     }
   }
 
@@ -1356,51 +1338,57 @@ export class ZkBobClient {
     url.searchParams.set('limit', limit.toString());
     url.searchParams.set('offset', offset.toString());
     const headers = {'content-type': 'application/json;charset=UTF-8'};
-    const res = await (await fetch(url.toString(), {headers})).json();  
+
+    const txs = await this.fetchJson(url.toString(), {headers});
+    if (!Array.isArray(txs)) {
+      throw new RelayerError(200, `Response should be an array`);
+    }
   
-    return res;
+    return txs;
   }
   
   // returns transaction job ID
   private async sendTransactions(relayerUrl: string, txs: TxToRelayer[]): Promise<string> {
     const url = new URL('/sendTransactions', relayerUrl);
     const headers = {'content-type': 'application/json;charset=UTF-8'};
-    const res = await fetch(url.toString(), { method: 'POST', headers, body: JSON.stringify(txs) });
-  
-    if (!res.ok) {
-      const body = await res.json();
-      throw new Error(`Error ${res.status}: ${JSON.stringify(body)}`)
+
+    const res = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify(txs) });
+    if (typeof res.jobId !== 'string') {
+      throw new RelayerError(200, `Cannot get jobId for transaction (response: ${res})`);
     }
-  
-    const json = await res.json();
-    return json.jobId;
+
+    return res.jobId;
   }
   
   private async getJob(relayerUrl: string, id: string): Promise<JobInfo | null> {
     const url = new URL(`/job/${id}`, relayerUrl);
     const headers = {'content-type': 'application/json;charset=UTF-8'};
-    const res = await (await fetch(url.toString(), {headers})).json();
+    const res = await this.fetchJson(url.toString(), {headers});
   
-    if (typeof res === 'string') {
-      return null;
-    } else {
+    if (isJobInfo(res)) {
       return res;
     }
+
+    return null;
   }
   
   private async info(relayerUrl: string): Promise<RelayerInfo> {
     const url = new URL('/info', relayerUrl);
     const headers = {'content-type': 'application/json;charset=UTF-8'};
-    const res = await fetch(url.toString(), {headers});
-  
-    return await res.json();
+    const res = await this.fetchJson(url.toString(), {headers});
+
+    if (isRelayerInfo(res)) {
+      return res;
+    }
+
+    throw new RelayerError(200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
   }
   
   private async fee(relayerUrl: string): Promise<bigint> {
     try {
       const url = new URL('/fee', relayerUrl);
       const headers = {'content-type': 'application/json;charset=UTF-8'};
-      const res = await (await fetch(url.toString(), {headers})).json();
+      const res = await this.fetchJson(url.toString(), {headers});
       return BigInt(res.fee);
     } catch {
       return DEFAULT_TX_FEE;
@@ -1413,7 +1401,7 @@ export class ZkBobClient {
       url.searchParams.set('address', address);
     }
     const headers = {'content-type': 'application/json;charset=UTF-8'};
-    const res = await (await fetch(url.toString(), {headers})).json();
+    const res = await this.fetchJson(url.toString(), {headers});
 
     return {
       deposit: {
@@ -1436,18 +1424,54 @@ export class ZkBobClient {
           total:      BigInt(res.withdraw.daylyForAll.total),
           available:  BigInt(res.withdraw.daylyForAll.available),
         },
-      }
+      },
+      tier: res.tier === undefined ? 0 : Number(res.tier)
     };
   }
 
-  // DEPRECATED: use fetchTransactionsOptimistic to get actual state including optimistic state
-  private async fetchTransactions(relayerUrl: string, offset: BigInt, limit: number = 100): Promise<string[]> {
-    const url = new URL(`/transactions`, relayerUrl);
-    url.searchParams.set('limit', limit.toString());
-    url.searchParams.set('offset', offset.toString());
-    const headers = {'content-type': 'application/json;charset=UTF-8'};
-    const res = await (await fetch(url.toString(), {headers})).json();
-  
-    return res;
+  // Universal response parser
+  private async fetchJson(url: string, headers: RequestInit): Promise<any> {
+    let response: Response;
+    try {
+      response = await fetch(url, headers);
+    } catch(err) {
+      // server is unreachable
+      throw new NetworkError(err);
+    }
+
+    // Extract response body: json | string | null
+    let responseBody: any = null;
+    const contentType = response.headers.get('content-type')!;
+    if (contentType === null) responseBody = null;
+    else if (contentType.startsWith('application/json;')) responseBody = await response.json();
+    else if (contentType.startsWith('text/plain;')) responseBody = await response.text();
+    else if (contentType.startsWith('text/html;')) responseBody = (await response.text()).replace(/<[^>]+>/g, '').replace(/(?:\r\n|\r|\n)/g, ' ').replace(/^\s+|\s+$/gm,'');
+    else console.warn(`Unsupported response content-type in response: ${contentType}`);
+
+    // Unsuccess error code case (not in range 200-299)
+    if (!response.ok) {
+      if (responseBody === null) {
+        throw new RelayerError(response.status, 'no description provided');  
+      }
+
+      // process string error response
+      if (typeof responseBody === 'string') {
+        throw new RelayerError(response.status, responseBody);
+      }
+
+      // process 'errors' json response
+      if (Array.isArray(responseBody.errors)) {
+        let errorsText = responseBody.errors.map((oneError) => {
+          return `[${oneError.path}]: ${oneError.message}`;
+        }).join(', ');
+
+        throw new RelayerError(response.status, errorsText);
+      }
+
+      // unknown error format
+      throw new RelayerError(response.status, contentType);
+    } 
+
+    return responseBody;
   }
 }

@@ -5,6 +5,7 @@ import { FileCache } from './file-cache';
 export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits } from './client';
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType } from './history'
+export * from './errors'
 
 
 export enum InitState {
