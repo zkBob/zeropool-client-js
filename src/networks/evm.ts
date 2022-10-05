@@ -72,6 +72,10 @@ export class EvmNetwork implements NetworkBackend {
                         internalType: 'uint256',
                         name: 'depositCap',
                         type: 'uint256',
+                    }, {
+                      internalType: 'uint8',
+                      name: 'tier',
+                      type: 'uint8',
                     }],
                     internalType: 'struct ZkBobAccounting.Limits',
                     name: '',
