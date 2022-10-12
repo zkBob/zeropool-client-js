@@ -53,6 +53,14 @@ export class ZkBobState {
     return this.account.isOwnAddress(shieldedAddress);
   }
 
+  public getRoot(): bigint {
+    return BigInt(this.account.getRoot());
+  }
+
+  public getNextIndex(): bigint {
+    return BigInt(this.account.nextTreeIndex());
+  }
+
   public rawState(): any {
     return this.account.getWholeState();
   }
