@@ -1021,9 +1021,9 @@ export class ZkBobClient {
   }
 
   // Get the local Merkle tree root & index
-  public async getLocalState(tokenAddress: string): Promise<TreeState> {
-    const root = await this.zpStates[tokenAddress].getRoot();
-    const index = await this.zpStates[tokenAddress].getNextIndex();
+  public getLocalState(tokenAddress: string): TreeState {
+    const root = this.zpStates[tokenAddress].getRoot();
+    const index = this.zpStates[tokenAddress].getNextIndex();
 
     return {root, index};
   }
@@ -1423,7 +1423,7 @@ export class ZkBobClient {
       response = await fetch(url, headers);
     } catch(err) {
       // server is unreachable
-      throw new NetworkError(err);
+      throw new NetworkError(err, url);
     }
 
     // Extract response body: json | string | null

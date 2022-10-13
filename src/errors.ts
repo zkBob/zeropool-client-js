@@ -75,8 +75,8 @@ export class RelayerError extends BobError {
 }
 
 export class NetworkError extends BobError {
-    constructor(cause?: Error) {
-        super(`It's seems the network is unavailable (${cause?.message})`);
+    constructor(cause?: Error, host?: string) {
+        super(`Unable connect to the host ${host !== undefined ? host : ''} (${cause?.message})`);
     }
 }
 
