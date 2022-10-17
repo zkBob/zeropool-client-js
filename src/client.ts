@@ -882,7 +882,8 @@ export class ZkBobClient {
       result.push({outNotes: txNotes, fee: feeGwei, accountLimit: BigInt(0)});
       txNotes = [];
       txIdx++;
-    } while(requestIdx < transfers.length && txIdx < notesParts.length && remainRequestAmount > 0);
+    } while((requestIdx < transfers.length || remainRequestAmount > 0) &&  // there are unprocessed request(s) ...
+            (txIdx < notesParts.length || oneTxPart > 0)) // and we have unspent notes or positive account balance
 
     if ((remainRequestAmount > 0 || requestIdx < transfers.length - 1) && allowPartial == false) {
       result = [];
