@@ -8,7 +8,7 @@ import { HistoryRecord, HistoryTransactionType } from './history'
 
 import { 
   validateAddress, Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
-  ParseTxsResult, StateUpdate, IndexedTx 
+  ParseTxsResult, StateUpdate, IndexedTx, ILimits
 } from 'libzkbob-rs-wasm-web';
 
 import { 
@@ -371,7 +371,8 @@ export class ZkBobClient {
         amount: (amountGwei + feeGwei).toString(),
         fee: feeGwei.toString(),
         deadline: String(deadline),
-        holder
+        holder,
+        limits: await this.snark_limits(),
       });
 
       // permittable deposit signature should be calculated for the typed data
@@ -446,6 +447,7 @@ export class ZkBobClient {
       const oneTx: ITransferData = {
         outputs: [{to, amount: onePart.amount.toString()}],
         fee: onePart.fee.toString(),
+        limits: await this.snark_limits(),
       };
       const oneTxData = await state.account.createTransferOptimistic(oneTx, optimisticState);
 
@@ -529,6 +531,7 @@ export class ZkBobClient {
         to: addressBin,
         native_amount: '0',
         energy_amount: '0',
+        limits: await this.snark_limits(),
       };
       const oneTxData = await state.account.createWithdrawalOptimistic(oneTx, optimisticState);
 
@@ -589,6 +592,7 @@ export class ZkBobClient {
     let txData = await state.account.createDeposit({
       amount: (amountGwei + feeGwei).toString(),
       fee: feeGwei.toString(),
+      limits: await this.snark_limits(),
     });
 
     const startProofDate = Date.now();
@@ -658,7 +662,11 @@ export class ZkBobClient {
       return { to, amount };
     });
 
-    const txData = await state.account.createTransfer({ outputs: outGwei, fee: feeGwei.toString() });
+    const txData = await state.account.createTransfer({ 
+      outputs: outGwei, 
+      fee: feeGwei.toString(),
+      limits: await this.snark_limits(), 
+    });
 
     const startProofDate = Date.now();
     const txProof = await this.worker.proveTx(txData.public, txData.secret);
@@ -1341,6 +1349,15 @@ export class ZkBobClient {
       return BigInt(res.fee);
     } catch {
       return DEFAULT_TX_FEE;
+    }
+  }
+
+  // TODO (AllFi): fetch it from relayer or pool contract
+  private async snark_limits(): Promise<ILimits> {
+    return {
+      daily_limit: "10000000000000",
+      transfer_limit: "10000000000000",
+      out_note_min: "0",
     }
   }
   
