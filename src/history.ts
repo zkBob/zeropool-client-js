@@ -14,6 +14,13 @@ export enum HistoryTransactionType {
   TransferLoopback,
 }
 
+export enum HistoryRecordState {
+	Pending = 1,
+	Mined,
+  RejectedByRelayer,
+  RejectedByPool,
+}
+
 export interface DecryptedMemo {
   index: number;
   acc: Account | undefined;
@@ -22,37 +29,52 @@ export interface DecryptedMemo {
   txHash: string | undefined;
 }
 
+export interface TokensMoving {
+  from: string,
+  to: string,
+  amount: bigint,
+}
+
 
 export class HistoryRecord {
   constructor(
     public type: HistoryTransactionType,
     public timestamp: number,
-    public from: string,
-    public to: string,
-    public amount: bigint,
+    public actions: TokensMoving[],
     public fee: bigint,
     public txHash: string,
-    public pending: boolean,
+    public state: HistoryRecordState,
+    public failureReason?: string,
   ) {}
 
   public static deposit(from: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.Deposit, ts, from, "", amount, fee, txHash, pending);
+    const action: TokensMoving = {from, to: "", amount};
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.Deposit, ts, [action], fee, txHash, state);
   }
 
-  public static transferIn(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.TransferIn, ts, "", to, amount, fee, txHash, pending);
+  public static transferIn(transfers: {to: string, amount: bigint}[], fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
+    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount}) });
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.TransferIn, ts, actions, fee, txHash, state);
   }
 
-  public static transferOut(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.TransferOut, ts, "", to, amount, fee, txHash, pending);
+  public static transferOut(transfers: {to: string, amount: bigint}[], fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
+    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount}) });
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.TransferOut, ts, actions, fee, txHash, state);
   }
 
   public static transferLoopback(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.TransferLoopback, ts, "", to, amount, fee, txHash, pending);
+    const action: TokensMoving = {from: "", to, amount};
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.TransferLoopback, ts, [action], fee, txHash, state);
   }
 
   public static withdraw(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.Withdrawal, ts, "", to, amount, fee, txHash, pending);
+    const action: TokensMoving = {from: "", to, amount};
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.Withdrawal, ts, [action], fee, txHash, state);
   }
 
   public toJson(): string {
@@ -309,7 +331,7 @@ export class HistoryStorage {
 
       // delete all pending history records [we'll refresh them immediately]
       for (const [index, record] of this.currentHistory.entries()) {
-        if (record.pending) {
+        if (record.state == HistoryRecordState.Pending) {
           this.currentHistory.delete(index);
         }
       }
@@ -321,7 +343,7 @@ export class HistoryStorage {
 
           this.currentHistory.set(oneRec.index, oneRec.record);
 
-          if (!oneRec.record.pending) {
+          if (oneRec.record.state == HistoryRecordState.Mined) {
             // save history record only for mined transactions
             this.put(oneRec.index, oneRec.record);
             newSyncIndex = oneRec.index;
@@ -342,7 +364,7 @@ export class HistoryStorage {
       // No any records (new or pending)
       // delete all pending history records
       for (const [index, record] of this.currentHistory.entries()) {
-        if (record.pending) {
+        if (record.state == HistoryRecordState.Pending) {
           this.currentHistory.delete(index);
         }
       }
@@ -412,7 +434,15 @@ export class HistoryStorage {
                       // there are 2 cases: 
                       if (memo.acc) {
                         // 1. we initiated it => outcoming tx(s)
-                        for (let {note, index} of memo.outNotes) {
+                        const transfers = memo.outNotes.map(({note, index}) => {
+                          const destAddr = assembleAddress(note.d, note.p_d);
+                          return {to: destAddr, amount: BigInt(note.b)};
+                        });
+
+                        const rec = HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending);
+                        allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+
+                        /*for (let {note, index} of memo.outNotes) {
                           const destAddr = assembleAddress(note.d, note.p_d);
 
                           let rec: HistoryRecord;
@@ -425,14 +455,23 @@ export class HistoryStorage {
                           }
                           
                           allRecords.push(HistoryRecordIdx.create(rec, index));
-                        }
+                        }*/
                       } else {
                         // 2. somebody initiated it => incoming tx(s)
-                        for (let {note, index} of memo.inNotes) {
+
+                        const transfers = memo.outNotes.map(({note, index}) => {
+                          const destAddr = assembleAddress(note.d, note.p_d);
+                          return {to: destAddr, amount: BigInt(note.b)};
+                        });
+
+                        let rec = HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
+                        allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+
+                        /*for (let {note, index} of memo.inNotes) {
                           const destAddr = assembleAddress(note.d, note.p_d);
                           let rec = HistoryRecord.transferIn(destAddr, BigInt(note.b), BigInt(0), ts, txHash, pending);
                           allRecords.push(HistoryRecordIdx.create(rec, index));
-                        }
+                        }*/
                       }
                     } else if (tx.txType == TxType.Withdraw) {
                       // withdrawal transaction (destination address in the memoblock)
