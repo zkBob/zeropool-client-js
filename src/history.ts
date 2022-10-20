@@ -182,10 +182,17 @@ export class HistoryStorage {
       }
     }
 
-    
     // getting saved history records
     let cursor = await this.db.transaction(TX_TABLE).store.openCursor();
     while (cursor) {
+      const curRecord = cursor.value;
+      if (curRecord.actions === undefined) {
+        console.log(`Old history record was found! Clean deprecated records...`);
+        await this.db.clear(TX_TABLE);
+        await this.db.clear(HISTORY_STATE_TABLE);
+        this.syncIndex = -1;
+        return this.preloadCache();
+      }
       this.currentHistory.set(Number(cursor.primaryKey), cursor.value);
       cursor = await cursor.continue();
     }
@@ -459,7 +466,7 @@ export class HistoryStorage {
                       } else {
                         // 2. somebody initiated it => incoming tx(s)
 
-                        const transfers = memo.outNotes.map(({note, index}) => {
+                        const transfers = memo.inNotes.map(({note, index}) => {
                           const destAddr = assembleAddress(note.d, note.p_d);
                           return {to: destAddr, amount: BigInt(note.b)};
                         });
