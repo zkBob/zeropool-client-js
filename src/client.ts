@@ -288,7 +288,9 @@ export class ZkBobClient {
       if (job === null) {
         throw new RelayerJobError(Number(jobId), 'not found');
       } else if (job.state === 'failed')  {
-        throw new RelayerJobError(Number(jobId), job.failedReason !== undefined ? job.failedReason : 'unknown reason');
+        const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
+        state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
+        throw new RelayerJobError(Number(jobId), relayerReason);
       } else if (job.state === 'completed') {
         hashes = job.txHash;
         break;
