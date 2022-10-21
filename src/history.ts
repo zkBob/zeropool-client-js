@@ -381,10 +381,12 @@ export class HistoryStorage {
       // process pending memos
       let processedPendingIndexes: number[] = [];
       for (let oneMemo of this.unparsedPendingMemo.values()) {
-        let hist = this.convertToHistory(oneMemo, true);
-        historyPromises.push(hist);
+        if (this.failedHistory.find(rec => rec.txHash == oneMemo.txHash) === undefined) {
+          let hist = this.convertToHistory(oneMemo, true);
+          historyPromises.push(hist);
 
-        processedPendingIndexes.push(oneMemo.index);
+          processedPendingIndexes.push(oneMemo.index);
+        }
       }
 
       let historyRedords = await Promise.all(historyPromises);
@@ -473,7 +475,7 @@ export class HistoryStorage {
               this.currentHistory.delete(index);
             }
           }
-          
+
         }
       }
     }

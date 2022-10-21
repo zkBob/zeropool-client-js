@@ -312,6 +312,7 @@ export class ZkBobClient {
   // TODO: change job state logic after relayer upgrade! <look for a `queued` state>
   public async waitJobQueued(tokenAddress: string, jobId: string): Promise<boolean> {
     const token = this.tokens[tokenAddress];
+    const state = this.zpStates[tokenAddress];
 
     const INTERVAL_MS = 1000;
     let hashes: string[];
@@ -321,6 +322,8 @@ export class ZkBobClient {
       if (job === null) {
         throw new RelayerJobError(Number(jobId), 'not found');
       } else if (job.state === 'failed') {
+        const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
+        state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
         throw new RelayerJobError(Number(jobId), job.failedReason !== undefined ? job.failedReason : 'unknown reason');
       } else if (job.state === 'completed') {
         hashes = job.txHash;
