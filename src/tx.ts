@@ -37,6 +37,7 @@ export class ShieldedTx {
   public rootAfter: bigint;
   public treeProof: bigint[];
   public txType: TxType;
+  public day: bigint;
   public memo: string;
   public extra: string;
 
@@ -136,6 +137,7 @@ export class ShieldedTx {
     writer.writeBigInt(this.rootAfter, 32);
     writer.writeBigIntArray(this.treeProof, 32);
     writer.writeHex(this.txType.toString());
+    writer.writeBigInt(this.day, 3);
     writer.writeNumber(this.memo.length / 2, 2);
     writer.writeHex(this.memo);
 
@@ -167,6 +169,8 @@ export class ShieldedTx {
     assertNotNull(tx.rootAfter);
     tx.treeProof = reader.readBigIntArray(8, 32);
     tx.txType = reader.readHex(2) as TxType;
+    assertNotNull(tx.txType);
+    tx.day = reader.readBigInt(3)!;
     assertNotNull(tx.txType);
     const memoSize = reader.readNumber(2);
     assertNotNull(memoSize);
