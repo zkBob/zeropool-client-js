@@ -37,14 +37,12 @@ export class TxLimitError extends BobError {
 export class TxProofError extends BobError {
     constructor() {
         super(`Transaction proof incorrect`);
-        this.name = 'TxSmallAmount';
     }
 }
 
 export class TxInvalidArgumentError extends BobError {
     constructor(message: string) {
         super(message);
-        this.name = 'TxSmallAmount';
     }
 }
 
