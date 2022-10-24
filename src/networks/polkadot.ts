@@ -13,6 +13,10 @@ export class PolkadotNetwork implements NetworkBackend {
         return undefined; // FIXME
     }
 
+    async poolState(contractAddress: string): Promise<{index: bigint, root: bigint}> {
+        return {index: BigInt(0), root: BigInt(0)};
+    }
+
     isSignatureCompact(): boolean {
         return false;
     }

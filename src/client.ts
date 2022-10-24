@@ -29,6 +29,12 @@ export interface RelayerInfo {
   deltaIndex: bigint;
   optimisticDeltaIndex: bigint;
 }
+
+export interface TreeState {
+  root: bigint;
+  index: bigint;
+}
+
 const isRelayerInfo = (obj: any): obj is RelayerInfo => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('root') && typeof obj.root === 'string' &&
@@ -1069,6 +1075,38 @@ export class ZkBobClient {
     return true;
   }
 
+  // Get the local Merkle tree root & index
+  public getLocalState(tokenAddress: string): TreeState {
+    const root = this.zpStates[tokenAddress].getRoot();
+    const index = this.zpStates[tokenAddress].getNextIndex();
+
+    return {root, index};
+  }
+
+  // Get relayer regular root & index
+  public async getRelayerState(tokenAddress: string): Promise<TreeState> {
+    const token = this.tokens[tokenAddress];
+    const info = await this.info(token.relayerUrl);
+
+    return {root: BigInt(info.root), index: info.deltaIndex};
+  }
+
+  // Get relayer optimistic root & index
+  public async getRelayerOptimisticState(tokenAddress: string): Promise<TreeState> {
+    const token = this.tokens[tokenAddress];
+    const info = await this.info(token.relayerUrl);
+
+    return {root: BigInt(info.optimisticRoot), index: info.optimisticDeltaIndex};
+  }
+
+  // Get pool info (direct web3 request)
+  public async getPoolState(tokenAddress: string): Promise<TreeState> {
+    const token = this.tokens[tokenAddress];
+    const res = await this.config.network.poolState(token.poolAddress);
+
+    return {index: res.index, root: res.root};
+  }
+
   // Getting array of accounts and notes for the current account
   public async rawState(tokenAddress: string): Promise<any> {
     return await this.zpStates[tokenAddress].rawState();
@@ -1439,7 +1477,7 @@ export class ZkBobClient {
       response = await fetch(url, headers);
     } catch(err) {
       // server is unreachable
-      throw new NetworkError(err);
+      throw new NetworkError(err, url);
     }
 
     // Extract response body: json | string | null

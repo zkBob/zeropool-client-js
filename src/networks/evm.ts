@@ -25,9 +25,35 @@ export class EvmNetwork implements NetworkBackend {
                         type: 'uint256',
                     }
                 ],
-                payable: false,
+                stateMutability: 'pure',
                 type: 'function',
             }, 
+            {
+                inputs:[],
+                name: 'pool_index',
+                outputs: [{
+                    internalType: 'uint256',
+                    name:'',
+                    type:'uint256'
+                }],
+                stateMutability: 'view',
+                type: 'function'
+            },
+            {
+                inputs: [{
+                    internalType: 'uint256',
+                    name: '',
+                    type: 'uint256'
+                }],
+                name: 'roots',
+                outputs: [{
+                    internalType: 'uint256',
+                    name: '',
+                    type: 'uint256'
+                }],
+                stateMutability: 'view',
+                type: 'function'
+            },
             {
                 inputs: [{
                     internalType: 'address',
@@ -145,4 +171,14 @@ export class EvmNetwork implements NetworkBackend {
         
         return await this.contract.methods.getLimitsFor(addr).call();
     }
+
+    public async poolState(contractAddress: string): Promise<{index: bigint, root: bigint}> {
+        this.contract.options.address = contractAddress;
+        const idx = await this.contract.methods.pool_index().call();
+        const root = await this.contract.methods.roots(idx).call();
+
+
+        return {index: BigInt(idx), root: BigInt(root)};
+    }
+
 }
