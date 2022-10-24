@@ -372,7 +372,7 @@ export class ZkBobClient {
         fee: feeGwei.toString(),
         deadline: String(deadline),
         holder,
-        limits: await this.snark_limits(),
+        limits: await this.snarksLimits(token.poolAddress),
       });
 
       // permittable deposit signature should be calculated for the typed data
@@ -447,7 +447,7 @@ export class ZkBobClient {
       const oneTx: ITransferData = {
         outputs: [{to, amount: onePart.amount.toString()}],
         fee: onePart.fee.toString(),
-        limits: await this.snark_limits(),
+        limits: await this.snarksLimits(token.poolAddress),
       };
       const oneTxData = await state.account.createTransferOptimistic(oneTx, optimisticState);
 
@@ -531,7 +531,7 @@ export class ZkBobClient {
         to: addressBin,
         native_amount: '0',
         energy_amount: '0',
-        limits: await this.snark_limits(),
+        limits: await this.snarksLimits(token.poolAddress),
       };
       const oneTxData = await state.account.createWithdrawalOptimistic(oneTx, optimisticState);
 
@@ -592,7 +592,7 @@ export class ZkBobClient {
     let txData = await state.account.createDeposit({
       amount: (amountGwei + feeGwei).toString(),
       fee: feeGwei.toString(),
-      limits: await this.snark_limits(),
+      limits: await this.snarksLimits(token.poolAddress),
     });
 
     const startProofDate = Date.now();
@@ -665,7 +665,7 @@ export class ZkBobClient {
     const txData = await state.account.createTransfer({ 
       outputs: outGwei, 
       fee: feeGwei.toString(),
-      limits: await this.snark_limits(), 
+      limits: await this.snarksLimits(token.poolAddress), 
     });
 
     const startProofDate = Date.now();
@@ -1352,12 +1352,12 @@ export class ZkBobClient {
     }
   }
 
-  // TODO (AllFi): fetch it from relayer or pool contract
-  private async snark_limits(): Promise<ILimits> {
+  private async snarksLimits(poolAddress: string): Promise<ILimits> {
+    const snarksLimits = await this.config.network.snarksLimits(poolAddress);
     return {
-      daily_limit: "1000000000000",
-      transfer_limit: "100000000000",
-      out_note_min: "1000000000",
+      daily_limit: snarksLimits.dailyTurnoverCap.toString(),
+      transfer_limit: snarksLimits.transferCap.toString(),
+      out_note_min: snarksLimits.outNoteMinCap.toString(),
     }
   }
   

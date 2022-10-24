@@ -83,7 +83,37 @@ export class EvmNetwork implements NetworkBackend {
                 }],
                 stateMutability: 'view',
                 type: 'function',
-            }
+            },
+            {
+                inputs: [],
+                name: "getSnarksLimits",
+                outputs: [
+                  {
+                    components: [
+                      {
+                        internalType: "uint256",
+                        name: "dailyTurnoverCap",
+                        type: "uint256"
+                      },
+                      {
+                        internalType: "uint256",
+                        name: "transferCap",
+                        type: "uint256"
+                      },
+                      {
+                        internalType: "uint256",
+                        name: "outNoteMinCap",
+                        type: "uint256"
+                      }
+                    ],
+                    internalType: "struct SnarksLimitsManager.SnarksLimits",
+                    name: "",
+                    type: "tuple"
+                  }
+                ],
+                stateMutability: "view",
+                type: "function"
+              }
         ];
         this.contract = new this.web3.eth.Contract(abi) as Contract;
 
@@ -144,5 +174,10 @@ export class EvmNetwork implements NetworkBackend {
         }
         
         return await this.contract.methods.getLimitsFor(addr).call();
+    }
+
+    public async snarksLimits(contractAddress: string): Promise<any> {
+        this.contract.options.address = contractAddress;
+        return await this.contract.methods.getSnarksLimits().call();
     }
 }

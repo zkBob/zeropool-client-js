@@ -13,6 +13,10 @@ export class PolkadotNetwork implements NetworkBackend {
         return undefined; // FIXME
     }
 
+    public async snarksLimits(contractAddress: string): Promise<any> {
+        return undefined; // FIXME
+    }
+
     isSignatureCompact(): boolean {
         return false;
     }
