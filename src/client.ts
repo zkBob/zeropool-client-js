@@ -1355,9 +1355,9 @@ export class ZkBobClient {
   // TODO (AllFi): fetch it from relayer or pool contract
   private async snark_limits(): Promise<ILimits> {
     return {
-      daily_limit: "10000000000000",
-      transfer_limit: "10000000000000",
-      out_note_min: "0",
+      daily_limit: "1000000000000",
+      transfer_limit: "100000000000",
+      out_note_min: "1000000000",
     }
   }
   
