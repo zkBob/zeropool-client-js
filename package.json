@@ -21,7 +21,7 @@
     "ethereum-block-by-date": "^1.4.5",
     "hdwallet-babyjub": "^0.0.1",
     "idb": "^7.0.0",
-    "libzkbob-rs-wasm-web": "0.6.1",
+    "libzkbob-rs-wasm-web": "0.7.0",
     "regenerator-runtime": "^0.13.9",
     "web3": "^1.7.0",
     "ethereumjs-util": "^7.1.5",
