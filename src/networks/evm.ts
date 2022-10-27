@@ -111,7 +111,7 @@ export class EvmNetwork implements NetworkBackend {
                 type: 'function',
             }
         ];
-        this.contract = new this.web3.eth.Contract(abi) as Contract;
+        this.contract = new this.web3.eth.Contract(abi) as unknown as Contract;
 
         // just the Transfer() event definition is sufficient in this case
         const abiTokenJson: AbiItem[] = [
@@ -138,7 +138,7 @@ export class EvmNetwork implements NetworkBackend {
                 type: 'event'
             }
         ];
-        this.token = new this.web3.eth.Contract(abiTokenJson) as Contract;
+        this.token = new this.web3.eth.Contract(abiTokenJson) as unknown as Contract;
     }
 
     public async getChainId(): Promise<number> {

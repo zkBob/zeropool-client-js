@@ -24,6 +24,14 @@ for (let n = 0; n <= 0xff; ++n) {
   HEX_TABLE.push(octet);
 }
 
+export function concatenateBuffers(buf1: Uint8Array, buf2: Uint8Array): Uint8Array {
+  var res = new Uint8Array(buf1.byteLength + buf2.byteLength);
+  res.set(buf1, 0);
+  res.set(buf2, buf1.byteLength);
+
+  return res;
+}
+
 export function bufToHex(buffer: Uint8Array): string {
   const octets = new Array(buffer.length);
 

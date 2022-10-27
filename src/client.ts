@@ -5,6 +5,7 @@ import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
+import { EphemeralAddress, EphemeralPool } from './ephemeral';
 
 import { 
   validateAddress, Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
@@ -1514,5 +1515,28 @@ export class ZkBobClient {
     } 
 
     return responseBody;
+  }
+
+  // ----------------=========< Ephemeral Addresses Pool >=========-----------------
+  // | Getting internal native accounts (for multisig implementation)              |
+  // -------------------------------------------------------------------------------
+  public async getEphemeralAddress(tokenAddress: string, index: number): Promise<EphemeralAddress> {
+    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+    return ephPool.getEphemeralAddress(index);
+  }
+
+  public async getNonusedEphemeralIndex(tokenAddress: string): Promise<number> {
+    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+    return ephPool.getNonusedEphemeralIndex();
+  }
+
+  public async getUsedEphemeralAddresses(tokenAddress: string): Promise<EphemeralAddress[]> {
+    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+    return ephPool.getUsedEphemeralAddresses();
+  }
+
+  public getEphemeralAddressPrivateKey(tokenAddress: string, index: number): string {
+    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+    return ephPool.getEphemeralAddressPrivateKey(index);
   }
 }

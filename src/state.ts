@@ -3,11 +3,13 @@ import { hash } from 'tweetnacl';
 import { UserAccount, UserState } from 'libzkbob-rs-wasm-web';
 import { bufToHex } from './utils';
 import { HistoryStorage } from './history'
+import { EphemeralPool } from './ephemeral';
 
 export class ZkBobState {
   public denominator: bigint;
   public account: UserAccount;
   public history: HistoryStorage;
+  public ephemeralPool: EphemeralPool;
 
   public static async create(sk: Uint8Array, networkName: string, rpcUrl: string, denominator: bigint): Promise<ZkBobState> {
     const zpState = new ZkBobState();
@@ -15,6 +17,7 @@ export class ZkBobState {
     const userId = bufToHex(hash(sk));
     const state = await UserState.init(`zp.${networkName}.${userId}`);
     zpState.history = await HistoryStorage.init(`zp.${networkName}.${userId}`, rpcUrl);
+    zpState.ephemeralPool = await EphemeralPool.init(sk, rpcUrl);
 
     try {
       const acc = new UserAccount(sk, state);
