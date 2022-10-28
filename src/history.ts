@@ -1,6 +1,6 @@
 import { openDB, IDBPDatabase } from 'idb';
 import Web3 from 'web3';
-import { Account, Note, assembleAddress, TxBaseFields } from 'libzkbob-rs-wasm-web';
+import { Account, Note } from 'libzkbob-rs-wasm-web';
 import { ShieldedTx, TxType } from './tx';
 import { toCanonicalSignature } from './utils';
 import { CONSTANTS } from './constants';
@@ -122,6 +122,7 @@ const HISTORY_STATE_TABLE = 'HISTORY_STATE';
 export class HistoryStorage {
   private db: IDBPDatabase;
   private syncIndex = -1;
+  private worker: any;
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
                                           //(while tx isn't processed on relayer)
@@ -141,12 +142,13 @@ export class HistoryStorage {
   private syncHistoryPromise: Promise<void> | undefined;
   private web3;
 
-  constructor(db: IDBPDatabase, rpcUrl: string) {
+  constructor(db: IDBPDatabase, rpcUrl: string, worker: any) {
     this.db = db;
     this.web3 = new Web3(rpcUrl);
+    this.worker = worker;
   }
 
-  static async init(db_id: string, rpcUrl: string): Promise<HistoryStorage> {
+  static async init(db_id: string, rpcUrl: string, worker: any): Promise<HistoryStorage> {
     const db = await openDB(`zeropool.${db_id}.history`, 3, {
       upgrade(db, oldVersion, newVersions) {
         if (oldVersion < 2) {
@@ -161,7 +163,7 @@ export class HistoryStorage {
       }
     });
 
-    const storage = new HistoryStorage(db, rpcUrl);
+    const storage = new HistoryStorage(db, rpcUrl, worker);
     await storage.preloadCache();
 
     return storage;
@@ -542,10 +544,10 @@ export class HistoryStorage {
                       // there are 2 cases: 
                       if (memo.acc) {
                         // 1. we initiated it => outcoming tx(s)
-                        const transfers = memo.outNotes.map(({note, index}) => {
-                          const destAddr = assembleAddress(note.d, note.p_d);
+                        const transfers = await Promise.all(memo.outNotes.map(async ({note, index}) => {
+                          const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
                           return {to: destAddr, amount: BigInt(note.b)};
-                        });
+                        }));;
 
                         const rec = HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending);
                         allRecords.push(HistoryRecordIdx.create(rec, memo.index));
@@ -567,10 +569,10 @@ export class HistoryStorage {
                       } else {
                         // 2. somebody initiated it => incoming tx(s)
 
-                        const transfers = memo.inNotes.map(({note, index}) => {
-                          const destAddr = assembleAddress(note.d, note.p_d);
+                        const transfers = await Promise.all(memo.inNotes.map(async ({note, index}) => {
+                          const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
                           return {to: destAddr, amount: BigInt(note.b)};
-                        });
+                        }));
 
                         let rec = HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
                         allRecords.push(HistoryRecordIdx.create(rec, memo.index));

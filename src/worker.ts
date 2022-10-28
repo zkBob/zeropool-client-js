@@ -1,11 +1,13 @@
 import { expose } from 'comlink';
-import { Proof, Params, TxParser, IndexedTx, ParseTxsResult, default as init, initThreadPool } from 'libzkbob-rs-wasm-web';
-import { FileCache, LoadingProgressCallback } from './file-cache';
-import sha256 from 'fast-sha256';
+import { Proof, Params, TxParser, IndexedTx, ParseTxsResult, default as init, initThreadPool, UserState, UserAccount, StateUpdate, validateAddress, assembleAddress } from 'libzkbob-rs-wasm-web';
+import { FileCache } from './file-cache';
 
 let txParams: Params;
 let treeParams: Params;
 let txParser: TxParser;
+let zpAccounts: { [tokenAddress: string]: UserAccount } = {};
+let transferVk: any;
+let treeVk: any;
 
 // NOTE: Please fix enum constants in index.ts
 // in case of you change this enum
@@ -27,7 +29,8 @@ const obj = {
   async initWasm(
     url: string,
     paramUrls: { txParams: string; treeParams: string },
-    txParamsHash: string | undefined = undefined  // skip hash checking when undefined
+    txParamsHash: string | undefined = undefined,  // skip hash checking when undefined
+    vkUrls: {transferVkUrl: string, treeVkUrl: string},
   ) {
     loadingStage = LoadingStage.Init;
     console.info('Initializing web worker...');
@@ -90,6 +93,12 @@ const obj = {
     }
 
     txParser = TxParser._new()
+
+    console.time(`VK initializing`);
+    transferVk = await (await fetch(vkUrls.transferVkUrl)).json();
+    treeVk = await (await fetch(vkUrls.treeVkUrl)).json();
+    console.timeEnd(`VK initializing`);
+
     console.info('Web worker init complete.');
 
     loadingStage = LoadingStage.Completed;
@@ -127,6 +136,131 @@ const obj = {
       resolve(result);
     });
   },
+
+  async createAccount(address: string, sk: Uint8Array, networkName: string, userId: string): Promise<void> {
+    return new Promise(async resolve => {
+      console.debug('Web worker: createAccount');
+      try {
+        const state = await UserState.init(`zp.${networkName}.${userId}`);
+        const acc = new UserAccount(sk, state);
+        zpAccounts[address] = acc;
+      } catch (e) {
+        console.error(e);
+      }
+      resolve();
+    });
+  },
+
+  async totalBalance(address: string): Promise<string> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].totalBalance());
+    });
+  },
+
+  async accountBalance(address: string): Promise<string> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].accountBalance());
+    });
+  },
+
+  async noteBalance(address: string): Promise<string> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].noteBalance());
+    });
+  },
+
+  async usableNotes(address: string): Promise<any[]> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].getUsableNotes());
+    });
+  },
+
+  async isOwnAddress(address: string, shieldedAddress: string): Promise<boolean> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].isOwnAddress(shieldedAddress));
+    });
+  },
+
+  async rawState(address: string): Promise<any> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].getWholeState());
+    });
+  },
+
+  async free(address: string): Promise<void> {
+    return new Promise(async resolve => {
+      zpAccounts[address].free();
+      resolve();
+    });
+  },
+
+  async generateAddress(address: string): Promise<string> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].generateAddress());
+    });
+  },
+
+  async createDepositPermittable(address: string, deposit): Promise<any> {
+    return await zpAccounts[address].createDepositPermittable(deposit);
+  },
+
+  async createTransferOptimistic(address: string, tx, optimisticState): Promise<any> {
+    return await zpAccounts[address].createTransferOptimistic(tx, optimisticState);
+  },
+
+  async createWithdrawalOptimistic(address: string, tx, optimisticState): Promise<any> {
+    return await zpAccounts[address].createWithdrawalOptimistic(tx, optimisticState);
+  },
+
+  async createDeposit(address: string, deposit): Promise<any> {
+    return await zpAccounts[address].createDeposit(deposit);
+  },
+
+  async createTransfer(address: string, transfer): Promise<any> {
+    return await zpAccounts[address].createTransfer(transfer);
+  },
+
+  async nextTreeIndex(address: string): Promise<bigint> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].nextTreeIndex());
+    });
+  },
+
+  async getRoot(address: string): Promise<string> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].getRoot());
+    });
+  },
+
+  async updateState(address: string, stateUpdate: StateUpdate): Promise<void> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].updateState(stateUpdate));
+    });
+  },
+
+  async verifyTxProof(inputs, proof): Promise<boolean> {
+    return new Promise(async resolve => {
+      resolve(Proof.verify(transferVk!, inputs, proof));
+    });
+  },
+
+  async verifyTreeProof(inputs, proof): Promise<boolean> {
+    return new Promise(async resolve => {
+      resolve(Proof.verify(treeVk!, inputs, proof));
+    });
+  },
+
+  async verifyShieldedAddress(shieldedAddress: string): Promise<boolean> {
+    return new Promise(async resolve => {
+      resolve(validateAddress(shieldedAddress));
+    });
+  },
+
+  async assembleAddress(d: string, p_d: string): Promise<string> {
+    return new Promise(async resolve => {
+      resolve(assembleAddress(d, p_d));
+    });
+  }
 };
 
 expose(obj);
