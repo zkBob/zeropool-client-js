@@ -4,7 +4,7 @@ import { ZkBobState } from './state';
 import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
-import { HistoryRecord, HistoryTransactionType } from './history'
+import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
 
 import { 
   validateAddress, Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
@@ -16,6 +16,7 @@ import {
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
 
+const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const MIN_TX_AMOUNT = BigInt(50000000);
 const DEFAULT_TX_FEE = BigInt(100000000);
 const BATCH_SIZE = 1000;
@@ -28,6 +29,12 @@ export interface RelayerInfo {
   deltaIndex: bigint;
   optimisticDeltaIndex: bigint;
 }
+
+export interface TreeState {
+  root: bigint;
+  index: bigint;
+}
+
 const isRelayerInfo = (obj: any): obj is RelayerInfo => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('root') && typeof obj.root === 'string' &&
@@ -44,11 +51,23 @@ export interface BatchResult {
                                     // value: StateUpdate object (notes, accounts, leafs and comminments)
 }
 
-export interface TxAmount { // all values are in Gwei
-  amount: bigint;  // tx amount (without fee)
-  fee: bigint;  // fee 
+// Transfer destination + amount
+// Used as input in `transferMulti` method
+// Please note the request could be fragmented
+// due to account-notes local configuration
+export interface TransferRequest {
+  destination: string;  // shielded address for transfer, any value for another tx types
+  amountGwei: bigint;
+}
+
+// Old TxAmount interface
+// Supporting for multi-note transfers
+// Descripbes a transfer transaction configuration
+export interface TransferConfig {
+  outNotes: TransferRequest[];  // tx notes (without fee)
+  fee: bigint;  // transaction fee, Gwei
   accountLimit: bigint;  // minimum account remainder after transaction
-                         // (used for complex multi-tx transfers, default: 0)
+                         // (for future use, e.g. complex multi-tx transfers, default: 0)
 }
 
 export interface TxToRelayer {
@@ -216,24 +235,24 @@ export class ZkBobClient {
   // There is no option to prevent state update here,
   // because we should always monitor optimistic state
   public async getOptimisticTotalBalance(tokenAddress: string, updateState: boolean = true): Promise<bigint> {
-    const state = this.zpStates[tokenAddress];
 
     const confirmedBalance = await this.getTotalBalance(tokenAddress, updateState);
     const historyRecords = await this.getAllHistory(tokenAddress, updateState);
 
     let pendingDelta = BigInt(0);
     for (const oneRecord of historyRecords) {
-      if (oneRecord.pending) {
+      if (oneRecord.state == HistoryRecordState.Pending) {
         switch (oneRecord.type) {
           case HistoryTransactionType.Deposit:
           case HistoryTransactionType.TransferIn: {
             // we don't spend fee from the shielded balance in case of deposit or input transfer
-            pendingDelta += oneRecord.amount;
+            pendingDelta = oneRecord.actions.map(({ amount }) => amount).reduce((acc, cur) => acc + cur, pendingDelta);
             break;
           }
           case HistoryTransactionType.Withdrawal:
           case HistoryTransactionType.TransferOut: {
-            pendingDelta -= (oneRecord.amount + oneRecord.fee);
+            pendingDelta = oneRecord.actions.map(({ amount }) => amount).reduce((acc, cur) => acc - cur, pendingDelta);
+            pendingDelta -= oneRecord.fee;
             break;
           }
 
@@ -266,7 +285,6 @@ export class ZkBobClient {
 
   // Waiting while relayer process the jobs set
   public async waitJobsCompleted(tokenAddress: string, jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
-    const token = this.tokens[tokenAddress];
     let promises = jobIds.map(async (jobId) => {
       const txHashes: string[] = await this.waitJobCompleted(tokenAddress, jobId);
       return { jobId, txHash: txHashes[0] };
@@ -289,7 +307,9 @@ export class ZkBobClient {
       if (job === null) {
         throw new RelayerJobError(Number(jobId), 'not found');
       } else if (job.state === 'failed')  {
-        throw new RelayerJobError(Number(jobId), job.failedReason !== undefined ? job.failedReason : 'unknown reason');
+        const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
+        state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
+        throw new RelayerJobError(Number(jobId), relayerReason);
       } else if (job.state === 'completed') {
         hashes = job.txHash;
         break;
@@ -321,6 +341,8 @@ export class ZkBobClient {
       if (job === null) {
         throw new RelayerJobError(Number(jobId), 'not found');
       } else if (job.state === 'failed') {
+        const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
+        state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
         throw new RelayerJobError(Number(jobId), job.failedReason !== undefined ? job.failedReason : 'unknown reason');
       } else if (job.state === 'completed') {
         hashes = job.txHash;
@@ -414,24 +436,29 @@ export class ZkBobClient {
 
   // Transfer shielded funds to the shielded address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
-  // // Returns jobId from the relayer or throw an Error
-  public async transferMulti(tokenAddress: string, to: string, amountGwei: bigint, feeGwei: bigint = BigInt(0)): Promise<string[]> {
+  // Returns jobIds from the relayer or throw an Error
+  public async transferMulti(tokenAddress: string, transfers: TransferRequest[], feeGwei: bigint = BigInt(0)): Promise<string[]> {
     const state = this.zpStates[tokenAddress];
     const token = this.tokens[tokenAddress];
 
-    if (!validateAddress(to)) {
-      throw new TxInvalidArgumentError('Invalid address. Expected a shielded address.');
-    }
+    transfers.forEach((aTx) => {
+      if (!validateAddress(aTx.destination)) {
+        throw new TxInvalidArgumentError('Invalid address. Expected a shielded address.');
+      }
 
-    if (amountGwei < MIN_TX_AMOUNT) {
-      throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
-    }
+      if (aTx.amountGwei < MIN_TX_AMOUNT) {
+        throw new TxSmallAmount(aTx.amountGwei, MIN_TX_AMOUNT);
+      }
+    })
 
-    const txParts = await this.getTransactionParts(tokenAddress, amountGwei, feeGwei);
+    const txParts = await this.getTransactionParts(tokenAddress, transfers, feeGwei);
+
     if (txParts.length == 0) {
       const available = await this.calcMaxAvailableTransfer(tokenAddress, false);
-      const feeEst = await this.feeEstimate(tokenAddress, amountGwei, TxType.Transfer, false);
-      throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
+      const amounts = transfers.map((aTx) => aTx.amountGwei);
+      const totalAmount = amounts.reduce((acc, cur) => acc + cur, BigInt(0));
+      const feeEst = await this.feeEstimate(tokenAddress, amounts, TxType.Transfer, false);
+      throw new TxInsufficientFundsError(totalAmount + feeEst.total, available);
     }
 
     var jobsIds: string[] = [];
@@ -443,8 +470,9 @@ export class ZkBobClient {
     }
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
+      const outputs = onePart.outNotes.map((aNote) => { return {to: aNote.destination, amount: `${aNote.amountGwei}`} });
       const oneTx: ITransferData = {
-        outputs: [{to, amount: onePart.amount.toString()}],
+        outputs,
         fee: onePart.fee.toString(),
       };
       const oneTxData = await state.account.createTransferOptimistic(oneTx, optimisticState);
@@ -466,14 +494,10 @@ export class ZkBobClient {
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
       jobsIds.push(jobId);
 
-      // Temporary save transaction part in the history module (to prevent history delays)
+      // Temporary save transaction parts in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      var record;
-      if (state.isOwnAddress(to)) {
-        record = HistoryRecord.transferLoopback(to, onePart.amount, onePart.fee, ts, `${index}`, true);
-      } else {
-        record = HistoryRecord.transferOut(to, onePart.amount, onePart.fee, ts, `${index}`, true);
-      }
+      const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
+      var record = HistoryRecord.transferOut(transfers, onePart.fee, ts, `${index}`, true);
       state.history.keepQueuedTransactions([record], jobId);
 
       if (index < (txParts.length - 1)) {
@@ -505,10 +529,11 @@ export class ZkBobClient {
       throw new TxLimitError(amountGwei, limits.withdraw.total);
     }
 
-    const txParts = await this.getTransactionParts(tokenAddress, amountGwei, feeGwei);
+    const txParts = await this.getTransactionParts(tokenAddress, [{amountGwei, destination: address}], feeGwei);
+
     if (txParts.length == 0) {
       const available = await this.calcMaxAvailableTransfer(tokenAddress, false);
-      const feeEst = await this.feeEstimate(tokenAddress, amountGwei, TxType.Withdraw, false);
+      const feeEst = await this.feeEstimate(tokenAddress, [amountGwei], TxType.Withdraw, false);
       throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
 
@@ -523,8 +548,12 @@ export class ZkBobClient {
     }
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
+      if (onePart.outNotes.length != 1) {
+        throw new Error('Invalid transaction configuration');
+      }
+      const onePartAmount = onePart.outNotes[0].amountGwei;
       const oneTx: IWithdrawData = {
-        amount: onePart.amount.toString(),
+        amount: onePartAmount.toString(),
         fee: onePart.fee.toString(),
         to: addressBin,
         native_amount: '0',
@@ -549,7 +578,7 @@ export class ZkBobClient {
 
       // Temporary save transaction part in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      var record = HistoryRecord.withdraw(address, onePart.amount, onePart.fee, ts, `${index}`, true);
+      var record = HistoryRecord.withdraw(address, onePartAmount, onePart.fee, ts, `${index}`, true);
       state.history.keepQueuedTransactions([record], jobId);
 
       if (index < (txParts.length - 1)) {
@@ -677,11 +706,14 @@ export class ZkBobClient {
     const feePerOut = feeGwei / BigInt(outGwei.length);
     let recs = outGwei.map(({to, amount}) => {
       const ts = Math.floor(Date.now() / 1000);
-      if (state.isOwnAddress(to)) {
+      return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, `0`, true);
+      /*if (state.isOwnAddress(to)) {
         return HistoryRecord.transferLoopback(to, BigInt(amount), feePerOut, ts, "0", true);
       } else {
-        return HistoryRecord.transferOut(to, BigInt(amount), feePerOut, ts, "0", true);
-      }
+        return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, `0`, true);
+        //return HistoryRecord.transferOut(to, BigInt(amount), feePerOut, ts, "0", true);
+      }*/
+
     });
     state.history.keepQueuedTransactions(recs, jobId);
 
@@ -709,7 +741,7 @@ export class ZkBobClient {
   // There are two extra states in case of insufficient funds for requested token amount:
   //  1. txCnt contains number of transactions for maximum available transfer
   //  2. txCnt can't be less than 1 (e.g. when balance is less than atomic fee)
-  public async feeEstimate(tokenAddress: string, amountGwei: bigint, txType: TxType, updateState: boolean = true): Promise<FeeAmount> {
+  public async feeEstimate(tokenAddress: string, transfersGwei: bigint[], txType: TxType, updateState: boolean = true): Promise<FeeAmount> {
     const relayer = await this.getRelayerFee(tokenAddress);
     const l1 = BigInt(0);
     let txCnt = 1;
@@ -719,18 +751,20 @@ export class ZkBobClient {
 
     if (txType === TxType.Transfer || txType === TxType.Withdraw) {
       // we set allowPartial flag here to get parts anywhere
-      const parts = await this.getTransactionParts(tokenAddress, amountGwei, totalPerTx, updateState, true);
+      let requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: NULL_ADDRESS} });  // destination address is ignored for estimation purposes
+      const parts = await this.getTransactionParts(tokenAddress, requests, totalPerTx, updateState, true);
       const totalBalance = await this.getTotalBalance(tokenAddress, false);
 
-      let partsSumm = BigInt(0);
-      for(let i = 0; i < parts.length; i++) {
-        partsSumm += parts[i].amount;
-      }
+      let totalSumm = parts
+        .map((p) => p.outNotes.reduce((acc, cur) => acc + cur.amountGwei, BigInt(0)))
+        .reduce((acc, cur) => acc + cur, BigInt(0));
+
+      let totalRequested = transfersGwei.reduce((acc, cur) => acc + cur, BigInt(0));
 
       txCnt = parts.length > 0 ? parts.length : 1;  // if we haven't funds for atomic fee - suppose we can make one tx
       total = totalPerTx * BigInt(txCnt);
 
-      insufficientFunds = (partsSumm < amountGwei || partsSumm + total > totalBalance) ? true : false;
+      insufficientFunds = (totalSumm < totalRequested || totalSumm + total > totalBalance) ? true : false;
     } else {
       // Deposit and BridgeDeposit cases are independent on the user balance
       // Fee got from the native coins, so any deposit can be make within single tx
@@ -750,7 +784,7 @@ export class ZkBobClient {
     return this.relayerFee;
   }
 
-  public async minTxAmount(tokenAddress: string): Promise<bigint> {
+  public async minTxAmount(): Promise<bigint> {
     return MIN_TX_AMOUNT;
   }
 
@@ -762,7 +796,6 @@ export class ZkBobClient {
       await this.updateState(tokenAddress);
     }
 
-    let result: bigint;
 
     const txFee = await this.atomicTxFee(tokenAddress);
     const accountBalance = BigInt(state.accountBalance());
@@ -795,40 +828,69 @@ export class ZkBobClient {
   // Use allowPartial flag to return tx parts in case of insufficient funds for requested tx amount
   // (otherwise the void array will be returned in case of insufficient funds)
   // This method ALLOWS creating transaction parts less than MIN_TX_AMOUNT (check it before tx creating)
-  public async getTransactionParts(tokenAddress: string, amountGwei: bigint, feeGwei: bigint, updateState: boolean = true, allowPartial: boolean = false): Promise<Array<TxAmount>> {
+  public async getTransactionParts(
+    tokenAddress: string,
+    transfers: TransferRequest[],
+    feeGwei: bigint,
+    updateState: boolean = true,
+    allowPartial: boolean = false,
+  ): Promise<Array<TransferConfig>> {
+
     const state = this.zpStates[tokenAddress];
     if (updateState) {
       await this.updateState(tokenAddress);
     }
 
-    let result: Array<TxAmount> = [];
+    // no parts when no requests
+    if (transfers.length == 0) return [];
+
+    let result: Array<TransferConfig> = [];
+    let txNotes: Array<TransferRequest> = [];
     const accountBalance = BigInt(state.accountBalance());
     let notesParts = this.getGroupedNotes(tokenAddress);
 
-    let remainAmount = amountGwei;
+    let requestIdx = 0;
+    let txIdx = 0;
+    let remainRequestAmount = transfers[requestIdx].amountGwei;
     let oneTxPart = accountBalance;
-    let i = 0;
     do {
-      if (i < notesParts.length) {
-        oneTxPart += notesParts[i];
+      if (txIdx < notesParts.length) {
+        oneTxPart += notesParts[txIdx];
       }
 
-      if (oneTxPart - feeGwei > remainAmount) {
-        oneTxPart = remainAmount + feeGwei;
+      oneTxPart -= feeGwei; // available token amount for tx (account + notes)
+      // create output notes for the transaction
+      while(oneTxPart > 0 && requestIdx < transfers.length && txNotes.length < CONSTANTS.OUT) {
+        let noteAmount = oneTxPart;
+        if (oneTxPart > remainRequestAmount) {
+          noteAmount = remainRequestAmount;
+        }
+        
+        // add output note for the current transaction
+        txNotes.push({amountGwei: noteAmount, destination: transfers[requestIdx].destination});
+
+        oneTxPart -= noteAmount;
+        remainRequestAmount -= noteAmount;
+        if(remainRequestAmount == BigInt(0)) {
+          if (++requestIdx < transfers.length) {
+            remainRequestAmount = transfers[requestIdx].amountGwei;
+          }
+        }
       }
 
-      if(oneTxPart < feeGwei) {
+      if(oneTxPart < 0) {
+        // We cannot collect notes to cover tx fee. There are 2 cases:
+        // insufficient balance or unoperable notes configuration
         break;
       }
 
-      result.push({amount: oneTxPart - feeGwei, fee: feeGwei, accountLimit: BigInt(0)});
+      result.push({outNotes: txNotes, fee: feeGwei, accountLimit: BigInt(0)});
+      txNotes = [];
+      txIdx++;
+    } while((requestIdx < transfers.length || remainRequestAmount > 0) &&  // there are unprocessed request(s) ...
+            (txIdx < notesParts.length || oneTxPart > 0)) // and we have unspent notes or positive account balance
 
-      remainAmount -= (oneTxPart - feeGwei);
-      oneTxPart = BigInt(0);
-      i++;
-    } while(i < notesParts.length && remainAmount > 0);
-
-    if (remainAmount > 0 && allowPartial == false) {
+    if ((remainRequestAmount > 0 || requestIdx < transfers.length - 1) && allowPartial == false) {
       result = [];
     }
     
@@ -991,7 +1053,6 @@ export class ZkBobClient {
 
   // Wait while state becomes ready to make new transactions
   public async waitReadyToTransact(tokenAddress: string): Promise<boolean> {
-    const token = this.tokens[tokenAddress];
 
     const INTERVAL_MS = 1000;
     const MAX_ATTEMPTS = 300;
@@ -1012,6 +1073,38 @@ export class ZkBobClient {
     }
 
     return true;
+  }
+
+  // Get the local Merkle tree root & index
+  public getLocalState(tokenAddress: string): TreeState {
+    const root = this.zpStates[tokenAddress].getRoot();
+    const index = this.zpStates[tokenAddress].getNextIndex();
+
+    return {root, index};
+  }
+
+  // Get relayer regular root & index
+  public async getRelayerState(tokenAddress: string): Promise<TreeState> {
+    const token = this.tokens[tokenAddress];
+    const info = await this.info(token.relayerUrl);
+
+    return {root: BigInt(info.root), index: info.deltaIndex};
+  }
+
+  // Get relayer optimistic root & index
+  public async getRelayerOptimisticState(tokenAddress: string): Promise<TreeState> {
+    const token = this.tokens[tokenAddress];
+    const info = await this.info(token.relayerUrl);
+
+    return {root: BigInt(info.optimisticRoot), index: info.optimisticDeltaIndex};
+  }
+
+  // Get pool info (direct web3 request)
+  public async getPoolState(tokenAddress: string): Promise<TreeState> {
+    const token = this.tokens[tokenAddress];
+    const res = await this.config.network.poolState(token.poolAddress);
+
+    return {index: res.index, root: res.root};
   }
 
   // Getting array of accounts and notes for the current account
@@ -1200,7 +1293,6 @@ export class ZkBobClient {
 
     const zpState = this.zpStates[tokenAddress];
     const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
 
     const startIndex = zpState.account.nextTreeIndex();
 
@@ -1385,7 +1477,7 @@ export class ZkBobClient {
       response = await fetch(url, headers);
     } catch(err) {
       // server is unreachable
-      throw new NetworkError(err);
+      throw new NetworkError(err, url);
     }
 
     // Extract response body: json | string | null

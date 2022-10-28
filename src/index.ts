@@ -2,7 +2,7 @@ import { wrap } from 'comlink';
 import { Params, default as initWasm } from 'libzkbob-rs-wasm-web';
 import { SnarkConfigParams, SnarkParams } from './config';
 import { FileCache } from './file-cache';
-export { ZkBobClient, TxAmount, FeeAmount, PoolLimits } from './client';
+export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState } from './client';
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType } from './history'
 export * from './errors'

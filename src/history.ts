@@ -1,6 +1,6 @@
 import { openDB, IDBPDatabase } from 'idb';
 import Web3 from 'web3';
-import { Account, Note, assembleAddress } from 'libzkbob-rs-wasm-web';
+import { Account, Note, assembleAddress, TxBaseFields } from 'libzkbob-rs-wasm-web';
 import { ShieldedTx, TxType } from './tx';
 import { toCanonicalSignature } from './utils';
 import { CONSTANTS } from './constants';
@@ -14,6 +14,13 @@ export enum HistoryTransactionType {
   TransferLoopback,
 }
 
+export enum HistoryRecordState {
+	Pending = 1,
+	Mined,
+  RejectedByRelayer,
+  RejectedByPool,
+}
+
 export interface DecryptedMemo {
   index: number;
   acc: Account | undefined;
@@ -22,37 +29,52 @@ export interface DecryptedMemo {
   txHash: string | undefined;
 }
 
+export interface TokensMoving {
+  from: string,
+  to: string,
+  amount: bigint,
+}
+
 
 export class HistoryRecord {
   constructor(
     public type: HistoryTransactionType,
     public timestamp: number,
-    public from: string,
-    public to: string,
-    public amount: bigint,
+    public actions: TokensMoving[],
     public fee: bigint,
     public txHash: string,
-    public pending: boolean,
+    public state: HistoryRecordState,
+    public failureReason?: string,
   ) {}
 
   public static deposit(from: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.Deposit, ts, from, "", amount, fee, txHash, pending);
+    const action: TokensMoving = {from, to: "", amount};
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.Deposit, ts, [action], fee, txHash, state);
   }
 
-  public static transferIn(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.TransferIn, ts, "", to, amount, fee, txHash, pending);
+  public static transferIn(transfers: {to: string, amount: bigint}[], fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
+    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount}) });
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.TransferIn, ts, actions, fee, txHash, state);
   }
 
-  public static transferOut(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.TransferOut, ts, "", to, amount, fee, txHash, pending);
+  public static transferOut(transfers: {to: string, amount: bigint}[], fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
+    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount}) });
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.TransferOut, ts, actions, fee, txHash, state);
   }
 
   public static transferLoopback(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.TransferLoopback, ts, "", to, amount, fee, txHash, pending);
+    const action: TokensMoving = {from: "", to, amount};
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.TransferLoopback, ts, [action], fee, txHash, state);
   }
 
   public static withdraw(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    return new HistoryRecord(HistoryTransactionType.Withdrawal, ts, "", to, amount, fee, txHash, pending);
+    const action: TokensMoving = {from: "", to, amount};
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.Withdrawal, ts, [action], fee, txHash, state);
   }
 
   public toJson(): string {
@@ -89,6 +111,7 @@ export class TxHashIdx {
 
 
 const TX_TABLE = 'TX_STORE';
+const TX_FAILED_TABLE = 'TX_FAILED_STORE';
 const DECRYPTED_MEMO_TABLE = 'DECRYPTED_MEMO';
 const DECRYPTED_PENDING_MEMO_TABLE = 'DECRYPTED_PENDING_MEMO';
 const HISTORY_STATE_TABLE = 'HISTORY_STATE';
@@ -113,7 +136,8 @@ export class HistoryStorage {
 
   private unparsedMemo = new Map<number, DecryptedMemo>();  // local decrypted memos cache
   private unparsedPendingMemo = new Map<number, DecryptedMemo>();  // local decrypted pending memos cache
-  private currentHistory = new Map<number, HistoryRecord>();  // local history cache
+  private currentHistory = new Map<number, HistoryRecord>();  // local history cache (index -> HistoryRecord)
+  private failedHistory: HistoryRecord[] = [];  //  local failed history cache (unique_id -> HistoryRecord)
   private syncHistoryPromise: Promise<void> | undefined;
   private web3;
 
@@ -123,12 +147,17 @@ export class HistoryStorage {
   }
 
   static async init(db_id: string, rpcUrl: string): Promise<HistoryStorage> {
-    const db = await openDB(`zeropool.${db_id}.history`, 2, {
-      upgrade(db) {
-        db.createObjectStore(TX_TABLE);   // table holds parsed history transactions
-        db.createObjectStore(DECRYPTED_MEMO_TABLE);  // holds memo blocks decrypted in the updateState process
-        db.createObjectStore(DECRYPTED_PENDING_MEMO_TABLE);  // holds memo blocks decrypted in the updateState process, but not mined yet
-        db.createObjectStore(HISTORY_STATE_TABLE);   
+    const db = await openDB(`zeropool.${db_id}.history`, 3, {
+      upgrade(db, oldVersion, newVersions) {
+        if (oldVersion < 2) {
+          db.createObjectStore(TX_TABLE);   // table holds parsed history transactions
+          db.createObjectStore(DECRYPTED_MEMO_TABLE);  // holds memo blocks decrypted in the updateState process
+          db.createObjectStore(DECRYPTED_PENDING_MEMO_TABLE);  // holds memo blocks decrypted in the updateState process, but not mined yet
+          db.createObjectStore(HISTORY_STATE_TABLE);   
+        }
+        if (oldVersion < 3) {
+          db.createObjectStore(TX_FAILED_TABLE, {autoIncrement: true});
+        }
       }
     });
 
@@ -160,13 +189,23 @@ export class HistoryStorage {
       }
     }
 
-    
     // getting saved history records
     let cursor = await this.db.transaction(TX_TABLE).store.openCursor();
     while (cursor) {
+      const curRecord = cursor.value;
+      if (curRecord.actions === undefined) {
+        console.log(`Old history record was found! Clean deprecated records...`);
+        await this.db.clear(TX_TABLE);
+        await this.db.clear(HISTORY_STATE_TABLE);
+        this.syncIndex = -1;
+        return this.preloadCache();
+      }
       this.currentHistory.set(Number(cursor.primaryKey), cursor.value);
       cursor = await cursor.continue();
     }
+
+    // getting failed history records
+    this.failedHistory = await this.db.getAll(TX_FAILED_TABLE);
 
     console.log(`HistoryStorage: preload ${this.currentHistory.size} history records, ${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unparsed memos(from index ${this.syncIndex + 1})`);
   }
@@ -181,7 +220,9 @@ export class HistoryStorage {
     await this.syncHistoryPromise;
 
     let recordsArray = Array.from(this.currentHistory.values());
-    return recordsArray.sort((rec1, rec2) => 0 - (rec1.timestamp > rec2.timestamp ? -1 : 1));
+    return recordsArray
+            .concat(this.failedHistory)
+            .sort((rec1, rec2) => 0 - (rec1.timestamp > rec2.timestamp ? -1 : 1));
   }
 
   // remember just sended transactions to restore history record immediately
@@ -197,17 +238,57 @@ export class HistoryStorage {
         let hashIndex = Number(oneTx.txHash);
         if (hashIndex >= 0 && hashIndex < txHashes.length) {
           oneTx.txHash = txHashes[hashIndex];
-          let array: HistoryRecord[] = this.sendedTxs[oneTx.txHash];
+          let array = this.sendedTxs.get(oneTx.txHash);
           if(array === undefined) {
             array = [];
           }
           array.push(oneTx);
-          this.sendedTxs[oneTx.txHash] = array;
+          this.sendedTxs.set(oneTx.txHash, array);
         }
       }      
     }
 
     this.queuedTxs.delete(jobId);
+  }
+
+  // mark pending transaction as failed on the relayer level
+  public async setQueuedTransactionFailedByRelayer(jobId: string, error: string | undefined): Promise<boolean> {
+    let txs = this.queuedTxs.get(jobId);
+    if (txs) {
+      for(let oneTx of txs) {
+        oneTx.state = HistoryRecordState.RejectedByRelayer;
+        oneTx.failureReason = error;
+
+        this.failedHistory.push(oneTx);
+        await this.db.put(TX_FAILED_TABLE, oneTx);
+      }    
+
+      this.queuedTxs.delete(jobId);
+
+      return true;
+    }
+
+    return false;
+  }
+
+  // mark pending transaction as failed on the relayer level
+  public async setSendedTransactionFailedByPool(txHash: string, error: string | undefined): Promise<boolean> {
+    let txs = this.sendedTxs.get(txHash);
+    if (txs) {
+      for(let oneTx of txs) {
+        oneTx.state = HistoryRecordState.RejectedByPool;
+        oneTx.failureReason = error;
+
+        this.failedHistory.push(oneTx);
+        await this.db.put(TX_FAILED_TABLE, oneTx);
+      }    
+
+      this.sendedTxs.delete(txHash);
+
+      return true;
+    }
+
+    return false;
   }
 
   public async saveDecryptedMemo(memo: DecryptedMemo, pending: boolean): Promise<DecryptedMemo> {
@@ -266,6 +347,7 @@ export class HistoryStorage {
 
     // Remove all records from the database
     await this.db.clear(TX_TABLE);
+    await this.db.clear(TX_FAILED_TABLE);
     await this.db.clear(DECRYPTED_MEMO_TABLE);
     await this.db.clear(DECRYPTED_PENDING_MEMO_TABLE);
     await this.db.clear(HISTORY_STATE_TABLE);
@@ -299,17 +381,19 @@ export class HistoryStorage {
       // process pending memos
       let processedPendingIndexes: number[] = [];
       for (let oneMemo of this.unparsedPendingMemo.values()) {
-        let hist = this.convertToHistory(oneMemo, true);
-        historyPromises.push(hist);
+        if (this.failedHistory.find(rec => rec.txHash == oneMemo.txHash) === undefined) {
+          let hist = this.convertToHistory(oneMemo, true);
+          historyPromises.push(hist);
 
-        processedPendingIndexes.push(oneMemo.index);
+          processedPendingIndexes.push(oneMemo.index);
+        }
       }
 
       let historyRedords = await Promise.all(historyPromises);
 
       // delete all pending history records [we'll refresh them immediately]
       for (const [index, record] of this.currentHistory.entries()) {
-        if (record.pending) {
+        if (record.state == HistoryRecordState.Pending) {
           this.currentHistory.delete(index);
         }
       }
@@ -321,7 +405,7 @@ export class HistoryStorage {
 
           this.currentHistory.set(oneRec.index, oneRec.record);
 
-          if (!oneRec.record.pending) {
+          if (oneRec.record.state == HistoryRecordState.Mined) {
             // save history record only for mined transactions
             this.put(oneRec.index, oneRec.record);
             newSyncIndex = oneRec.index;
@@ -333,6 +417,8 @@ export class HistoryStorage {
         this.unparsedMemo.delete(oneIndex);
       }
 
+      await this.processSendedTxs();
+
       this.syncIndex = newSyncIndex;
       this.db.put(HISTORY_STATE_TABLE, this.syncIndex, 'sync_index');
 
@@ -342,12 +428,56 @@ export class HistoryStorage {
       // No any records (new or pending)
       // delete all pending history records
       for (const [index, record] of this.currentHistory.entries()) {
-        if (record.pending) {
+        if (record.state == HistoryRecordState.Pending) {
           this.currentHistory.delete(index);
         }
       }
 
+      await this.processSendedTxs();
+
       console.log(`Memo sync is not required: already up-to-date (on index ${this.syncIndex + 1})`);
+    }
+  }
+
+  // scan sended tx to check if one reverted on the Pool contract
+  private async processSendedTxs(): Promise<void> {
+    for (let oneSendedTxHash of this.sendedTxs.keys()) {
+      const txReceipt = await this.web3.eth.getTransactionReceipt(oneSendedTxHash);
+      if (txReceipt && txReceipt.status !== undefined) {
+        if (txReceipt.status == false) {
+          const txData = await this.web3.eth.getTransaction(oneSendedTxHash);
+          
+          let reason = 'unknown reason';
+          try {
+            await this.web3.eth.call(txData, txData.blockNumber)
+          } catch(err) {
+            reason = err.message;
+          }
+          console.log(`Revert reason for ${oneSendedTxHash}: ${reason}`)
+
+          let records = this.sendedTxs.get(oneSendedTxHash);
+          if (records !== undefined) {
+            for (let oneRecord of records) {
+              oneRecord.state = HistoryRecordState.RejectedByPool;
+              oneRecord.failureReason = reason;
+              
+              this.failedHistory.push(oneRecord);
+              await this.db.put(TX_FAILED_TABLE, oneRecord);
+            }
+          }
+
+          // remove tx from sended transactions - it's now in failedHistory
+          this.sendedTxs.delete(oneSendedTxHash);
+          
+          // remove pending transactions with the same txHash
+          for (const [index, record] of this.currentHistory) {
+            if (record.state == HistoryRecordState.Pending && record.txHash == oneSendedTxHash) {
+              this.currentHistory.delete(index);
+            }
+          }
+
+        }
+      }
     }
   }
 
@@ -412,7 +542,15 @@ export class HistoryStorage {
                       // there are 2 cases: 
                       if (memo.acc) {
                         // 1. we initiated it => outcoming tx(s)
-                        for (let {note, index} of memo.outNotes) {
+                        const transfers = memo.outNotes.map(({note, index}) => {
+                          const destAddr = assembleAddress(note.d, note.p_d);
+                          return {to: destAddr, amount: BigInt(note.b)};
+                        });
+
+                        const rec = HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending);
+                        allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+
+                        /*for (let {note, index} of memo.outNotes) {
                           const destAddr = assembleAddress(note.d, note.p_d);
 
                           let rec: HistoryRecord;
@@ -425,14 +563,23 @@ export class HistoryStorage {
                           }
                           
                           allRecords.push(HistoryRecordIdx.create(rec, index));
-                        }
+                        }*/
                       } else {
                         // 2. somebody initiated it => incoming tx(s)
-                        for (let {note, index} of memo.inNotes) {
+
+                        const transfers = memo.inNotes.map(({note, index}) => {
+                          const destAddr = assembleAddress(note.d, note.p_d);
+                          return {to: destAddr, amount: BigInt(note.b)};
+                        });
+
+                        let rec = HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
+                        allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+
+                        /*for (let {note, index} of memo.inNotes) {
                           const destAddr = assembleAddress(note.d, note.p_d);
                           let rec = HistoryRecord.transferIn(destAddr, BigInt(note.b), BigInt(0), ts, txHash, pending);
                           allRecords.push(HistoryRecordIdx.create(rec, index));
-                        }
+                        }*/
                       }
                     } else if (tx.txType == TxType.Withdraw) {
                       // withdrawal transaction (destination address in the memoblock)
@@ -443,7 +590,15 @@ export class HistoryStorage {
                     }
 
                     // if we found txHash in the blockchain -> remove it from the saved tx array
-                    this.sendedTxs.delete(txHash);
+                    if (pending) {
+                      // if tx is in pending state - remove it only on success
+                      const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
+                      if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
+                        this.sendedTxs.delete(txHash);                        
+                      }
+                    } else {
+                      this.sendedTxs.delete(txHash);
+                    }
 
                     return allRecords;
 
@@ -459,7 +614,7 @@ export class HistoryStorage {
           throw new InternalError(`Unable to get timestamp for block ${txData.blockNumber}`);
       } else {
         // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
-        let sendedRecords = this.sendedTxs[txHash];
+        let sendedRecords = this.sendedTxs.get(txHash);
         if (sendedRecords !== undefined) {
           console.log(`HistoryStorage: hash ${txHash} doesn't found, but it corresponds to the previously saved ${sendedRecords.length} transaction(s)`);
           return sendedRecords.map((oneRecord, index) => HistoryRecordIdx.create(oneRecord, memo.index + index));
