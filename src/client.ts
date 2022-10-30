@@ -178,7 +178,7 @@ export class ZkBobClient {
 
     for (const [address, token] of Object.entries(config.tokens)) {
       const denominator = await config.network.getDenominator(token.poolAddress);
-      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator);
+      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, address, config.network.getRpcUrl(), denominator);
     }
 
     return client;

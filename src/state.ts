@@ -11,13 +11,19 @@ export class ZkBobState {
   public history: HistoryStorage;
   public ephemeralPool: EphemeralPool;
 
-  public static async create(sk: Uint8Array, networkName: string, rpcUrl: string, denominator: bigint): Promise<ZkBobState> {
+  public static async create(
+    sk: Uint8Array,
+    networkName: string,
+    tokenAddress: string,
+    rpcUrl: string,
+    denominator: bigint
+  ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
     zpState.denominator = denominator;
     const userId = bufToHex(hash(sk));
     const state = await UserState.init(`zp.${networkName}.${userId}`);
     zpState.history = await HistoryStorage.init(`zp.${networkName}.${userId}`, rpcUrl);
-    zpState.ephemeralPool = await EphemeralPool.init(sk, rpcUrl);
+    zpState.ephemeralPool = await EphemeralPool.init(sk, tokenAddress, rpcUrl);
 
     try {
       const acc = new UserAccount(sk, state);
