@@ -114,35 +114,62 @@ export class EvmNetwork implements NetworkBackend {
         this.contract = new this.web3.eth.Contract(abi) as unknown as Contract;
 
         // just the Transfer() event definition is sufficient in this case
-        const abiTokenJson: AbiItem[] = [
-            {
+        const abiTokenJson: AbiItem[] = [{
                 anonymous: false,
-                inputs: [
-                    {
-                        indexed: true,
-                        name: 'from',
-                        type: 'address'
-                    },
-                    {
-                        indexed: true,
-                        name: 'to',
-                        type: 'address'
-                    },
-                    {
-                        indexed: false,
-                        name: 'value',
-                        type: 'uint256'
-                    }
-                ],
+                inputs: [{
+                    indexed: true,
+                    name: 'from',
+                    type: 'address'
+                }, {
+                    indexed: true,
+                    name: 'to',
+                    type: 'address'
+                }, {
+                    indexed: false,
+                    name: 'value',
+                    type: 'uint256'
+                }],
                 name: 'Transfer',
                 type: 'event'
-            }
-        ];
+            }, {
+                inputs: [],
+                name: 'name',
+                outputs: [{
+                    internalType: 'string',
+                    name: '',
+                    type: 'string'
+                }],
+                stateMutability: 'view',
+                type: 'function'
+            }, {
+                inputs: [{
+                    internalType: 'address',
+                    name: '',
+                    type: 'address'
+                }],
+                name: 'nonces',
+                outputs: [{
+                    internalType: 'uint256',
+                    name: '',
+                    type: 'uint256'
+                }],
+                stateMutability: 'view',
+                type: 'function'
+            }];
         this.token = new this.web3.eth.Contract(abiTokenJson) as unknown as Contract;
     }
 
     public async getChainId(): Promise<number> {
         return await this.web3.eth.getChainId();
+    }
+
+    public async getTokenName(tokenAddress: string): Promise<string> {
+        this.token.options.address = tokenAddress;
+        return await this.token.methods.name().call();
+    }
+    public async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
+        this.token.options.address = tokenAddress;
+        return Number(await this.token.methods.nonces(address).call());
     }
 
     public async getDenominator(contractAddress: string): Promise<bigint> {

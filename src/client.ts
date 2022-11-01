@@ -365,7 +365,7 @@ export class ZkBobClient {
   // Deposit based on permittable token scheme. User should sign typed data to allow
   // contract receive his tokens
   // Returns jobId from the relayer or throw an Error
-  public async depositPermittableV2(
+  public async depositPermittable(
     tokenAddress: string,
     amountGwei: bigint,
     signTypedData: (deadline: bigint, value: bigint, salt: string) => Promise<string>,
@@ -433,6 +433,59 @@ export class ZkBobClient {
     } else {
       throw new TxInvalidArgumentError('You must provide fromAddress for deposit transaction');
     }
+  }
+
+  private async createPermittableDepositData(tokenAddress: string, version: string, owner: string, spender: string, value: bigint, deadline: bigint, salt: string) {
+    const tokenName = await this.config.network.getTokenName(tokenAddress);
+    const chainId = await this.config.network.getChainId();
+    const nonce = await this.config.network.getTokenNonce(tokenAddress, owner);
+
+    const domain = {
+        name: tokenName,
+        version: version,
+        chainId: chainId,
+        verifyingContract: tokenAddress,
+    };
+
+    const types = {
+      EIP712Domain: [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+        { name: 'verifyingContract', type: 'address' },
+      ],
+      Permit: [
+          { name: "owner", type: "address" },
+          { name: "spender", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+          { name: "salt", type: "bytes32" }
+        ],
+    };
+
+    const message = { owner, spender, value: value.toString(), nonce, deadline: deadline.toString(), salt };
+
+    const data = { types, primaryType: "Permit", domain, message };
+
+    return data;
+}
+
+  public async depositPermittableEphemeral(
+    tokenAddress: string,
+    amountGwei: bigint,
+    ephemeralIndex: number,
+    feeGwei: bigint = BigInt(0),
+  ): Promise<string> {
+    const state = this.zpStates[tokenAddress];
+    const fromAddress = await state.ephemeralPool.getAddress(ephemeralIndex);
+    return this.depositPermittable(tokenAddress, amountGwei, async (deadline, value, salt) => {
+      const token = this.tokens[tokenAddress];
+      const state = this.zpStates[tokenAddress];
+      let ephemeralAddress = await state.ephemeralPool.getAddress(ephemeralIndex);
+      const dataToSign = await this.createPermittableDepositData(tokenAddress, '1', ephemeralAddress, token.poolAddress, value, deadline, salt);
+      return await state.ephemeralPool.signTypedData(dataToSign, ephemeralIndex);
+    }, fromAddress, feeGwei);
   }
 
   // Transfer shielded funds to the shielded address

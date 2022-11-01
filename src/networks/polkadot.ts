@@ -5,6 +5,14 @@ export class PolkadotNetwork implements NetworkBackend {
         return 0; // FIXME
     }
 
+    async getTokenName(tokenAddress: string): Promise<string> {
+        return '';
+    }
+
+    async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
+        return 0;
+    }
+
     async getDenominator(contractAddress: string): Promise<bigint> {
         return BigInt(1000); // FIXME
     }
