@@ -4,6 +4,7 @@ import { UserAccount, UserState } from 'libzkbob-rs-wasm-web';
 import { bufToHex } from './utils';
 import { HistoryStorage } from './history'
 import { EphemeralPool } from './ephemeral';
+import { NetworkType } from './network-type';
 
 export class ZkBobState {
   public denominator: bigint;
@@ -23,7 +24,8 @@ export class ZkBobState {
     const userId = bufToHex(hash(sk));
     const state = await UserState.init(`zp.${networkName}.${userId}`);
     zpState.history = await HistoryStorage.init(`zp.${networkName}.${userId}`, rpcUrl);
-    zpState.ephemeralPool = await EphemeralPool.init(sk, tokenAddress, rpcUrl);
+    let network = networkName as NetworkType;
+    zpState.ephemeralPool = await EphemeralPool.init(sk, tokenAddress, network, rpcUrl);
 
     try {
       const acc = new UserAccount(sk, state);

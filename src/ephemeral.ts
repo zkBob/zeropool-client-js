@@ -8,14 +8,12 @@ import { entropyToMnemonic, mnemonicToSeed, mnemonicToSeedSync } from '@scure/bi
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
+import { NetworkType } from './network-type';
 
 const util = require('ethereumjs-util');
 
 // need to represent all amounts as Gwei
 const DENOMINATOR = BigInt(1000000000);
-// Currently we use fixed wallet HD path to produce the same addresses
-// (will produce the same addresses for the fixed zk-account in the different networks)
-const EPHEMERAL_DERIVATION_PATH = "m/44'/60'/0'/0";
 
 // The interface used to describe address with preloaded properties
 export interface EphemeralAddress {
@@ -55,7 +53,7 @@ export class EphemeralPool {
     // It's neccessary to make entropy unique
     private skPrefix = '0x5a4b424f425f455048454d4552414c5f504f4f4c5f454e54524f50595f414444';
   
-    constructor(sk: Uint8Array, tokenAddress: string, rpcUrl: string) {
+    constructor(sk: Uint8Array, tokenAddress: string, network: NetworkType, rpcUrl: string) {
         this.rpcUrl = rpcUrl;
         this.web3 = new Web3(this.rpcUrl);
 
@@ -63,8 +61,8 @@ export class EphemeralPool {
         let entropy = hash(buf).slice(0, 16);
         let mnemonic = entropyToMnemonic(entropy, wordlist);
         let seed = mnemonicToSeedSync(mnemonic);
-        this.hdwallet = HDKey.fromMasterSeed(seed).derive(EPHEMERAL_DERIVATION_PATH);
-
+        let ephemeralWalletPath = `${NetworkType.chainPath(network)}/0'/0`;
+        this.hdwallet = HDKey.fromMasterSeed(seed).derive(ephemeralWalletPath);
 
         // Set the ERC-20 balanceOf() ABI
         const balanceOfABI: AbiItem[] = [{
@@ -103,8 +101,8 @@ export class EphemeralPool {
         this.token = new this.web3.eth.Contract(balanceOfABI, tokenAddress) as unknown as Contract;
     }
   
-    static async init(sk: Uint8Array, tokenAddress: string, rpcUrl: string): Promise<EphemeralPool> {
-        const storage = new EphemeralPool(sk, tokenAddress, rpcUrl);
+    static async init(sk: Uint8Array, tokenAddress: string, network: NetworkType, rpcUrl: string): Promise<EphemeralPool> {
+        const storage = new EphemeralPool(sk, tokenAddress, network, rpcUrl);
 
         // Start address info preloading
         let startTime = Date.now();
@@ -206,10 +204,11 @@ export class EphemeralPool {
                     { method: 'eth_signTypedData_v4', params: [JSON.stringify(data), address.toLowerCase()], jsonrpc: '2.0', id },
                     function (error, result) {
                         if (error) {
-                            throw new InternalError(error.message);
+                            console.error(`Cannot sign typed data: ${error}`);
+                            reject(error);
+                        } else {
+                            resolve(result.result);
                         }
-
-                        resolve(result.result);
                     });
             } else {
                 reject(new InternalError('Incorrect provider'));
@@ -264,6 +263,7 @@ export class EphemeralPool {
     
     }
 
+    // get and update address details
     private async updateAddressInfo(existing: EphemeralAddress): Promise<EphemeralAddress> {
         let promises = [
             this.web3.eth.getBlockNumber(),
@@ -314,6 +314,7 @@ export class EphemeralPool {
         return this.startScanIndex;
     }
 
+    // Number of incoming token transfers to the account
     private async getIncomingTokenTxCount(address: string, fromBlock: number = 0): Promise<number> {
         const events = await this.token.getPastEvents('Transfer', {
             filter: { to: address },
@@ -324,6 +325,7 @@ export class EphemeralPool {
         return events.length;
     }
 
+    // Number of outcoming token transfers from the account
     private async getOutcomingTokenTxCount(address: string, fromBlock: number = 0): Promise<number> {
         const events = await this.token.getPastEvents('Transfer', {
             filter: { from: address },
@@ -334,8 +336,8 @@ export class EphemeralPool {
         return events.length;
     }
 
+    // address nonused criteria
     private isAddressNonused(address: EphemeralAddress): boolean {
-        // address nonused criteria
         if (address.tokenBalance == BigInt(0) && 
             address.additional.nativeBalance == BigInt(0) &&
             address.additional.nonce == 0 &&
