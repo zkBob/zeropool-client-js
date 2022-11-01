@@ -1,6 +1,6 @@
 {
   "name": "zkbob-client-js",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "description": "zkBob integration library",
   "repository": "git@github.com:zkBob/libzkbob-client-js.git",
   "author": "Dmitry Vdovin <voidxnull@gmail.com>",
@@ -22,7 +22,7 @@
     "ethereum-block-by-date": "^1.4.5",
     "hdwallet-babyjub": "0.0.1",
     "idb": "^7.0.0",
-    "libzkbob-rs-wasm-web": "0.6.1",
+    "libzkbob-rs-wasm-web": "0.7.0",
     "regenerator-runtime": "^0.13.9",
     "web3": "1.8.0",
     "ethereumjs-util": "^7.1.5",
