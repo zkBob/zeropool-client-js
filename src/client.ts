@@ -6,6 +6,7 @@ import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
 import { EphemeralAddress, EphemeralPool } from './ephemeral';
+import { TypedData } from 'eip-712';
 
 import { 
   validateAddress, Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
@@ -435,7 +436,15 @@ export class ZkBobClient {
     }
   }
 
-  private async createPermittableDepositData(tokenAddress: string, version: string, owner: string, spender: string, value: bigint, deadline: bigint, salt: string) {
+  private async createPermittableDepositData(
+    tokenAddress: string,
+    version: string,
+    owner: string,
+    spender: string,
+    value: bigint,
+    deadline: bigint,
+    salt: string): Promise<TypedData>
+  {
     const tokenName = await this.config.network.getTokenName(tokenAddress);
     const chainId = await this.config.network.getChainId();
     const nonce = await this.config.network.getTokenNonce(tokenAddress, owner);
@@ -455,18 +464,18 @@ export class ZkBobClient {
         { name: 'verifyingContract', type: 'address' },
       ],
       Permit: [
-          { name: "owner", type: "address" },
-          { name: "spender", type: "address" },
-          { name: "value", type: "uint256" },
-          { name: "nonce", type: "uint256" },
-          { name: "deadline", type: "uint256" },
-          { name: "salt", type: "bytes32" }
+          { name: 'owner', type: 'address' },
+          { name: 'spender', type: 'address' },
+          { name: 'value', type: 'uint256' },
+          { name: 'nonce', type: 'uint256' },
+          { name: 'deadline', type: 'uint256' },
+          { name: 'salt', type: 'bytes32' }
         ],
     };
 
     const message = { owner, spender, value: value.toString(), nonce, deadline: deadline.toString(), salt };
 
-    const data = { types, primaryType: "Permit", domain, message };
+    const data = { types, primaryType: 'Permit', domain, message };
 
     return data;
 }

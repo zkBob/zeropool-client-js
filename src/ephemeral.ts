@@ -1,4 +1,3 @@
-import HDWalletProvider from '@truffle/hdwallet-provider';
 import Web3 from 'web3';
 import { AbiItem } from 'web3-utils';
 import { Contract } from 'web3-eth-contract'
@@ -9,6 +8,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
 import { NetworkType } from './network-type';
+import { getMessage, TypedData } from 'eip-712';
 
 const util = require('ethereumjs-util');
 
@@ -189,8 +189,16 @@ export class EphemeralPool {
         throw new InternalError(`Cannot generate private key for ephemeral address at index ${index}`);
     }
 
-    public async signTypedData(data: any, index: number): Promise<string> {
-        let provider = new HDWalletProvider({
+    public async signTypedData(data: TypedData, index: number): Promise<string> {
+        const message = getMessage(data, true);
+        let key = this.hdwallet.deriveChild(index);
+        let sign = key.sign(message);
+
+        console.log(`Signature: ${bufToHex(sign)}`);
+
+        return bufToHex(sign);
+
+        /*let provider = new HDWalletProvider({
             privateKeys: [this.getEphemeralAddressPrivateKey(index)],
             providerOrUrl: this.rpcUrl
         });
@@ -215,8 +223,7 @@ export class EphemeralPool {
             }
         });
 
-    
-        return signPromise;
+        return signPromise;*/
     }
 
     // ------------------=========< Private Routines >=========--------------------

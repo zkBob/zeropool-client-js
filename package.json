@@ -17,7 +17,6 @@
     "clean": "rm -rf lib/"
   },
   "dependencies": {
-    "@truffle/hdwallet-provider": "2.1.0",
     "comlink": "^4.3.1",
     "ethereum-block-by-date": "^1.4.5",
     "hdwallet-babyjub": "^0.0.2",
@@ -29,7 +28,8 @@
     "web3-utils": "1.8.0",
     "fast-sha256": "^1.3.0",
     "@scure/bip32": "1.1.1",
-    "@scure/bip39": "1.1.0"
+    "@scure/bip39": "1.1.0",
+    "eip-712": "1.0.0"
   },
   "devDependencies": {
     "ts-loader": "^9.2.6",
