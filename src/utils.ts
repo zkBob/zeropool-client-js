@@ -1,5 +1,5 @@
 import { Privkey } from 'hdwallet-babyjub';
-import { numberToHex, padLeft } from 'web3-utils';
+import { numberToHex, padLeft, stringToHex } from 'web3-utils';
 import { validateAddress } from 'libzkbob-rs-wasm-web';
 
 import { NetworkType } from './network-type';
@@ -7,11 +7,27 @@ import { InternalError } from './errors';
 
 const util = require('ethereumjs-util');
 
+// It's a healthy-man function
 export function deriveSpendingKey(mnemonic: string, networkType: NetworkType): Uint8Array {
   const path = NetworkType.privateDerivationPath(networkType);
   const sk = bigintToArrayLe(Privkey(mnemonic, path).k);
 
   return sk;
+}
+
+// And here is a smoker's variant of above implementation :D
+export function deriveSpendingKeyZkBob(mnemonic: string, networkType: NetworkType): Uint8Array {
+  if (networkType == NetworkType.polygon || networkType == NetworkType.sepolia) {
+    // There are few factors why we introduce this hack here:
+    //  1. zkBob prod deployment on Polygon was made with `ethereum` environment variable
+    //  2. `polygon` network type was not implemented in this library at the moment of zkBob prod deployment
+    //  3. staging deployment on Sepolia was also using `ethereum` network type
+    //  4. `hdwallet-babyjub` npm package had an error which lead to similar HD path for every network
+    //  5. we can't change HD path for existing prod users because their assets will become losed
+    return bigintToArrayLe(Privkey(mnemonic, "m/0'/0'").k);
+  }
+
+  return deriveSpendingKey(mnemonic, networkType);
 }
 
 export function verifyShieldedAddress(address: string): boolean {

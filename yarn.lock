@@ -1000,7 +1000,7 @@ bcrypt-pbkdf@^1.0.0:
   dependencies:
     tweetnacl "^0.14.3"
 
-big-integer@^1.6.35:
+big-integer@^1.6.43:
   version "1.6.51"
   resolved "https://registry.yarnpkg.com/big-integer/-/big-integer-1.6.51.tgz#0df92a5d9880560d3ff2d5fd20245c889d130686"
   integrity sha512-GPEid2Y9QU1Exl1rpO9B2IPJGHPSupF5GnVIP0blYvNOMer2bTvSWs1jGOUg04hTmu67nmLsQ9TBo1puaotBHg==
@@ -1022,7 +1022,7 @@ bignumber.js@^9.0.0:
   resolved "https://registry.yarnpkg.com/bignumber.js/-/bignumber.js-9.1.0.tgz#8d340146107fe3a6cb8d40699643c302e8773b62"
   integrity sha512-4LwHK4nfDOraBCtst+wOWIHbu1vhvAPJK8g8nROd4iuc3PSEjWif/qwbkh8jwCJz6yDBvtU4KPynETgrfh7y3A==
 
-bindings@^1.2.1, bindings@^1.3.0:
+bindings@^1.2.1, bindings@^1.3.0, bindings@^1.5.0:
   version "1.5.0"
   resolved "https://registry.yarnpkg.com/bindings/-/bindings-1.5.0.tgz#10353c9e945334bc0511a6d90b38fbc7c9c504df"
   integrity sha512-p2q/t/mhvuOj/UeLlV6566GD/guowlr0hHxClI0W9m7MWYkL1F0hLo+0Aexs9HSPCtR1SXQ0TD3MMKrXZajbiQ==
@@ -1311,7 +1311,7 @@ caseless@~0.12.0:
   resolved "https://registry.yarnpkg.com/caseless/-/caseless-0.12.0.tgz#1b681c21ff84033c826543090689420d187151dc"
   integrity sha512-4tYFyifaFfGacoiObjJegolkwSU4xQNGbVgUiNYVUxbQ2x2lUsFvY4hVgVzGiIe6WLOPqycWXA40l+PWsxthUw==
 
-chai@^4.1.2:
+chai@^4.2.0:
   version "4.3.6"
   resolved "https://registry.yarnpkg.com/chai/-/chai-4.3.6.tgz#ffe4ba2d9fa9d6680cc0b370adae709ec9011e9c"
   integrity sha512-bbcp3YfHCUzMOvKqsztczerVgBKSsEijCySNlHHbX3VG1nskvqjz5Rfso1gGwD6w6oOV3eI60pKuMOV5MV7p3Q==
@@ -1387,14 +1387,13 @@ cipher-base@^1.0.0, cipher-base@^1.0.1, cipher-base@^1.0.3:
     inherits "^2.0.1"
     safe-buffer "^5.0.1"
 
-circomlib@0.0.12:
-  version "0.0.12"
-  resolved "https://registry.yarnpkg.com/circomlib/-/circomlib-0.0.12.tgz#9f8457b8fb9e20218bf1ef3419d3219069cf56a2"
-  integrity sha512-sOASe0i1pf7cmYsMQvXc3cabXBdu8Lo0B3LQhvGt3oHvoF27torTbsaiFPMxZqVH5LkHi7kXUUp4LB48LbC80w==
+"circomlib@github:zeropoolnetwork/circomlib#master":
+  version "0.0.13"
+  resolved "https://codeload.github.com/zeropoolnetwork/circomlib/tar.gz/6997678d514f81adbae5a8d37a91e4578cda001d"
   dependencies:
     blake-hash "^1.1.0"
     blake2b "^2.1.3"
-    snarkjs "0.1.11"
+    snarkjs "0.1.14"
     typedarray-to-buffer "^3.1.5"
     web3 "^1.0.0-beta.55"
 
@@ -1985,7 +1984,7 @@ eslint-visitor-keys@^1.0.0, eslint-visitor-keys@^1.1.0:
   resolved "https://registry.yarnpkg.com/eslint-visitor-keys/-/eslint-visitor-keys-1.3.0.tgz#30ebd1ef7c2fdff01c3a4f151044af25fab0523e"
   integrity sha512-6J72N8UNa462wa/KFODt/PJ3IU60SDpC3QXC1Hjc1BXXpfL2C9R5+AU7jhe0F6GREqVMh4Juu+NY7xn+6dipUQ==
 
-eslint@^5.3.0:
+eslint@^5.16.0:
   version "5.16.0"
   resolved "https://registry.yarnpkg.com/eslint/-/eslint-5.16.0.tgz#a1e3ac1aae4a3fbd8296fcf8f7ab7314cbb6abea"
   integrity sha512-S3Rz11i7c8AA5JPv7xAH+dOyq/Cu/VXHiHXBPOU1k/JAM5dXqQPt3qcrhpHSorXmrpu2g0gkIBVXAqCpzfoZIg==
@@ -2880,15 +2879,15 @@ hash.js@1.1.7, hash.js@^1.0.0, hash.js@^1.0.3, hash.js@^1.1.7:
     inherits "^2.0.3"
     minimalistic-assert "^1.0.1"
 
-hdwallet-babyjub@^0.0.1:
-  version "0.0.1"
-  resolved "https://registry.yarnpkg.com/hdwallet-babyjub/-/hdwallet-babyjub-0.0.1.tgz#ed29ffc64966ba57dff4241595ea2ddb643a87e3"
-  integrity sha512-X0eYzqHwn4X/Bs3+BQFFfIn8sfOJrCQFJQ4EYzzG3YeUV/y15lstwLZiPaFKpd2q+gPQV9JkLogQe9IXP2OBpA==
+hdwallet-babyjub@^0.0.2:
+  version "0.0.2"
+  resolved "https://registry.yarnpkg.com/hdwallet-babyjub/-/hdwallet-babyjub-0.0.2.tgz#761640be9c3d3678382eccd105a6aa3d44ccad23"
+  integrity sha512-W59pKHVr/QdB/3RbgkI+v9CLTlyGvOCuBUuYoE1/kBczd6Ob4K5tpd6rKXE6Lfy3buo+AR0U0f+Nkv78thZcTQ==
   dependencies:
     assert "^2.0.0"
     bigint-buffer "^1.1.2"
     bip39 "^3.0.2"
-    circomlib "0.0.12"
+    circomlib "github:zeropoolnetwork/circomlib#master"
 
 hmac-drbg@^1.0.1:
   version "1.0.1"
@@ -3377,6 +3376,16 @@ keccak@3.0.2, keccak@^3.0.0:
     node-gyp-build "^4.2.0"
     readable-stream "^3.6.0"
 
+keccak@^2.0.0:
+  version "2.1.0"
+  resolved "https://registry.yarnpkg.com/keccak/-/keccak-2.1.0.tgz#734ea53f2edcfd0f42cdb8d5f4c358fef052752b"
+  integrity sha512-m1wbJRTo+gWbctZWay9i26v5fFnYkOn7D5PCxJ3fZUGUEb49dE1Pm4BREUYCt/aoO6di7jeoGmhvqN9Nzylm3Q==
+  dependencies:
+    bindings "^1.5.0"
+    inherits "^2.0.4"
+    nan "^2.14.0"
+    safe-buffer "^5.2.0"
+
 keyv@*, keyv@^4.0.0:
   version "4.5.0"
   resolved "https://registry.yarnpkg.com/keyv/-/keyv-4.5.0.tgz#dbce9ade79610b6e641a9a65f2f6499ba06b9bc6"
@@ -3787,7 +3796,7 @@ mute-stream@0.0.7:
   resolved "https://registry.yarnpkg.com/mute-stream/-/mute-stream-0.0.7.tgz#3075ce93bc21b8fab43e1bc4da7e8115ed1e7bab"
   integrity sha512-r65nCZhrbXXb6dXOACihYApHw2Q6pV0M3V0PSxd74N0+D8nzAdEAITq2oAjA1jVnKI+tGvEBUpqiMh0+rW6zDQ==
 
-nan@^2.2.1:
+nan@^2.14.0, nan@^2.2.1:
   version "2.17.0"
   resolved "https://registry.yarnpkg.com/nan/-/nan-2.17.0.tgz#c0150a2368a182f033e9aa5195ec76ea41a199cb"
   integrity sha512-2ZTgtl0nJsO0KQCjEpxcIr5D+Yv90plTitZt9JBfQvVJDS5seMl3FOvsh3+9CoYWXf/1l5OaZzzF6nDm4cagaQ==
@@ -4710,16 +4719,17 @@ slice-ansi@^2.1.0:
     astral-regex "^1.0.0"
     is-fullwidth-code-point "^2.0.0"
 
-snarkjs@0.1.11:
-  version "0.1.11"
-  resolved "https://registry.yarnpkg.com/snarkjs/-/snarkjs-0.1.11.tgz#7af641b274cdab3eddcd25a31f025992c01a0b57"
-  integrity sha512-NoMNn03Uwbt18V340ZlHSZscyfIu8F6fMOL7LT9Xr1zQY/nmzScM8442ATyJfzSI5bDTAz1QQGbCerP2BCKljA==
+snarkjs@0.1.14:
+  version "0.1.14"
+  resolved "https://registry.yarnpkg.com/snarkjs/-/snarkjs-0.1.14.tgz#84f441ae4354911ebcf11963c553223de0958872"
+  integrity sha512-mNsWx5K0ojz73689ZARwqyY62ENvW43movC+WMEHVYsFdcX9lpG+ZjiJGvnQh7LkYg2WY2lFzsXTUZI35TxqeA==
   dependencies:
-    big-integer "^1.6.35"
-    chai "^4.1.2"
+    big-integer "^1.6.43"
+    chai "^4.2.0"
     escape-string-regexp "^1.0.5"
-    eslint "^5.3.0"
-    yargs "^12.0.2"
+    eslint "^5.16.0"
+    keccak "^2.0.0"
+    yargs "^12.0.5"
 
 source-map-support@~0.5.20:
   version "0.5.21"
@@ -5962,7 +5972,7 @@ yargs-parser@^11.1.1:
     camelcase "^5.0.0"
     decamelize "^1.2.0"
 
-yargs@^12.0.2:
+yargs@^12.0.5:
   version "12.0.5"
   resolved "https://registry.yarnpkg.com/yargs/-/yargs-12.0.5.tgz#05f5997b609647b64f66b81e3b4b10a368e7ad13"
   integrity sha512-Lhz8TLaYnxq/2ObqHDql8dX8CJi97oHxrjUcYtzKbbykPtVW9WB+poxI+NM2UIzsMgNCZTIf0AQwsjK5yMAqZw==
