@@ -1,4 +1,4 @@
-import { StateUpdate } from 'libzkbob-rs-wasm-web';
+import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData, StateUpdate } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
 import { bufToHex } from './utils';
 import { hash } from 'tweetnacl';
@@ -75,23 +75,23 @@ export class ZkBobState {
     return await this.worker.generateAddress(this.tokenAddress);
   }
 
-  public async createDepositPermittable(deposit): Promise<any> {
+  public async createDepositPermittable(deposit: IDepositPermittableData): Promise<any> {
     return await this.worker.createDepositPermittable(this.tokenAddress, deposit);
   }
 
-  public async createTransferOptimistic(tx, optimisticState): Promise<any> { 
+  public async createTransferOptimistic(tx: ITransferData, optimisticState: any): Promise<any> { 
     return await this.worker.createTransferOptimistic(this.tokenAddress, tx, optimisticState);
   }
 
-  public async createWithdrawalOptimistic(tx, optimisticState): Promise<any> {
+  public async createWithdrawalOptimistic(tx: IWithdrawData, optimisticState: any): Promise<any> {
     return await this.worker.createWithdrawalOptimistic(this.tokenAddress, tx, optimisticState);
   }
 
-  public async createDeposit(deposit): Promise<any> {
+  public async createDeposit(deposit: IDepositData): Promise<any> {
     return await this.worker.createDeposit(this.tokenAddress, deposit);
   }
 
-  public async createTransfer(transfer): Promise<any> {
+  public async createTransfer(transfer: ITransferData): Promise<any> {
     return await this.worker.createTransfer(this.tokenAddress, transfer);
   }
 

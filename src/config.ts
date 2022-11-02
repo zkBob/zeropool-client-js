@@ -11,8 +11,6 @@ export interface SnarkConfigParams {
   treeVkUrl: string;
 }
 
-/*
- */
 export type Tokens = {
   [address: string]: Token;
 };

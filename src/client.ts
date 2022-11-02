@@ -179,10 +179,9 @@ export class ZkBobClient {
     return client;
   }
 
-  // TODO: async?
-  public free(): void {
+  public async free(): Promise<void> {
     for (let state of Object.values(this.zpStates)) {
-      state.free();
+      await state.free();
     }
   }
 

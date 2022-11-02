@@ -1,5 +1,5 @@
 import { expose } from 'comlink';
-import { Proof, Params, TxParser, IndexedTx, ParseTxsResult, default as init, initThreadPool, UserState, UserAccount, StateUpdate, validateAddress, assembleAddress } from 'libzkbob-rs-wasm-web';
+import { Proof, Params, TxParser, IndexedTx, ParseTxsResult, default as init, initThreadPool, UserState, UserAccount, StateUpdate, validateAddress, assembleAddress, SnarkProof, ITransferData, IDepositData, IWithdrawData, IDepositPermittableData } from 'libzkbob-rs-wasm-web';
 import { FileCache } from './file-cache';
 
 let txParams: Params;
@@ -200,23 +200,23 @@ const obj = {
     });
   },
 
-  async createDepositPermittable(address: string, deposit): Promise<any> {
+  async createDepositPermittable(address: string, deposit: IDepositPermittableData): Promise<any> {
     return await zpAccounts[address].createDepositPermittable(deposit);
   },
 
-  async createTransferOptimistic(address: string, tx, optimisticState): Promise<any> {
+  async createTransferOptimistic(address: string, tx: ITransferData, optimisticState: any): Promise<any> {
     return await zpAccounts[address].createTransferOptimistic(tx, optimisticState);
   },
 
-  async createWithdrawalOptimistic(address: string, tx, optimisticState): Promise<any> {
+  async createWithdrawalOptimistic(address: string, tx: IWithdrawData, optimisticState: any): Promise<any> {
     return await zpAccounts[address].createWithdrawalOptimistic(tx, optimisticState);
   },
 
-  async createDeposit(address: string, deposit): Promise<any> {
+  async createDeposit(address: string, deposit: IDepositData): Promise<any> {
     return await zpAccounts[address].createDeposit(deposit);
   },
 
-  async createTransfer(address: string, transfer): Promise<any> {
+  async createTransfer(address: string, transfer: ITransferData): Promise<any> {
     return await zpAccounts[address].createTransfer(transfer);
   },
 
@@ -238,13 +238,13 @@ const obj = {
     });
   },
 
-  async verifyTxProof(inputs, proof): Promise<boolean> {
+  async verifyTxProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
     return new Promise(async resolve => {
       resolve(Proof.verify(transferVk!, inputs, proof));
     });
   },
 
-  async verifyTreeProof(inputs, proof): Promise<boolean> {
+  async verifyTreeProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
     return new Promise(async resolve => {
       resolve(Proof.verify(treeVk!, inputs, proof));
     });
