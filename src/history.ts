@@ -11,6 +11,7 @@ export enum HistoryTransactionType {
 	TransferIn,
   TransferOut,
 	Withdrawal,
+  // DEPRECATED. Please use TokensMoving.isLoopback property instead
   TransferLoopback,
 }
 
@@ -33,6 +34,9 @@ export interface TokensMoving {
   from: string,
   to: string,
   amount: bigint,
+  // This property is applicable only for outcoming transfers
+  // true - destination address is belongs to the sender account
+  isLoopback: boolean,
 }
 
 
@@ -48,31 +52,32 @@ export class HistoryRecord {
   ) {}
 
   public static deposit(from: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    const action: TokensMoving = {from, to: "", amount};
+    const action: TokensMoving = {from, to: "", amount, isLoopback: false};
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
     return new HistoryRecord(HistoryTransactionType.Deposit, ts, [action], fee, txHash, state);
   }
 
   public static transferIn(transfers: {to: string, amount: bigint}[], fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount}) });
+    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount, isLoopback: false}) });
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
     return new HistoryRecord(HistoryTransactionType.TransferIn, ts, actions, fee, txHash, state);
   }
 
-  public static transferOut(transfers: {to: string, amount: bigint}[], fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount}) });
+  public static transferOut(transfers: {to: string, amount: bigint}[], fee: bigint, ts: number, txHash: string, pending: boolean, getIsLoopback: (shieldedAddress: string) => boolean): HistoryRecord {
+    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount, isLoopback: getIsLoopback(to)}) });
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
     return new HistoryRecord(HistoryTransactionType.TransferOut, ts, actions, fee, txHash, state);
   }
 
+  // DEPRECATED method. Loopback is a TokenMoving property now
   public static transferLoopback(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    const action: TokensMoving = {from: "", to, amount};
+    const action: TokensMoving = {from: "", to, amount, isLoopback: true};
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
     return new HistoryRecord(HistoryTransactionType.TransferLoopback, ts, [action], fee, txHash, state);
   }
 
   public static withdraw(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    const action: TokensMoving = {from: "", to, amount};
+    const action: TokensMoving = {from: "", to, amount, isLoopback: false};
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
     return new HistoryRecord(HistoryTransactionType.Withdrawal, ts, [action], fee, txHash, state);
   }
@@ -210,9 +215,9 @@ export class HistoryStorage {
     console.log(`HistoryStorage: preload ${this.currentHistory.size} history records, ${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unparsed memos(from index ${this.syncIndex + 1})`);
   }
 
-  public async getAllHistory(): Promise<HistoryRecord[]> {
+  public async getAllHistory(getIsLoopback: (shieldedAddress: string) => boolean): Promise<HistoryRecord[]> {
     if (this.syncHistoryPromise == undefined) {
-      this.syncHistoryPromise = this.syncHistory().finally( () => {
+      this.syncHistoryPromise = this.syncHistory(getIsLoopback).finally( () => {
         this.syncHistoryPromise = undefined;
       });
     }
@@ -361,7 +366,7 @@ export class HistoryStorage {
 
   // ------- Private rouutines --------
 
-  private async syncHistory(): Promise<void> {
+  private async syncHistory(getIsLoopback: (shieldedAddress: string) => boolean): Promise<void> {
     const startTime = Date.now();
 
     if (this.unparsedMemo.size > 0 || this.unparsedPendingMemo.size > 0) {
@@ -372,7 +377,7 @@ export class HistoryStorage {
       // process mined memos
       let processedIndexes: number[] = [];
       for (let oneMemo of this.unparsedMemo.values()) {
-        let hist = this.convertToHistory(oneMemo, false);
+        let hist = this.convertToHistory(oneMemo, false, getIsLoopback);
         historyPromises.push(hist);
 
         processedIndexes.push(oneMemo.index);
@@ -382,7 +387,7 @@ export class HistoryStorage {
       let processedPendingIndexes: number[] = [];
       for (let oneMemo of this.unparsedPendingMemo.values()) {
         if (this.failedHistory.find(rec => rec.txHash == oneMemo.txHash) === undefined) {
-          let hist = this.convertToHistory(oneMemo, true);
+          let hist = this.convertToHistory(oneMemo, true, getIsLoopback);
           historyPromises.push(hist);
 
           processedPendingIndexes.push(oneMemo.index);
@@ -491,7 +496,7 @@ export class HistoryStorage {
     return data;
   }
 
-  private async convertToHistory(memo: DecryptedMemo, pending: boolean): Promise<HistoryRecordIdx[]> {
+  private async convertToHistory(memo: DecryptedMemo, pending: boolean, getIsLoopback: (shieldedAddress: string) => boolean): Promise<HistoryRecordIdx[]> {
     let txHash = memo.txHash;
     if (txHash) {
       const txData = await this.web3.eth.getTransaction(txHash);
@@ -547,23 +552,8 @@ export class HistoryStorage {
                           return {to: destAddr, amount: BigInt(note.b)};
                         });
 
-                        const rec = HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending);
+                        const rec = HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
                         allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-
-                        /*for (let {note, index} of memo.outNotes) {
-                          const destAddr = assembleAddress(note.d, note.p_d);
-
-                          let rec: HistoryRecord;
-                          if (memo.inNotes.find((obj) => { return obj.index === index})) {
-                            // a special case: loopback transfer
-                            rec = HistoryRecord.transferLoopback(destAddr, BigInt(note.b), feeAmount / BigInt(memo.outNotes.length), ts, txHash, pending);
-                          } else {
-                            // regular transfer to another person
-                            rec = HistoryRecord.transferOut(destAddr, BigInt(note.b), feeAmount / BigInt(memo.outNotes.length), ts, txHash, pending);
-                          }
-                          
-                          allRecords.push(HistoryRecordIdx.create(rec, index));
-                        }*/
                       } else {
                         // 2. somebody initiated it => incoming tx(s)
 
@@ -574,12 +564,6 @@ export class HistoryStorage {
 
                         let rec = HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
                         allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-
-                        /*for (let {note, index} of memo.inNotes) {
-                          const destAddr = assembleAddress(note.d, note.p_d);
-                          let rec = HistoryRecord.transferIn(destAddr, BigInt(note.b), BigInt(0), ts, txHash, pending);
-                          allRecords.push(HistoryRecordIdx.create(rec, index));
-                        }*/
                       }
                     } else if (tx.txType == TxType.Withdraw) {
                       // withdrawal transaction (destination address in the memoblock)

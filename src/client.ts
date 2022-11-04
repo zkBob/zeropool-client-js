@@ -270,7 +270,7 @@ export class ZkBobClient {
       await this.updateState(tokenAddress);
     }
 
-    return await this.zpStates[tokenAddress].history.getAllHistory();
+    return await this.zpStates[tokenAddress].history.getAllHistory((addr) => this.isMyAddress(tokenAddress, addr));
   }
 
   // ------------------=========< Service Routines >=========-------------------
@@ -503,7 +503,7 @@ export class ZkBobClient {
       // Temporary save transaction parts in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
       const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
-      var record = HistoryRecord.transferOut(transfers, onePart.fee, ts, `${index}`, true);
+      var record = HistoryRecord.transferOut(transfers, onePart.fee, ts, `${index}`, true, (addr) => this.isMyAddress(tokenAddress, addr));
       state.history.keepQueuedTransactions([record], jobId);
 
       if (index < (txParts.length - 1)) {
@@ -712,14 +712,7 @@ export class ZkBobClient {
     const feePerOut = feeGwei / BigInt(outGwei.length);
     let recs = outGwei.map(({to, amount}) => {
       const ts = Math.floor(Date.now() / 1000);
-      return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, `0`, true);
-      /*if (state.isOwnAddress(to)) {
-        return HistoryRecord.transferLoopback(to, BigInt(amount), feePerOut, ts, "0", true);
-      } else {
-        return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, `0`, true);
-        //return HistoryRecord.transferOut(to, BigInt(amount), feePerOut, ts, "0", true);
-      }*/
-
+      return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, `0`, true, (addr) => this.isMyAddress(tokenAddress, addr));
     });
     state.history.keepQueuedTransactions(recs, jobId);
 
