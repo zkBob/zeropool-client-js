@@ -2,18 +2,16 @@ import Web3 from 'web3';
 import { AbiItem } from 'web3-utils';
 import { Contract } from 'web3-eth-contract'
 import { hash } from 'tweetnacl';
-import { bufToHex, concatenateBuffers, hexToBuf } from './utils';
-import { entropyToMnemonic, mnemonicToSeed, mnemonicToSeedSync } from '@scure/bip39';
+import { addHexPrefix, bufToHex, concatenateBuffers, hexToBuf } from './utils';
+import { entropyToMnemonic, mnemonicToSeedSync } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
 import { NetworkType } from './network-type';
-import { getMessage, TypedData } from 'eip-712';
+
+import { signTypedData, SignTypedDataVersion } from '@metamask/eth-sig-util'
 
 const util = require('ethereumjs-util');
-
-// need to represent all amounts as Gwei
-const DENOMINATOR = BigInt(1000000000);
 
 // The interface used to describe address with preloaded properties
 export interface EphemeralAddress {
@@ -33,11 +31,13 @@ export interface EphemeralAddress {
 // The pool of the ephemeral native addresses which are used to support multisig
 // The class supports derivation, signing and maintenance ephemeral addresses
 // The pool should be initialized with zk-account spending key which will produce entropy
+// This class should be used directly inside this library only
 export class EphemeralPool {
     private hdwallet: HDKey;
     private web3: Web3;
     private token: Contract;
     private rpcUrl: string;
+    private poolDenominator: bigint; // we represent all amounts in that library as in pool (Gwei currently)
 
     // save last scanned address to decrease scan time
     private startScanIndex = 0;
@@ -46,6 +46,7 @@ export class EphemeralPool {
     private cachedAddresses = new Map<number, EphemeralAddress>();
 
     // Unused currently (TODO: find an effective way to retrieve contract creation block)
+    // Supposed that it can reduce in/out token transfers count retrieving time
     private tokenCreationBlock = -1;
 
 
@@ -53,7 +54,14 @@ export class EphemeralPool {
     // It's neccessary to make entropy unique
     private skPrefix = '0x5a4b424f425f455048454d4552414c5f504f4f4c5f454e54524f50595f414444';
   
-    constructor(sk: Uint8Array, tokenAddress: string, network: NetworkType, rpcUrl: string) {
+    constructor(
+        sk: Uint8Array,
+        tokenAddress: string,
+        network: NetworkType,
+        rpcUrl: string,
+        poolDenominator: bigint
+    ) {
+        this.poolDenominator = poolDenominator;
         this.rpcUrl = rpcUrl;
         this.web3 = new Web3(this.rpcUrl);
 
@@ -64,7 +72,7 @@ export class EphemeralPool {
         let ephemeralWalletPath = `${NetworkType.chainPath(network)}/0'/0`;
         this.hdwallet = HDKey.fromMasterSeed(seed).derive(ephemeralWalletPath);
 
-        // Set the ERC-20 balanceOf() ABI
+        // ERC-20 balanceOf() and Transfer event ABI
         const balanceOfABI: AbiItem[] = [{
             constant: true,
             inputs: [{
@@ -101,8 +109,14 @@ export class EphemeralPool {
         this.token = new this.web3.eth.Contract(balanceOfABI, tokenAddress) as unknown as Contract;
     }
   
-    static async init(sk: Uint8Array, tokenAddress: string, network: NetworkType, rpcUrl: string): Promise<EphemeralPool> {
-        const storage = new EphemeralPool(sk, tokenAddress, network, rpcUrl);
+    static async init(
+        sk: Uint8Array,
+        tokenAddress: string,
+        network: NetworkType,
+        rpcUrl: string,
+        poolDenominator: bigint
+    ): Promise<EphemeralPool> {
+        const storage = new EphemeralPool(sk, tokenAddress, network, rpcUrl, poolDenominator);
 
         // Start address info preloading
         let startTime = Date.now();
@@ -115,10 +129,12 @@ export class EphemeralPool {
 
     // Get native address at the specified index without additional info
     public getAddress(index: number): string {
-        const publicKey = this.hdwallet.deriveChild(index).publicKey;
+        let key = this.hdwallet.deriveChild(index)
+        const publicKey = key.publicKey;
+        key.wipePrivateData();
         if (publicKey) {
             const fullPublicKey = util.importPublic(Buffer.from(publicKey));
-            return `0x${util.pubToAddress(fullPublicKey).toString('hex')}`;
+            return addHexPrefix(util.pubToAddress(fullPublicKey).toString('hex'));
         }
 
         throw new InternalError(`Cannot generate public key for ephemeral address at index ${index}`);
@@ -147,6 +163,7 @@ export class EphemeralPool {
 
     }
 
+    // Scan all addresses from the index 0 and find first empty account
     public async getNonusedEphemeralIndex(): Promise<number> {
         if (this.scanPromise == undefined) {
             this.scanPromise = this.scanRoutine().finally(() => {
@@ -159,6 +176,8 @@ export class EphemeralPool {
           return this.scanPromise;
     }
 
+    // Scan all addresses from the index 0 and return all non-empty accounts
+    // (scan will stop on first empty address, any holes are not processed)
     public async getUsedEphemeralAddresses(): Promise<EphemeralAddress[]> {
         let result: EphemeralAddress[] = [];
 
@@ -180,50 +199,45 @@ export class EphemeralPool {
         return result;
     }
 
+    // Use this method with caution! Here is sensitive data returned!
+    // Use this method only for emergency reasons
     public getEphemeralAddressPrivateKey(index: number): string {
-        let privKey = this.hdwallet.deriveChild(index).privateKey;
-        if (privKey) {
-            return bufToHex(privKey);
+        let key = this.hdwallet.deriveChild(index);        
+        if (key.privateKey) {
+            let result = bufToHex(key.privateKey);
+
+            // cleanup intermediate sensitive data
+            key.wipePrivateData();
+
+            return result;
         }
 
         throw new InternalError(`Cannot generate private key for ephemeral address at index ${index}`);
     }
 
-    public async signTypedData(data: TypedData, index: number): Promise<string> {
-        const message = getMessage(data, true);
+    // Sign permittable deposit with desired data
+    // data should be object in format as described in https://eips.ethereum.org/EIPS/eip-712
+    public async signTypedData(data: any, index: number): Promise<string> {
         let key = this.hdwallet.deriveChild(index);
-        let sign = key.sign(message);
-
-        console.log(`Signature: ${bufToHex(sign)}`);
-
-        return bufToHex(sign);
-
-        /*let provider = new HDWalletProvider({
-            privateKeys: [this.getEphemeralAddressPrivateKey(index)],
-            providerOrUrl: this.rpcUrl
-        });
-        //this.web3.setProvider(newProvider);
-        const signPromise = new Promise<string>((resolve, reject) => {
-            //let provider = this.web3.currentProvider;
-            if (typeof provider != 'string' && typeof provider?.send != 'undefined') {
-                let address = this.getAddress(index);
-                let id = Math.floor(Math.random() * 10000) + 1;
-                provider.send(
-                    { method: 'eth_signTypedData_v4', params: [JSON.stringify(data), address.toLowerCase()], jsonrpc: '2.0', id },
-                    function (error, result) {
-                        if (error) {
-                            console.error(`Cannot sign typed data: ${error}`);
-                            reject(error);
-                        } else {
-                            resolve(result.result);
-                        }
-                    });
-            } else {
-                reject(new InternalError('Incorrect provider'));
+        if (key.privateKey) {
+            let privateKey = Buffer.from(key.privateKey);
+            let typedSig;
+            try {
+                // typedSig is canonical signature (65 bytes long, LSByte: 1b or 1c)
+                typedSig = signTypedData({privateKey, data, version: SignTypedDataVersion.V4});
+            } catch (err) {
+                key.wipePrivateData();
+                throw new InternalError(`Cannot sign typed data with ephemeral account #${index}: ${err}`);
             }
-        });
-
-        return signPromise;*/
+            
+            // cleanup intermediate sensitive data
+            key.wipePrivateData();
+            privateKey.fill(0);
+            
+            return typedSig;
+        } else {
+            throw new InternalError(`Derived ephemeral address #${index} has no private key`);
+        }
     }
 
     // ------------------=========< Private Routines >=========--------------------
@@ -292,18 +306,18 @@ export class EphemeralPool {
         return existing;
     }
 
-    // in Gwei
+    // in pool dimension (Gwei)
     private async getNativeBalance(address: string): Promise<bigint> {
         const result = await this.web3.eth.getBalance(address);
         
-        return BigInt(result) / DENOMINATOR;
+        return BigInt(result) / this.poolDenominator;
     }
     
-    // in Gwei
+    // in pool dimension (Gwei)
     private async getTokenBalance(address: string): Promise<bigint> {
         const result = await this.token.methods.balanceOf(address).call();
         
-        return BigInt(result) / DENOMINATOR;
+        return BigInt(result) / this.poolDenominator;
     }
 
     // Find first unused account

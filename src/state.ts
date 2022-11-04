@@ -25,7 +25,7 @@ export class ZkBobState {
     const state = await UserState.init(`zp.${networkName}.${userId}`);
     zpState.history = await HistoryStorage.init(`zp.${networkName}.${userId}`, rpcUrl);
     let network = networkName as NetworkType;
-    zpState.ephemeralPool = await EphemeralPool.init(sk, tokenAddress, network, rpcUrl);
+    zpState.ephemeralPool = await EphemeralPool.init(sk, tokenAddress, network, rpcUrl, denominator);
 
     try {
       const acc = new UserAccount(sk, state);

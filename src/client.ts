@@ -5,8 +5,7 @@ import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
-import { EphemeralAddress, EphemeralPool } from './ephemeral';
-import { TypedData } from 'eip-712';
+import { EphemeralAddress } from './ephemeral';
 
 import { 
   validateAddress, Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
@@ -178,8 +177,8 @@ export class ZkBobClient {
     }
 
     for (const [address, token] of Object.entries(config.tokens)) {
-      const denominator = await config.network.getDenominator(token.poolAddress);
-      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, address, config.network.getRpcUrl(), denominator);
+      const poolDenominator = await config.network.getDenominator(token.poolAddress);
+      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, address, config.network.getRpcUrl(), poolDenominator);
     }
 
     return client;
@@ -443,7 +442,7 @@ export class ZkBobClient {
     spender: string,
     value: bigint,
     deadline: bigint,
-    salt: string): Promise<TypedData>
+    salt: string): Promise<object>
   {
     const tokenName = await this.config.network.getTokenName(tokenAddress);
     const chainId = await this.config.network.getChainId();
@@ -487,14 +486,23 @@ export class ZkBobClient {
     feeGwei: bigint = BigInt(0),
   ): Promise<string> {
     const state = this.zpStates[tokenAddress];
-    const fromAddress = await state.ephemeralPool.getAddress(ephemeralIndex);
+    const fromAddress = await state.ephemeralPool.getEphemeralAddress(ephemeralIndex);
+
     return this.depositPermittable(tokenAddress, amountGwei, async (deadline, value, salt) => {
       const token = this.tokens[tokenAddress];
       const state = this.zpStates[tokenAddress];
+
+      // we should check token balance here since the library is fully responsible
+      // for ephemeral address in contrast to depositing from external user's address
+      const neededGwei = value / state.denominator;
+      if(fromAddress.tokenBalance < neededGwei) {
+        throw new TxInsufficientFundsError(neededGwei, fromAddress.tokenBalance);
+      }
+
       let ephemeralAddress = await state.ephemeralPool.getAddress(ephemeralIndex);
       const dataToSign = await this.createPermittableDepositData(tokenAddress, '1', ephemeralAddress, token.poolAddress, value, deadline, salt);
       return await state.ephemeralPool.signTypedData(dataToSign, ephemeralIndex);
-    }, fromAddress, feeGwei);
+    }, fromAddress.address, feeGwei);
   }
 
   // Transfer shielded funds to the shielded address

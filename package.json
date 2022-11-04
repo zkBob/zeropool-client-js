@@ -28,7 +28,7 @@
     "fast-sha256": "^1.3.0",
     "@scure/bip32": "1.1.1",
     "@scure/bip39": "1.1.0",
-    "eip-712": "1.0.0"
+    "@metamask/eth-sig-util": "5.0.0"
   },
   "devDependencies": {
     "ts-loader": "^9.2.6",
