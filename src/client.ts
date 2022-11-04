@@ -283,6 +283,12 @@ export class ZkBobClient {
     return state.account.generateAddress();
   }
 
+  // Returns true if shieldedAddress belogs to the user's account
+  public isMyAddress(tokenAddress: string, shieldedAddress: string): boolean {
+    const state = this.zpStates[tokenAddress];
+    return state.isOwnAddress(shieldedAddress);
+  }
+
   // Waiting while relayer process the jobs set
   public async waitJobsCompleted(tokenAddress: string, jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
     let promises = jobIds.map(async (jobId) => {
