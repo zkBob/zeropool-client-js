@@ -1,6 +1,5 @@
 import { Privkey } from 'hdwallet-babyjub';
-import { numberToHex, padLeft, stringToHex } from 'web3-utils';
-import { validateAddress } from 'libzkbob-rs-wasm-web';
+import { numberToHex, padLeft } from 'web3-utils';
 
 import { NetworkType } from './network-type';
 import { InternalError } from './errors';
@@ -28,10 +27,6 @@ export function deriveSpendingKeyZkBob(mnemonic: string, networkType: NetworkTyp
   }
 
   return deriveSpendingKey(mnemonic, networkType);
-}
-
-export function verifyShieldedAddress(address: string): boolean {
-  return validateAddress(address);
 }
 
 const HEX_TABLE: string[] = [];

@@ -1,6 +1,6 @@
 import Web3 from 'web3';
 
-import { TransactionData, Proof, Params, SnarkProof, UserAccount, VK } from 'libzkbob-rs-wasm-web';
+import { TransactionData, SnarkProof, UserAccount } from 'libzkbob-rs-wasm-web';
 import { HexStringReader, HexStringWriter } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
@@ -44,7 +44,6 @@ export class ShieldedTx {
     txData: TransactionData,
     txType: TxType,
     acc: UserAccount,
-    snarkParams: { transferVk?: VK; treeVk?: VK; },
     web3: Web3,
     worker: any,
   ): Promise<ShieldedTx> {
@@ -77,12 +76,12 @@ export class ShieldedTx {
       prev_leaf: prevLeaf,
     });
 
-    const txValid = Proof.verify(snarkParams.transferVk!, txProof.inputs, txProof.proof);
+    const txValid = worker.verifyTxProof(txProof.inputs, txProof.proof);
     if (!txValid) {
       throw new InternalError('invalid tx proof');
     }
 
-    const treeValid = Proof.verify(snarkParams.treeVk!, treeProof.inputs, treeProof.proof);
+    const treeValid = worker.verifyTreeProof(treeProof.inputs, treeProof.proof);
     if (!treeValid) {
       throw new InternalError('invalid tree proof');
     }
