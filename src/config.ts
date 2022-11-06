@@ -1,5 +1,3 @@
-import { VK } from 'libzkbob-rs-wasm-web';
-
 export interface Config {
   snarkParams: SnarkConfigParams;
   wasmPath: string;
@@ -13,13 +11,6 @@ export interface SnarkConfigParams {
   treeVkUrl: string;
 }
 
-export interface SnarkParams {
-  transferVk?: VK;
-  treeVk?: VK;
-}
-
-/*
- */
 export type Tokens = {
   [address: string]: Token;
 };
