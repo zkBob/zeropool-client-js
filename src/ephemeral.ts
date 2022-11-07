@@ -337,24 +337,32 @@ export class EphemeralPool {
 
     // Number of incoming token transfers to the account
     private async getIncomingTokenTxCount(address: string, toBlock: number, fromBlock: number = 0): Promise<number> {
-        const events = await this.token.getPastEvents('Transfer', {
-            filter: { to: address },
-            fromBlock: Math.max(fromBlock, this.tokenCreationBlock),
-            toBlock
-        });
+        if (toBlock >= fromBlock) {
+            const events = await this.token.getPastEvents('Transfer', {
+                filter: { to: address },
+                fromBlock: Math.max(fromBlock, this.tokenCreationBlock),
+                toBlock
+            });
 
-        return events.length;
+            return events.length;
+        }
+        
+        return 0;
     }
 
     // Number of outcoming token transfers from the account
     private async getOutcomingTokenTxCount(address: string, toBlock: number, fromBlock: number = 0): Promise<number> {
-        const events = await this.token.getPastEvents('Transfer', {
-            filter: { from: address },
-            fromBlock: Math.max(fromBlock, this.tokenCreationBlock),
-            toBlock
-        });
+        if (toBlock >= fromBlock) {
+            const events = await this.token.getPastEvents('Transfer', {
+                filter: { from: address },
+                fromBlock: Math.max(fromBlock, this.tokenCreationBlock),
+                toBlock
+            });
 
-        return events.length;
+            return events.length;
+        }
+
+        return 0;
     }
 
     // address nonused criteria
