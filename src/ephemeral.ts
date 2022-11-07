@@ -286,15 +286,15 @@ export class EphemeralPool {
 
     // get and update address details
     private async updateAddressInfo(existing: EphemeralAddress): Promise<EphemeralAddress> {
+        const blockNumber = await this.web3.eth.getBlockNumber();
         let promises = [
-            this.web3.eth.getBlockNumber(),
             this.getTokenBalance(existing.address),
             this.getNativeBalance(existing.address),
             this.web3.eth.getTransactionCount(existing.address),
-            this.getIncomingTokenTxCount(existing.address, existing.blockNumber + 1),
-            this.getOutcomingTokenTxCount(existing.address, existing.blockNumber + 1),
+            this.getIncomingTokenTxCount(existing.address, blockNumber, existing.blockNumber + 1),
+            this.getOutcomingTokenTxCount(existing.address, blockNumber, existing.blockNumber + 1),
         ];
-        const [blockNumber, tokenBalance, nativeBalance, nonce, inTokenTxCnt, outTokenTxCnt] = await Promise.all(promises);
+        const [tokenBalance, nativeBalance, nonce, inTokenTxCnt, outTokenTxCnt] = await Promise.all(promises);
 
         existing.blockNumber = Number(blockNumber);
         existing.tokenBalance = BigInt(tokenBalance);
@@ -336,22 +336,22 @@ export class EphemeralPool {
     }
 
     // Number of incoming token transfers to the account
-    private async getIncomingTokenTxCount(address: string, fromBlock: number = 0): Promise<number> {
+    private async getIncomingTokenTxCount(address: string, toBlock: number, fromBlock: number = 0): Promise<number> {
         const events = await this.token.getPastEvents('Transfer', {
             filter: { to: address },
             fromBlock: Math.max(fromBlock, this.tokenCreationBlock),
-            toBlock: 'latest'
+            toBlock
         });
 
         return events.length;
     }
 
     // Number of outcoming token transfers from the account
-    private async getOutcomingTokenTxCount(address: string, fromBlock: number = 0): Promise<number> {
+    private async getOutcomingTokenTxCount(address: string, toBlock: number, fromBlock: number = 0): Promise<number> {
         const events = await this.token.getPastEvents('Transfer', {
             filter: { from: address },
             fromBlock: Math.max(fromBlock, this.tokenCreationBlock),
-            toBlock: 'latest'
+            toBlock
         });
 
         return events.length;
