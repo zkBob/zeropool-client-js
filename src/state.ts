@@ -11,7 +11,7 @@ export class ZkBobState {
   
   // Mapping shieldedAddress -> isOwnAddress (local cache)
   // need to decrease time in isOwnAddress() function 
-  private shieldedAddressCache = new Map<string, boolean>();
+  private shieldedAddressCache = new Map<string, Promise<boolean>>();
 
   public static async create(sk: Uint8Array, networkName: string, rpcUrl: string, denominator: bigint, tokenAddress: string, worker: any): Promise<ZkBobState> {
     const zpState = new ZkBobState();
@@ -52,7 +52,7 @@ export class ZkBobState {
   public async isOwnAddress(shieldedAddress: string): Promise<boolean> {
     let res = this.shieldedAddressCache.get(shieldedAddress);
     if (res === undefined) {
-      res = await this.worker.isOwnAddress(this.tokenAddress, shieldedAddress);
+      res = this.worker.isOwnAddress(this.tokenAddress, shieldedAddress);
       this.shieldedAddressCache.set(shieldedAddress, res!);
     }
 
