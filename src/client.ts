@@ -78,8 +78,9 @@ export interface TxToRelayer {
 }
 
 export interface JobInfo {
+  resolvedJobId: string;
   state: string;
-  txHash: string[];
+  txHash: string;
   createdOn: number;
   finishedOn?: number;
   failedReason?: string;
@@ -87,7 +88,8 @@ export interface JobInfo {
 const isJobInfo = (obj: any): obj is JobInfo => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('state') && typeof obj.state === 'string' &&
-    obj.hasOwnProperty('txHash') && (!obj.txHash || Array.isArray(obj.txHash)) &&
+    obj.hasOwnProperty('txHash') && (!obj.txHash || typeof obj.state === 'string') &&
+    obj.hasOwnProperty('resolvedJobId') && typeof obj.resolvedJobId === 'string' &&
     obj.hasOwnProperty('createdOn') && typeof obj.createdOn === 'number';
 }
 
@@ -280,10 +282,10 @@ export class ZkBobClient {
   }
 
   // Waiting while relayer process the jobs set
-  public async waitJobsSended(tokenAddress: string, jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
+  public async waitJobsTxHashes(tokenAddress: string, jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
     let promises = jobIds.map(async (jobId) => {
-      const txHashes: string[] = await this.waitJobSended(tokenAddress, jobId);
-      return { jobId, txHash: txHashes[0] };
+      const txHash = await this.waitJobTxHash(tokenAddress, jobId);
+      return { jobId, txHash };
     });
     
     return Promise.all(promises);
@@ -293,22 +295,22 @@ export class ZkBobClient {
   // return transaction(s) hash(es) on success or throw an error
   //
   // Job state machine:
-  // 1. `waiting`: tx in the relayer's verification/sending queue
-  // 2. `failed`: tx was rejected by relayer (nothing was sent to the Pool)
-  // 3. `sended`: tx in the optimistic state (sent on the Pool but not mined yet) and it has a txHash
-  // 4. `reverted`: tx was reverted on the Pool contract and will not resend by relayer (txHash presented)
+  // 1. `waiting`  : tx in the relayer's verification/sending queue
+  // 2. `failed`   : tx was rejected by relayer (nothing was sent to the Pool)
+  // 3. `sent`     : tx in the optimistic state (sent on the Pool but not mined yet) and it has a txHash
+  // 4. `reverted` : tx was reverted on the Pool contract and will not resend by relayer (txHash presented)
   // 5. `completed`: tx was mined and included in the regular state (txHash cannot be changed anymore)
   //
-  // The normal transaction flow: `waiting` -> `sended` -> `completed`
+  // The normal transaction flow: `waiting` -> `sent` -> `completed`
   // The following states are terminal (means no any changes in task will happened): `failed`, `reverted`, `completed`
-  // The job state can be switched from `sended` to `waiting` state - it means transaction was resent
+  // The job state can be switched from `sent` to `waiting` state - it means transaction was resent
   //
-  public async waitJobSended(tokenAddress: string, jobId: string): Promise<string[]> {
+  public async waitJobTxHash(tokenAddress: string, jobId: string): Promise<string> {
     const token = this.tokens[tokenAddress];
     const state = this.zpStates[tokenAddress];
 
     const INTERVAL_MS = 1000;
-    let hashes: string[];
+    let txHash: string;
     while (true) {
       const job = await this.getJob(token.relayerUrl, jobId);
 
@@ -317,30 +319,30 @@ export class ZkBobClient {
       } else if (job.state === 'failed')  {
         // Transaction was failed during relayer's verification: terminal state
         const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
-        state.history.setSendedTransactionFailedByRelayer(jobId, relayerReason);
+        state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
         throw new RelayerJobError(Number(jobId), relayerReason);
-      } else if (job.state === 'sended') {
+      } else if (job.state === 'sent') {
         // Tx should appear in the optimistic state with current txHash
-        hashes = job.txHash;
-        state.history.setTxHashesForQueuedTransactions(jobId, hashes);
-        console.info(`Transaction [job ${jobId}] was sent to the pool: ${hashes.join(", ")}`);   
+        txHash = job.txHash;
+        state.history.setTxHashForQueuedTransactions(jobId, txHash);
+        console.info(`Transaction [job ${jobId}] was sent to the pool: ${txHash}`);   
         break;
       } else if (job.state === 'reverted')  {
         // Transaction was reverted on the Pool and won't resend: terminal state
         const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
-        state.history.setSendedTransactionFailedByPool(jobId, relayerReason);
+        state.history.setQueuedTransactionFailedByPool(jobId, relayerReason);
         throw new RelayerJobError(Number(jobId), relayerReason);
       } else if (job.state === 'completed') {
         // Transaction has been mined successfully! Should appear in the regular state: terminal state
-        hashes = job.txHash;
-        console.info(`Transaction [job ${jobId}] was mined successfully: ${hashes.join(", ")}`);   
+        txHash = job.txHash;
+        console.info(`Transaction [job ${jobId}] was mined successfully: ${txHash}`);   
         break;
       }
 
       await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
     }
 
-    return hashes;
+    return txHash;
   }
 
   // Waiting while relayer includes the job transaction in the optimistic state
@@ -351,7 +353,7 @@ export class ZkBobClient {
     const state = this.zpStates[tokenAddress];
 
     const INTERVAL_MS = 1000;
-    let hashes: string[];
+    let txHash: string;
     while (true) {
       const job = await this.getJob(token.relayerUrl, jobId);
       
@@ -361,8 +363,8 @@ export class ZkBobClient {
         const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
         state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
         throw new RelayerJobError(Number(jobId), job.failedReason !== undefined ? job.failedReason : 'unknown reason');
-      } else if (job.state === 'completed' || job.state === 'sended') {
-        hashes = job.txHash;
+      } else if (job.state === 'completed' || job.state === 'sent') {
+        txHash = job.txHash;
         break;
       }
 

@@ -126,12 +126,12 @@ export class HistoryStorage {
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
                                           //(while tx isn't processed on relayer)
-                                          // We don't know txHashes for history records at that moment,
-                                          // but we can assign it sequence number inside a job.
-                                          // So in HistoryRecords array txHash should be interpreted
-                                          // as the index of transaction in correspondance of sending order
+                                          // We don't know txHash for history records at that moment
+                                          // Please keep in mind that one job contain just one txHash,
+                                          // but transaction in common case could consist of several HistoryRecords
+                                          // (e.g. deposit + transfer, unimplemented case currently)
 
-  private sendedTxs = new Map<string, HistoryRecord[]>(); // txHash -> HistoryRecord[]
+  private sentTxs = new Map<string, HistoryRecord[]>(); // txHash -> HistoryRecord[]
                                           // (while we have a hash from relayer but it isn't indexed on RPC JSON)
                                           // At that moment we should fill txHash for every history record correctly
 
@@ -227,34 +227,29 @@ export class HistoryStorage {
             .sort((rec1, rec2) => 0 - (rec1.timestamp > rec2.timestamp ? -1 : 1));
   }
 
-  // remember just sended transactions to restore history record immediately
+  // remember just sent transactions to restore history record immediately
   public keepQueuedTransactions(txs: HistoryRecord[], jobId: string) {
     this.queuedTxs.set(jobId, txs);
   }
 
   // set txHash mapping for awaiting transactions
-  public setTxHashesForQueuedTransactions(jobId: string, txHashes: string[]) {
+  public setTxHashForQueuedTransactions(jobId: string, txHash: string) {
     let txs = this.queuedTxs.get(jobId);
-    if (txs && txHashes.length > 0) {
+    if (txs) {
+      let sentHistoryRecords: HistoryRecord[] = [];
       for(let oneTx of txs) {
-        let hashIndex = Number(oneTx.txHash);
-        if (hashIndex >= 0 && hashIndex < txHashes.length) {
-          oneTx.txHash = txHashes[hashIndex];
-          let array = this.sendedTxs.get(oneTx.txHash);
-          if(array === undefined) {
-            array = [];
-          }
-          array.push(oneTx);
-          this.sendedTxs.set(oneTx.txHash, array);
-        }
-      }      
+        oneTx.txHash = txHash;
+        sentHistoryRecords.push(oneTx);
+      }
+      this.sentTxs.set(txHash, sentHistoryRecords);    
     }
 
+    // TODO: We shouldn't remove the queueTx here because pending tx could be resent
     this.queuedTxs.delete(jobId);
   }
 
   // mark pending transaction as failed on the relayer level
-  public async setSendedTransactionFailedByRelayer(jobId: string, error: string | undefined): Promise<boolean> {
+  public async setQueuedTransactionFailedByRelayer(jobId: string, error: string | undefined): Promise<boolean> {
     let txs = this.queuedTxs.get(jobId);
     if (txs) {
       for(let oneTx of txs) {
@@ -274,8 +269,8 @@ export class HistoryStorage {
   }
 
   // mark pending transaction as failed on the relayer level
-  public async setSendedTransactionFailedByPool(txHash: string, error: string | undefined): Promise<boolean> {
-    let txs = this.sendedTxs.get(txHash);
+  public async setQueuedTransactionFailedByPool(txHash: string, error: string | undefined): Promise<boolean> {
+    let txs = this.sentTxs.get(txHash);
     if (txs) {
       for(let oneTx of txs) {
         oneTx.state = HistoryRecordState.RejectedByPool;
@@ -285,7 +280,7 @@ export class HistoryStorage {
         await this.db.put(TX_FAILED_TABLE, oneTx);
       }    
 
-      this.sendedTxs.delete(txHash);
+      this.sentTxs.delete(txHash);
 
       return true;
     }
@@ -419,7 +414,7 @@ export class HistoryStorage {
         this.unparsedMemo.delete(oneIndex);
       }
 
-      await this.processSendedTxs();
+      await this.processSentTxs();
 
       this.syncIndex = newSyncIndex;
       this.db.put(HISTORY_STATE_TABLE, this.syncIndex, 'sync_index');
@@ -435,15 +430,15 @@ export class HistoryStorage {
         }
       }
 
-      await this.processSendedTxs();
+      await this.processSentTxs();
 
       console.log(`Memo sync is not required: already up-to-date (on index ${this.syncIndex + 1})`);
     }
   }
 
   // scan sended tx to check if one reverted on the Pool contract
-  private async processSendedTxs(): Promise<void> {
-    for (let oneSendedTxHash of this.sendedTxs.keys()) {
+  private async processSentTxs(): Promise<void> {
+    for (let oneSendedTxHash of this.sentTxs.keys()) {
       const txReceipt = await this.web3.eth.getTransactionReceipt(oneSendedTxHash);
       if (txReceipt && txReceipt.status !== undefined) {
         if (txReceipt.status == false) {
@@ -457,7 +452,7 @@ export class HistoryStorage {
           }
           console.log(`Revert reason for ${oneSendedTxHash}: ${reason}`)
 
-          let records = this.sendedTxs.get(oneSendedTxHash);
+          let records = this.sentTxs.get(oneSendedTxHash);
           if (records !== undefined) {
             for (let oneRecord of records) {
               oneRecord.state = HistoryRecordState.RejectedByPool;
@@ -469,7 +464,7 @@ export class HistoryStorage {
           }
 
           // remove tx from sended transactions - it's now in failedHistory
-          this.sendedTxs.delete(oneSendedTxHash);
+          this.sentTxs.delete(oneSendedTxHash);
           
           // remove pending transactions with the same txHash
           for (const [index, record] of this.currentHistory) {
@@ -596,10 +591,10 @@ export class HistoryStorage {
                       // if tx is in pending state - remove it only on success
                       const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
                       if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
-                        this.sendedTxs.delete(txHash);                        
+                        this.sentTxs.delete(txHash);                        
                       }
                     } else {
-                      this.sendedTxs.delete(txHash);
+                      this.sentTxs.delete(txHash);
                     }
 
                     return allRecords;
@@ -616,7 +611,7 @@ export class HistoryStorage {
           throw new InternalError(`Unable to get timestamp for block ${txData.blockNumber}`);
       } else {
         // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
-        let sendedRecords = this.sendedTxs.get(txHash);
+        let sendedRecords = this.sentTxs.get(txHash);
         if (sendedRecords !== undefined) {
           console.log(`HistoryStorage: hash ${txHash} doesn't found, but it corresponds to the previously saved ${sendedRecords.length} transaction(s)`);
           return sendedRecords.map((oneRecord, index) => HistoryRecordIdx.create(oneRecord, memo.index + index));
