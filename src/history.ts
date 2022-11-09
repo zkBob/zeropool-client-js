@@ -254,7 +254,7 @@ export class HistoryStorage {
   }
 
   // mark pending transaction as failed on the relayer level
-  public async setQueuedTransactionFailedByRelayer(jobId: string, error: string | undefined): Promise<boolean> {
+  public async setSendedTransactionFailedByRelayer(jobId: string, error: string | undefined): Promise<boolean> {
     let txs = this.queuedTxs.get(jobId);
     if (txs) {
       for(let oneTx of txs) {
