@@ -295,114 +295,8 @@ export class ZkBobClient {
     return Promise.all(promises);
   }
 
-  // Start monitoring job
-  // Return existing promise or start new one
-  private async startJobMonitoring(tokenAddress: string, jobId: string): Promise<JobInfo> {
-    const existingMonitor = this.jobsMonitors.get(jobId);
-    if (existingMonitor === undefined) {
-      let newMonitor = this.jobMonitoringWorker(tokenAddress, jobId).finally(() => {
-        this.jobsMonitors.delete(jobId);
-      });
-      this.jobsMonitors.set(jobId, newMonitor);
-
-      return newMonitor;
-    } else {
-      return existingMonitor;
-    }
-  }
-
-  // Monitor job while it isn't going to the terminal state
-  // Returns job in terminal state
-  //
-  // Job state machine:
-  // 1. `waiting`  : tx in the relayer's verification/sending queue
-  // 2. `failed`   : tx was rejected by relayer (nothing was sent to the Pool)
-  // 3. `sent`     : tx in the optimistic state (sent on the Pool but not mined yet) and it has a txHash
-  // 4. `reverted` : tx was reverted on the Pool contract and will not resend by relayer (txHash presented)
-  // 5. `completed`: tx was mined and included in the regular state (txHash cannot be changed anymore)
-  //
-  // The normal transaction flow: `waiting` -> `sent` -> `completed`
-  // The following states are terminal (means no any changes in task will happened): `failed`, `reverted`, `completed`
-  // The job state can be switched from `sent` to `waiting` state - it means transaction was resent
-  //
-  private async jobMonitoringWorker(tokenAddress: string, jobId: string): Promise<JobInfo> {
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
-
-    const INTERVAL_MS = 1000;
-    let job: JobInfo;
-    let lastTxHash = '';
-    let lastJobState = '';
-    while (true) {
-      let jobInfo = await this.getJob(token.relayerUrl, jobId);
-
-      if (jobInfo === null) {
-        throw new RelayerJobError(Number(jobId), 'not found');
-      } else {
-        job = jobInfo;
-        let jobDescr = `job #${jobId}${job.resolvedJobId != jobId ? `(->${job.resolvedJobId})` : ''}`;
-        
-        // update local job info
-        this.monitoredJobs.set(jobId, job);
-        
-        if (job.state === 'waiting')  {
-          // Tx in the relayer's verification/sending queue
-          if (job.state != lastJobState) {
-            console.info(`JobMonitoring: ${jobDescr} waiting while relayer processed it`);
-          }
-        } else if (job.state === 'failed')  {
-          // [TERMINAL STATE] Transaction was failed during relayer's verification
-          const relayerReason = job.failedReason ?? 'unknown reason';
-          state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
-          console.info(`JobMonitoring: ${jobDescr} was discarded by relayer with reason '${relayerReason}'`);
-          break;
-        } else if (job.state === 'sent') {
-          // Tx should appear in the optimistic state with current txHash
-          if (job.txHash) {
-            if (lastTxHash != job.txHash) {
-              state.history.setTxHashForQueuedTransactions(jobId, job.txHash);
-              console.info(`JobMonitoring: ${jobDescr} was ${job.resolvedJobId != jobId ? 'RE' : ''}sent to the pool: ${job.txHash}`);   
-            }
-          } else {
-            console.warn(`JobMonitoring: ${jobDescr} was sent to the pool but has no assigned txHash [relayer issue]`);
-          }
-        } else if (job.state === 'reverted')  {
-          // [TERMINAL STATE] Transaction was reverted on the Pool and won't resend
-          // get revert reason first (from the relayer or from the contract directly)
-          let revertReason: string = 'unknown reason';
-          if (job.failedReason) {
-            revertReason = job.failedReason;
-          } else if (job.txHash) {
-            let retrievedReason = (await this.config.network.getTxRevertReason(job.txHash));
-            revertReason = retrievedReason ?? 'transaction was not found\\reverted'
-          } else {
-            console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
-          }
-
-          state.history.setQueuedTransactionFailedByPool(jobId, revertReason);
-          console.info(`JobMonitoring: ${jobDescr} was reverted on pool with reason '${revertReason}': ${job.txHash}`);
-          break;
-        } else if (job.state === 'completed') {
-          // [TERMINAL STATE] Transaction has been mined successfully and should appear in the regular state
-          state.history.setQueuedTransactionsCompleted(jobId);
-          console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
-          break;
-        }
-
-        lastJobState = job.state;
-        if (job.txHash) lastTxHash = job.txHash;
-
-      }
-
-      await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
-    }
-
-    return job;
-  }
-
   // Waiting while relayer process the job and send it to the Pool
   // return transaction hash on success or throw an error
-
   public async waitJobTxHash(tokenAddress: string, jobId: string): Promise<string> {
     const token = this.tokens[tokenAddress];
     const state = this.zpStates[tokenAddress];
@@ -797,6 +691,116 @@ export class ZkBobClient {
     state.history.keepQueuedTransactions(recs, jobId);
 
     return jobId;
+  }
+
+  // Start monitoring job
+  // Return existing promise or start new one
+  private async startJobMonitoring(tokenAddress: string, jobId: string): Promise<JobInfo> {
+    const existingMonitor = this.jobsMonitors.get(jobId);
+    if (existingMonitor === undefined) {
+      let newMonitor = this.jobMonitoringWorker(tokenAddress, jobId).finally(() => {
+        this.jobsMonitors.delete(jobId);
+      });
+      this.jobsMonitors.set(jobId, newMonitor);
+
+      return newMonitor;
+    } else {
+      return existingMonitor;
+    }
+  }
+
+  // Monitor job while it isn't going to the terminal state
+  // Returns job in terminal state
+  //
+  // Job state machine:
+  // 1. `waiting`  : tx in the relayer's verification/sending queue
+  // 2. `failed`   : tx was rejected by relayer (nothing was sent to the Pool)
+  // 3. `sent`     : tx in the optimistic state (sent on the Pool but not mined yet) and it has a txHash
+  // 4. `reverted` : tx was reverted on the Pool contract and will not resend by relayer (txHash presented)
+  // 5. `completed`: tx was mined and included in the regular state (txHash cannot be changed anymore)
+  //
+  // The normal transaction flow: `waiting` -> `sent` -> `completed`
+  // The following states are terminal (means no any changes in task will happened): `failed`, `reverted`, `completed`
+  // The job state can be switched from `sent` to `waiting` state - it means transaction was resent
+  //
+  private async jobMonitoringWorker(tokenAddress: string, jobId: string): Promise<JobInfo> {
+    const token = this.tokens[tokenAddress];
+    const state = this.zpStates[tokenAddress];
+
+    const INTERVAL_MS = 1000;
+    let job: JobInfo;
+    let lastTxHash = '';
+    let lastJobState = '';
+    while (true) {
+      let jobInfo = await this.getJob(token.relayerUrl, jobId);
+
+      if (jobInfo === null) {
+        throw new RelayerJobError(Number(jobId), 'not found');
+      } else {
+        job = jobInfo;
+        let jobDescr = `job #${jobId}${job.resolvedJobId != jobId ? `(->${job.resolvedJobId})` : ''}`;
+        
+        // update local job info
+        this.monitoredJobs.set(jobId, job);
+        
+        if (job.state === 'waiting')  {
+          // Tx in the relayer's verification/sending queue
+          if (job.state != lastJobState) {
+            console.info(`JobMonitoring: ${jobDescr} waiting while relayer processed it`);
+          }
+        } else if (job.state === 'failed')  {
+          // [TERMINAL STATE] Transaction was failed during relayer's verification
+          const relayerReason = job.failedReason ?? 'unknown reason';
+          state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
+          console.info(`JobMonitoring: ${jobDescr} was discarded by relayer with reason '${relayerReason}'`);
+          break;
+        } else if (job.state === 'sent') {
+          // Tx should appear in the optimistic state with current txHash
+          if (job.txHash) {
+            if (lastTxHash != job.txHash) {
+              state.history.setTxHashForQueuedTransactions(jobId, job.txHash);
+              console.info(`JobMonitoring: ${jobDescr} was ${job.resolvedJobId != jobId ? 'RE' : ''}sent to the pool: ${job.txHash}`);   
+            }
+          } else {
+            console.warn(`JobMonitoring: ${jobDescr} was sent to the pool but has no assigned txHash [relayer issue]`);
+          }
+        } else if (job.state === 'reverted')  {
+          // [TERMINAL STATE] Transaction was reverted on the Pool and won't resend
+          // get revert reason first (from the relayer or from the contract directly)
+          let revertReason: string = 'unknown reason';
+          if (job.failedReason) {
+            revertReason = job.failedReason;  // reason from the relayer
+          } else if (job.txHash) {
+            // the relayer doesn't provide failure reason - fetch it directly
+            let retrievedReason = (await this.config.network.getTxRevertReason(job.txHash));
+            revertReason = retrievedReason ?? 'transaction was not found\\reverted'
+          } else {
+            console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
+          }
+
+          state.history.setSentTransactionFailedByPool(jobId, job.txHash ?? '', revertReason);
+          console.info(`JobMonitoring: ${jobDescr} was reverted on pool with reason '${revertReason}': ${job.txHash}`);
+          break;
+        } else if (job.state === 'completed') {
+          // [TERMINAL STATE] Transaction has been mined successfully and should appear in the regular state
+          state.history.setQueuedTransactionsCompleted(jobId, job.txHash ?? '');
+          if (job.txHash) {
+            console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
+          } else {
+            console.warn(`JobMonitoring: ${jobDescr} was mined but has no assigned txHash [relayer issue]`);
+          }
+          break;
+        }
+
+        lastJobState = job.state;
+        if (job.txHash) lastTxHash = job.txHash;
+
+      }
+
+      await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
+    }
+
+    return job;
   }
 
   // ------------------=========< Transaction configuration >=========-------------------
