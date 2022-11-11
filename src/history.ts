@@ -7,16 +7,16 @@ import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 
 export enum HistoryTransactionType {
-	Deposit = 1,
-	TransferIn,
+  Deposit = 1,
+  TransferIn,
   TransferOut,
-	Withdrawal,
+  Withdrawal,
   TransferLoopback,
 }
 
 export enum HistoryRecordState {
-	Pending = 1,
-	Mined,
+  Pending = 1,
+  Mined,
   RejectedByRelayer,
   RejectedByPool,
 }
@@ -137,8 +137,11 @@ export class HistoryStorage {
 
   private unparsedMemo = new Map<number, DecryptedMemo>();  // local decrypted memos cache
   private unparsedPendingMemo = new Map<number, DecryptedMemo>();  // local decrypted pending memos cache
+  
   private currentHistory = new Map<number, HistoryRecord>();  // local history cache (index -> HistoryRecord)
-  private failedHistory: HistoryRecord[] = [];  //  local failed history cache (unique_id -> HistoryRecord)
+  private failedHistory: HistoryRecord[] = [];  //  local failed history cache (we have no key here, just array)
+
+
   private syncHistoryPromise: Promise<void> | undefined;
   private web3;
 
@@ -234,18 +237,40 @@ export class HistoryStorage {
 
   // set txHash mapping for awaiting transactions
   public setTxHashForQueuedTransactions(jobId: string, txHash: string) {
-    let txs = this.queuedTxs.get(jobId);
-    if (txs) {
+    let records = this.queuedTxs.get(jobId);
+    if (records !== undefined) {
       let sentHistoryRecords: HistoryRecord[] = [];
-      for(let oneTx of txs) {
-        oneTx.txHash = txHash;
-        sentHistoryRecords.push(oneTx);
+      let oldTxHash = '';
+      for(let aRec of records) {
+        aRec.txHash = txHash;
+        sentHistoryRecords.push(aRec);
+        if (oldTxHash.length == 0 && aRec.txHash && aRec.txHash.startsWith('0x')){
+          oldTxHash = aRec.txHash;
+        }
       }
+
+      this.sentTxs.delete(oldTxHash);
       this.sentTxs.set(txHash, sentHistoryRecords);    
     }
+  }
 
-    // TODO: We shouldn't remove the queueTx here because pending tx could be resent
-    this.queuedTxs.delete(jobId);
+  // Mark job as completed: remove it from 'queuedTxs' mapping
+  public async setQueuedTransactionsCompleted(jobId: string) : Promise<boolean> {
+    const records = this.queuedTxs.get(jobId);
+    if (records !== undefined) {
+      // remove sent txs for the actual hash
+      for(let aRec of records) {
+        if (aRec.txHash && aRec.txHash.startsWith('0x')){
+          this.sentTxs.delete(aRec.txHash);
+          break;
+        }
+      }
+
+      // remove queued queued transaction
+      return this.queuedTxs.delete(jobId);
+    }
+
+    return false;
   }
 
   // mark pending transaction as failed on the relayer level

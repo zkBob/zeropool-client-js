@@ -12,7 +12,7 @@ import {
 } from 'libzkbob-rs-wasm-web';
 
 import { 
-  NetworkError, RelayerError, RelayerJobError, TxDepositDeadlineExpiredError,
+  InternalError, NetworkError, PoolJobError, RelayerError, RelayerJobError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
 
@@ -80,10 +80,10 @@ export interface TxToRelayer {
 export interface JobInfo {
   resolvedJobId: string;
   state: string;
-  txHash: string;
+  txHash: string | null;
   createdOn: number;
-  finishedOn?: number;
-  failedReason?: string;
+  finishedOn: number | null;
+  failedReason: string | null;
 }
 const isJobInfo = (obj: any): obj is JobInfo => {
   return typeof obj === 'object' && obj !== null &&
@@ -158,6 +158,10 @@ export class ZkBobClient {
   private config: ClientConfig;
   private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
   private updateStatePromise: Promise<boolean> | undefined;
+
+  // Jobs monitoring
+  private monitoredJobs = new Map<string, JobInfo>();
+  private jobsMonitors  = new Map<string, Promise<JobInfo>>();
 
   public static async create(config: ClientConfig): Promise<ZkBobClient> {
     const client = new ZkBobClient();
@@ -291,8 +295,24 @@ export class ZkBobClient {
     return Promise.all(promises);
   }
 
-  // Waiting while relayer process the job and send it to the Pool
-  // return transaction(s) hash(es) on success or throw an error
+  // Start monitoring job
+  // Return existing promise or start new one
+  private async startJobMonitoring(tokenAddress: string, jobId: string): Promise<JobInfo> {
+    const existingMonitor = this.jobsMonitors.get(jobId);
+    if (existingMonitor === undefined) {
+      let newMonitor = this.jobMonitoringWorker(tokenAddress, jobId).finally(() => {
+        this.jobsMonitors.delete(jobId);
+      });
+      this.jobsMonitors.set(jobId, newMonitor);
+
+      return newMonitor;
+    } else {
+      return existingMonitor;
+    }
+  }
+
+  // Monitor job while it isn't going to the terminal state
+  // Returns job in terminal state
   //
   // Job state machine:
   // 1. `waiting`  : tx in the relayer's verification/sending queue
@@ -305,75 +325,115 @@ export class ZkBobClient {
   // The following states are terminal (means no any changes in task will happened): `failed`, `reverted`, `completed`
   // The job state can be switched from `sent` to `waiting` state - it means transaction was resent
   //
+  private async jobMonitoringWorker(tokenAddress: string, jobId: string): Promise<JobInfo> {
+    const token = this.tokens[tokenAddress];
+    const state = this.zpStates[tokenAddress];
+
+    const INTERVAL_MS = 1000;
+    let job: JobInfo;
+    let lastTxHash = '';
+    let lastJobState = '';
+    while (true) {
+      let jobInfo = await this.getJob(token.relayerUrl, jobId);
+
+      if (jobInfo === null) {
+        throw new RelayerJobError(Number(jobId), 'not found');
+      } else {
+        job = jobInfo;
+        let jobDescr = `job #${jobId}${job.resolvedJobId != jobId ? `(->${job.resolvedJobId})` : ''}`;
+        
+        // update local job info
+        this.monitoredJobs.set(jobId, job);
+        
+        if (job.state === 'waiting')  {
+          // Tx in the relayer's verification/sending queue
+          if (job.state != lastJobState) {
+            console.info(`JobMonitoring: ${jobDescr} waiting while relayer processed it`);
+          }
+        } else if (job.state === 'failed')  {
+          // [TERMINAL STATE] Transaction was failed during relayer's verification
+          const relayerReason = job.failedReason ?? 'unknown reason';
+          state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
+          console.info(`JobMonitoring: ${jobDescr} was discarded by relayer with reason '${relayerReason}'`);
+          break;
+        } else if (job.state === 'sent') {
+          // Tx should appear in the optimistic state with current txHash
+          if (job.txHash) {
+            if (lastTxHash != job.txHash) {
+              state.history.setTxHashForQueuedTransactions(jobId, job.txHash);
+              console.info(`JobMonitoring: ${jobDescr} was ${job.resolvedJobId != jobId ? 'RE' : ''}sent to the pool: ${job.txHash}`);   
+            }
+          } else {
+            console.warn(`JobMonitoring: ${jobDescr} was sent to the pool but has no assigned txHash [relayer issue]`);
+          }
+        } else if (job.state === 'reverted')  {
+          // [TERMINAL STATE] Transaction was reverted on the Pool and won't resend
+          // get revert reason first (from the relayer or from the contract directly)
+          let revertReason: string = 'unknown reason';
+          if (job.failedReason) {
+            revertReason = job.failedReason;
+          } else if (job.txHash) {
+            let retrievedReason = (await this.config.network.getTxRevertReason(job.txHash));
+            revertReason = retrievedReason ?? 'transaction was not found\\reverted'
+          } else {
+            console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
+          }
+
+          state.history.setQueuedTransactionFailedByPool(jobId, revertReason);
+          console.info(`JobMonitoring: ${jobDescr} was reverted on pool with reason '${revertReason}': ${job.txHash}`);
+          break;
+        } else if (job.state === 'completed') {
+          // [TERMINAL STATE] Transaction has been mined successfully and should appear in the regular state
+          state.history.setQueuedTransactionsCompleted(jobId);
+          console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
+          break;
+        }
+
+        lastJobState = job.state;
+        if (job.txHash) lastTxHash = job.txHash;
+
+      }
+
+      await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
+    }
+
+    return job;
+  }
+
+  // Waiting while relayer process the job and send it to the Pool
+  // return transaction hash on success or throw an error
+
   public async waitJobTxHash(tokenAddress: string, jobId: string): Promise<string> {
     const token = this.tokens[tokenAddress];
     const state = this.zpStates[tokenAddress];
 
-    const INTERVAL_MS = 1000;
-    let txHash: string;
-    while (true) {
-      const job = await this.getJob(token.relayerUrl, jobId);
+    this.startJobMonitoring(tokenAddress, jobId);
 
-      if (job === null) {
-        throw new RelayerJobError(Number(jobId), 'not found');
-      } else if (job.state === 'failed')  {
-        // Transaction was failed during relayer's verification: terminal state
-        const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
-        state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
-        throw new RelayerJobError(Number(jobId), relayerReason);
-      } else if (job.state === 'sent') {
-        // Tx should appear in the optimistic state with current txHash
-        txHash = job.txHash;
-        state.history.setTxHashForQueuedTransactions(jobId, txHash);
-        console.info(`Transaction [job ${jobId}] was sent to the pool: ${txHash}`);   
-        break;
-      } else if (job.state === 'reverted')  {
-        // Transaction was reverted on the Pool and won't resend: terminal state
-        const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
-        state.history.setQueuedTransactionFailedByPool(jobId, relayerReason);
-        throw new RelayerJobError(Number(jobId), relayerReason);
-      } else if (job.state === 'completed') {
-        // Transaction has been mined successfully! Should appear in the regular state: terminal state
-        txHash = job.txHash;
-        console.info(`Transaction [job ${jobId}] was mined successfully: ${txHash}`);   
-        break;
+    const CHECK_PERIOD_MS = 500;
+    let txHash = '';
+    while (true) {
+      const job = this.monitoredJobs.get(jobId);
+
+      if (job !== undefined) {
+        if (job.txHash) txHash = job.txHash;
+
+        if (job.state === 'failed') {
+          throw new RelayerJobError(Number(jobId), job.failedReason ? job.failedReason : 'unknown reason');
+        } else if (job.state === 'sent') {
+          if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'sent' state`);
+          break;
+        } else if (job.state === 'reverted')  {
+          throw new PoolJobError(Number(jobId), job.txHash ? job.txHash : 'no_txhash', job.failedReason ?? 'unknown reason');
+        } else if (job.state === 'completed') {
+          if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'completed' state`);
+          break;
+        }
       }
 
-      await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
+      await new Promise(resolve => setTimeout(resolve, CHECK_PERIOD_MS));
     }
 
     return txHash;
-  }
-
-  // Waiting while relayer includes the job transaction in the optimistic state
-  // return transaction(s) hash(es) on success or throw an error
-  // Please keep in mind the txHash could be changed due to resend!
-  public async waitJobQueued(tokenAddress: string, jobId: string): Promise<boolean> {
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
-
-    const INTERVAL_MS = 1000;
-    let txHash: string;
-    while (true) {
-      const job = await this.getJob(token.relayerUrl, jobId);
-      
-      if (job === null) {
-        throw new RelayerJobError(Number(jobId), 'not found');
-      } else if (job.state === 'failed') {
-        const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
-        state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
-        throw new RelayerJobError(Number(jobId), job.failedReason !== undefined ? job.failedReason : 'unknown reason');
-      } else if (job.state === 'completed' || job.state === 'sent') {
-        txHash = job.txHash;
-        break;
-      }
-
-      await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
-    }
-
-    console.info(`Transaction [job ${jobId}] in optimistic state now`);
-
-    return true;
   }
 
   // ------------------=========< Making Transactions >=========-------------------
@@ -440,10 +500,11 @@ export class ZkBobClient {
 
       let tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
       const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
+      this.startJobMonitoring(tokenAddress, jobId);
 
       // Temporary save transaction in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      let rec = HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, "0", true);
+      let rec = HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, '0', true);
       state.history.keepQueuedTransactions([rec], jobId);
 
       return jobId;
@@ -511,19 +572,20 @@ export class ZkBobClient {
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Transfer};
 
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
+      this.startJobMonitoring(tokenAddress, jobId);
       jobsIds.push(jobId);
 
       // Temporary save transaction parts in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
 
       const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
-      var record = HistoryRecord.transferOut(transfers, onePart.fee, ts, `${index}`, true);
+      var record = HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true);
       state.history.keepQueuedTransactions([record], jobId);
 
       if (index < (txParts.length - 1)) {
-        console.log(`Waiting while job ${jobId} queued by relayer`);
+        console.log(`Waiting for the job ${jobId} joining the optimistic state`);
         // if there are few additional tx, we should collect the optimistic state before processing them
-        await this.waitJobQueued(tokenAddress, jobId);
+        await this.waitJobTxHash(tokenAddress, jobId);
 
         optimisticState = await this.getNewState(tokenAddress);
       }
@@ -594,17 +656,18 @@ export class ZkBobClient {
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Withdraw};
 
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
+      this.startJobMonitoring(tokenAddress, jobId);
       jobsIds.push(jobId);
 
       // Temporary save transaction part in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      var record = HistoryRecord.withdraw(address, onePartAmount, onePart.fee, ts, `${index}`, true);
+      var record = HistoryRecord.withdraw(address, onePartAmount, onePart.fee, ts, '0', true);
       state.history.keepQueuedTransactions([record], jobId);
 
       if (index < (txParts.length - 1)) {
-        console.log(`Waiting while job ${jobId} queued by relayer`);
+        console.log(`Waiting for the job ${jobId} joining the optimistic state`);
         // if there are few additional tx, we should collect the optimistic state before processing them
-        await this.waitJobQueued(tokenAddress, jobId);
+        await this.waitJobTxHash(tokenAddress, jobId);
 
         optimisticState = await this.getNewState(tokenAddress);
       }
@@ -675,11 +738,12 @@ export class ZkBobClient {
 
     let tx = { txType: TxType.Deposit, memo: txData.memo, proof: txProof, depositSignature: fullSignature };
     const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
+    this.startJobMonitoring(tokenAddress, jobId);
 
     if (fromAddress) {
       // Temporary save transaction in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      let rec = HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, "0", true);
+      let rec = HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, '0', true);
       state.history.keepQueuedTransactions([rec], jobId);
     }
 
@@ -721,12 +785,13 @@ export class ZkBobClient {
 
     let tx = { txType: TxType.Transfer, memo: txData.memo, proof: txProof };
     const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
+    this.startJobMonitoring(tokenAddress, jobId);
 
     // Temporary save transactions in the history module (to prevent history delays)
     const feePerOut = feeGwei / BigInt(outGwei.length);
     let recs = outGwei.map(({to, amount}) => {
       const ts = Math.floor(Date.now() / 1000);
-      return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, `0`, true);
+      return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, '0', true);
     });
 
     state.history.keepQueuedTransactions(recs, jobId);
@@ -1004,11 +1069,11 @@ export class ZkBobClient {
       try {
         currentLimits = await fetchLimitsFromContract(this.config.network);
       } catch (e) {
-        console.error(`Cannot fetch limits from the contract (${e}). Try to get them from relayer`);
+        console.warn(`Cannot fetch limits from the contract (${e}). Try to get them from relayer`);
         try {
           currentLimits = await this.limits(token.relayerUrl, address)
         } catch (err) {
-          console.error(`Cannot fetch limits from the relayer (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
+          console.warn(`Cannot fetch limits from the relayer (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
           currentLimits = defaultLimits();
         }
       }
@@ -1016,11 +1081,11 @@ export class ZkBobClient {
       try {
         currentLimits = await this.limits(token.relayerUrl, address)
       } catch (e) {
-        console.error(`Cannot fetch deposit limits from the relayer (${e}). Try to get them from contract directly`);
+        console.warn(`Cannot fetch deposit limits from the relayer (${e}). Try to get them from contract directly`);
         try {
           currentLimits = await fetchLimitsFromContract(this.config.network);
         } catch (err) {
-          console.error(`Cannot fetch deposit limits from contract (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
+          console.warn(`Cannot fetch deposit limits from contract (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
           currentLimits = defaultLimits();
         }
       }

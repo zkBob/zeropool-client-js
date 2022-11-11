@@ -7,7 +7,7 @@ export class EvmNetwork implements NetworkBackend {
     contract: Contract;
     token: Contract;
     rpcUrl: string;
-    web3: Web3;
+    web3: any;
 
     constructor(rpcUrl: string) {
         this.rpcUrl = rpcUrl;
@@ -179,6 +179,31 @@ export class EvmNetwork implements NetworkBackend {
 
 
         return {index: BigInt(idx), root: BigInt(root)};
+    }
+
+    public async getTxRevertReason(txHash: string): Promise<string | null> {
+        const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
+        if (txReceipt && txReceipt.status !== undefined) {
+            if (txReceipt.status == false) {
+                const txData = await this.web3.eth.getTransaction(txHash);
+                
+                let reason = 'unknown reason';
+                try {
+                    await this.web3.eth.call(txData, txData.blockNumber)
+                } catch(err) {
+                    reason = err.message;
+                }
+                console.log(`getTxRevertReason: revert reason for ${txHash}: ${reason}`)
+
+                return reason;
+            } else {
+                console.warn(`getTxRevertReason: ${txHash} was not reverted`);
+            }
+        } else {
+            console.warn(`getTxRevertReason: ${txHash} was not mined yet`);
+        }
+
+        return null;
     }
 
 }
