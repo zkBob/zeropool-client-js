@@ -296,6 +296,7 @@ export class HistoryStorage {
 
   // mark pending transaction as failed on the relayer level
   public async setSentTransactionFailedByPool(jobId: string, txHash: string, error: string | undefined): Promise<boolean> {
+    // try to locate txHash in sentTxs
     let txs = this.sentTxs.get(txHash);
     if (txs) {
       for(let oneTx of txs) {
@@ -309,6 +310,32 @@ export class HistoryStorage {
       this.removePendingTxByJob(jobId);
       this.removePendingTxByTxHash(txHash);
       this.removeHistoryPendingRecordsByTxHash(txHash);
+
+      return true;
+    }
+
+    // txHash of that transaction can be changed
+    // => locate it in queuedTxs map by jobId
+    let records = this.queuedTxs.get(jobId);
+    if (records) {
+      // moving all records from that job to the failedHistory table
+      let oldTxHash = '';
+      for(let aRec of records) {
+        if (oldTxHash.length == 0 && aRec.txHash.startsWith('0x')) {
+          oldTxHash = aRec.txHash;
+        }
+        aRec.state = HistoryRecordState.RejectedByPool;
+        aRec.failureReason = error;
+        aRec.txHash = txHash;
+
+        this.failedHistory.push(aRec);
+        await this.db.put(TX_FAILED_TABLE, aRec);
+      }    
+
+      this.removePendingTxByJob(jobId);
+      if (oldTxHash.startsWith('0x')) {
+        this.removeHistoryPendingRecordsByTxHash(oldTxHash);
+      }
 
       return true;
     }
