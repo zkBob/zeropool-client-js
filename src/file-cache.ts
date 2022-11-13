@@ -42,7 +42,7 @@ export class FileCache {
   }
 
   public async cache(path: string, loadingCallback: LoadingProgressCallback | undefined = undefined): Promise<ArrayBuffer> {
-    let response = await fetch(path);
+    const response = await fetch(path);
 
     if (response.body) {
       const reader = response.body.getReader();  
@@ -92,12 +92,12 @@ export class FileCache {
   }
 
   public async get(path: string): Promise<ArrayBuffer | null> {
-    let data = await this.db.get(STORE_FILES, path);
+    const data = await this.db.get(STORE_FILES, path);
     return data;
   }
 
   public async getHash(path: string): Promise<string | null> {
-    let data = await this.db.get(STORE_HASHES, path);
+    const data = await this.db.get(STORE_HASHES, path);
     return data;
   }
 

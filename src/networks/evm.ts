@@ -1,6 +1,7 @@
 import Web3 from 'web3';
 import { AbiItem } from 'web3-utils';
 import { Contract } from 'web3-eth-contract'
+import { TransactionConfig } from 'web3-core'
 import { NetworkBackend } from './network';
 
 export class EvmNetwork implements NetworkBackend {
@@ -189,7 +190,7 @@ export class EvmNetwork implements NetworkBackend {
                 
                 let reason = 'unknown reason';
                 try {
-                    await this.web3.eth.call(txData, txData.blockNumber)
+                    await this.web3.eth.call(txData as TransactionConfig, txData.blockNumber as number);
                 } catch(err) {
                     reason = err.message;
                 }

@@ -146,8 +146,8 @@ export class ShieldedTx {
   }
 
   static decode(data: string): ShieldedTx {
-    let tx = new ShieldedTx();
-    let reader = new HexStringReader(data);
+    const tx = new ShieldedTx();
+    const reader = new HexStringReader(data);
 
     tx.selector = reader.readHex(4)!;
     assertNotNull(tx.selector);
@@ -184,7 +184,7 @@ export class ShieldedTx {
 
 export function parseHashes(ciphertext: string): string[] {
   const reader = new HexStringReader(ciphertext);
-  let numItems = reader.readNumber(4, true);
+  const numItems = reader.readNumber(4, true);
   if (!numItems || numItems > CONSTANTS.OUT + 1) {
     throw new InternalError(`Invalid transaction: invalid number of outputs ${numItems}`);
   }

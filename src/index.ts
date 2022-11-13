@@ -69,7 +69,7 @@ export async function init(
   try {
     let loaded = false;
     worker = wrap(new Worker(workerPath));
-    let initializer: Promise<void> = worker.initWasm(wasmPath, {
+    const initializer: Promise<void> = worker.initWasm(wasmPath, {
       txParams: snarkParams.transferParamsUrl,
       treeParams: snarkParams.treeParamsUrl,
     }, txParamsHash, 
