@@ -7,16 +7,16 @@ import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 
 export enum HistoryTransactionType {
-	Deposit = 1,
-	TransferIn,
+  Deposit = 1,
+  TransferIn,
   TransferOut,
-	Withdrawal,
+  Withdrawal,
   TransferLoopback,
 }
 
 export enum HistoryRecordState {
-	Pending = 1,
-	Mined,
+  Pending = 1,
+  Mined,
   RejectedByRelayer,
   RejectedByPool,
 }
@@ -88,7 +88,7 @@ export class HistoryRecordIdx {
   record: HistoryRecord;
 
   public static create(record: HistoryRecord, index: number): HistoryRecordIdx {
-    let result = new HistoryRecordIdx();
+    const result = new HistoryRecordIdx();
     result.index = index;
     result.record = record;
 
@@ -101,7 +101,7 @@ export class TxHashIdx {
   txHash: string;
 
   public static create(txHash: string, index: number): TxHashIdx {
-    let result = new TxHashIdx();
+    const result = new TxHashIdx();
     result.index = index;
     result.txHash = txHash;
 
@@ -126,19 +126,22 @@ export class HistoryStorage {
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
                                           //(while tx isn't processed on relayer)
-                                          // We don't know txHashes for history records at that moment,
-                                          // but we can assign it sequence number inside a job.
-                                          // So in HistoryRecords array txHash should be interpreted
-                                          // as the index of transaction in correspondance of sending order
+                                          // We don't know txHash for history records at that moment
+                                          // Please keep in mind that one job contain just one txHash,
+                                          // but transaction in common case could consist of several HistoryRecords
+                                          // (e.g. deposit + transfer, unimplemented case currently)
 
-  private sendedTxs = new Map<string, HistoryRecord[]>(); // txHash -> HistoryRecord[]
+  private sentTxs = new Map<string, HistoryRecord[]>(); // txHash -> HistoryRecord[]
                                           // (while we have a hash from relayer but it isn't indexed on RPC JSON)
                                           // At that moment we should fill txHash for every history record correctly
 
   private unparsedMemo = new Map<number, DecryptedMemo>();  // local decrypted memos cache
   private unparsedPendingMemo = new Map<number, DecryptedMemo>();  // local decrypted pending memos cache
+  
   private currentHistory = new Map<number, HistoryRecord>();  // local history cache (index -> HistoryRecord)
-  private failedHistory: HistoryRecord[] = [];  //  local failed history cache (unique_id -> HistoryRecord)
+  private failedHistory: HistoryRecord[] = [];  //  local failed history cache (we have no key here, just array)
+
+
   private syncHistoryPromise: Promise<void> | undefined;
   private web3;
 
@@ -170,22 +173,22 @@ export class HistoryStorage {
   }
 
   public async preloadCache() {
-    let syncIndex:number = await this.db.get(HISTORY_STATE_TABLE, 'sync_index');
+    const syncIndex:number = await this.db.get(HISTORY_STATE_TABLE, 'sync_index');
     if (syncIndex ) {
       this.syncIndex = syncIndex;
     }
 
     // getting unprocessed memo array
-    let allUnprocessedMemos: DecryptedMemo[] = await this.db.getAll(DECRYPTED_MEMO_TABLE, IDBKeyRange.lowerBound(this.syncIndex + 1));
-    let allUnprocessedPendingMemos: DecryptedMemo[] = await this.db.getAll(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(this.syncIndex + 1));
+    const allUnprocessedMemos: DecryptedMemo[] = await this.db.getAll(DECRYPTED_MEMO_TABLE, IDBKeyRange.lowerBound(this.syncIndex + 1));
+    const allUnprocessedPendingMemos: DecryptedMemo[] = await this.db.getAll(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(this.syncIndex + 1));
     let lastMinedMemoIndex = -1;
-    for (let oneMemo of allUnprocessedMemos) {
+    for (const oneMemo of allUnprocessedMemos) {
       this.unparsedMemo.set(oneMemo.index, oneMemo);
       if (oneMemo.index > lastMinedMemoIndex) {
         lastMinedMemoIndex = oneMemo.index; // get the max mined memo index
       }
     }
-    for (let oneMemo of allUnprocessedPendingMemos) {
+    for (const oneMemo of allUnprocessedPendingMemos) {
       if (oneMemo.index > lastMinedMemoIndex) { // skip outdated unparsed memos
         this.unparsedPendingMemo.set(oneMemo.index, oneMemo);
       }
@@ -221,51 +224,68 @@ export class HistoryStorage {
 
     await this.syncHistoryPromise;
 
-    let recordsArray = Array.from(this.currentHistory.values());
-    return recordsArray
+    return Array.from(this.currentHistory.values())
             .concat(this.failedHistory)
             .sort((rec1, rec2) => 0 - (rec1.timestamp > rec2.timestamp ? -1 : 1));
   }
 
-  // remember just sended transactions to restore history record immediately
+  // remember just sent transactions to restore history record immediately
   public keepQueuedTransactions(txs: HistoryRecord[], jobId: string) {
     this.queuedTxs.set(jobId, txs);
   }
 
+  // A new txHash assigned for the jobId:
   // set txHash mapping for awaiting transactions
-  public setTxHashesForQueuedTransactions(jobId: string, txHashes: string[]) {
-    let txs = this.queuedTxs.get(jobId);
-    if (txs && txHashes.length > 0) {
-      for(let oneTx of txs) {
-        let hashIndex = Number(oneTx.txHash);
-        if (hashIndex >= 0 && hashIndex < txHashes.length) {
-          oneTx.txHash = txHashes[hashIndex];
-          let array = this.sendedTxs.get(oneTx.txHash);
-          if(array === undefined) {
-            array = [];
-          }
-          array.push(oneTx);
-          this.sendedTxs.set(oneTx.txHash, array);
+  public setTxHashForQueuedTransactions(jobId: string, txHash: string) {
+    const records = this.queuedTxs.get(jobId);
+    if (records !== undefined) {
+      // Get history records associated with jobId
+      // and assign new txHash for them
+      const sentHistoryRecords: HistoryRecord[] = [];
+      let oldTxHash = '';
+      for(const aRec of records) {
+        if (oldTxHash.length == 0 && aRec.txHash && aRec.txHash.startsWith('0x')){
+          // note: all history records inside jobId should have the same txHash
+          oldTxHash = aRec.txHash;
         }
-      }      
-    }
 
-    this.queuedTxs.delete(jobId);
+        aRec.txHash = txHash; // sinse 'record' and 'aRec' are references
+                              // txHash will changed in queuedTxs too
+        sentHistoryRecords.push(aRec);
+      }
+
+      if (oldTxHash != txHash) {
+        // Here is a case when txHash has been changed for existing job:
+        // we should remove records from sentTxs with old txHash
+        this.removePendingTxByTxHash(oldTxHash);
+      }
+
+      // set history records in the sentTx mapping
+      this.sentTxs.set(txHash, sentHistoryRecords);
+    }
   }
 
-  // mark pending transaction as failed on the relayer level
-  public async setQueuedTransactionFailedByRelayer(jobId: string, error: string | undefined): Promise<boolean> {
-    let txs = this.queuedTxs.get(jobId);
-    if (txs) {
-      for(let oneTx of txs) {
-        oneTx.state = HistoryRecordState.RejectedByRelayer;
-        oneTx.failureReason = error;
+  // Mark job as completed: remove it from 'queuedTxs' and 'sentTxs' mappings
+  public async setQueuedTransactionsCompleted(jobId: string, txHash: string) : Promise<boolean> {
+    return this.removePendingTxByJob(jobId) || 
+            this.removePendingTxByTxHash(txHash);
 
-        this.failedHistory.push(oneTx);
-        await this.db.put(TX_FAILED_TABLE, oneTx);
+  }
+
+  // mark pending transaction as failed on the relayer level (we shouldn't have txHash here)
+  public async setQueuedTransactionFailedByRelayer(jobId: string, error: string | undefined): Promise<boolean> {
+    const records = this.queuedTxs.get(jobId);
+    if (records) {
+      // moving all records from that job to the failedHistory table
+      for(const aRec of records) {
+        aRec.state = HistoryRecordState.RejectedByRelayer;
+        aRec.failureReason = error;
+
+        this.failedHistory.push(aRec);
+        await this.db.put(TX_FAILED_TABLE, aRec);
       }    
 
-      this.queuedTxs.delete(jobId);
+      this.removePendingTxByJob(jobId);
 
       return true;
     }
@@ -274,10 +294,11 @@ export class HistoryStorage {
   }
 
   // mark pending transaction as failed on the relayer level
-  public async setSendedTransactionFailedByPool(txHash: string, error: string | undefined): Promise<boolean> {
-    let txs = this.sendedTxs.get(txHash);
+  public async setSentTransactionFailedByPool(jobId: string, txHash: string, error: string | undefined): Promise<boolean> {
+    // try to locate txHash in sentTxs
+    const txs = this.sentTxs.get(txHash);
     if (txs) {
-      for(let oneTx of txs) {
+      for(const oneTx of txs) {
         oneTx.state = HistoryRecordState.RejectedByPool;
         oneTx.failureReason = error;
 
@@ -285,12 +306,87 @@ export class HistoryStorage {
         await this.db.put(TX_FAILED_TABLE, oneTx);
       }    
 
-      this.sendedTxs.delete(txHash);
+      this.removePendingTxByJob(jobId);
+      this.removePendingTxByTxHash(txHash);
+      this.removeHistoryPendingRecordsByTxHash(txHash);
+
+      return true;
+    }
+
+    // txHash of that transaction can be changed
+    // => locate it in queuedTxs map by jobId
+    const records = this.queuedTxs.get(jobId);
+    if (records) {
+      // moving all records from that job to the failedHistory table
+      let oldTxHash = '';
+      for(const aRec of records) {
+        if (oldTxHash.length == 0 && aRec.txHash.startsWith('0x')) {
+          oldTxHash = aRec.txHash;
+        }
+        aRec.state = HistoryRecordState.RejectedByPool;
+        aRec.failureReason = error;
+        aRec.txHash = txHash;
+
+        this.failedHistory.push(aRec);
+        await this.db.put(TX_FAILED_TABLE, aRec);
+      }    
+
+      this.removePendingTxByJob(jobId);
+      if (oldTxHash.startsWith('0x')) {
+        this.removeHistoryPendingRecordsByTxHash(oldTxHash);
+      }
 
       return true;
     }
 
     return false;
+  }
+
+  private removePendingTxByJob(jobId: string): boolean {
+    const records = this.queuedTxs.get(jobId);
+    if (records) {
+      this.queuedTxs.delete(jobId);
+
+      // remove associated records from the sentTxs
+      for(const aRec of records) {
+        if (aRec.txHash.startsWith('0x')) {
+          this.sentTxs.delete(aRec.txHash);
+        }
+      }
+
+      return true;
+    }
+
+    return false;
+  }
+
+  private removePendingTxByTxHash(txHash: string): boolean {
+    // remove records from the sentTxs by txHash
+   let res = this.sentTxs.delete(txHash);
+
+    // remove queued txs with the same txHash
+    this.queuedTxs.forEach((records, jobId) => {
+      for (const aRec of records) {
+        if (aRec.txHash == txHash) {
+          this.queuedTxs.delete(jobId);
+          res = true;
+        }
+      }
+    });
+
+    return res;
+  }
+
+  // remove pending transactions with the txHash
+  private removeHistoryPendingRecordsByTxHash(txHash: string): boolean {
+    let deleted = false;
+    for (const [index, record] of this.currentHistory) {
+      if (record.state == HistoryRecordState.Pending && record.txHash == txHash) {
+        deleted ||= this.currentHistory.delete(index);
+      }
+    }
+
+    return deleted;
   }
 
   public async saveDecryptedMemo(memo: DecryptedMemo, pending: boolean): Promise<DecryptedMemo> {
@@ -369,29 +465,29 @@ export class HistoryStorage {
     if (this.unparsedMemo.size > 0 || this.unparsedPendingMemo.size > 0) {
       console.log(`Starting memo synchronizing from the index ${this.syncIndex + 1} (${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending)  unprocessed memos)`);
 
-      let historyPromises: Promise<HistoryRecordIdx[]>[] = [];
+      const historyPromises: Promise<HistoryRecordIdx[]>[] = [];
       
       // process mined memos
-      let processedIndexes: number[] = [];
-      for (let oneMemo of this.unparsedMemo.values()) {
-        let hist = this.convertToHistory(oneMemo, false);
+      const processedIndexes: number[] = [];
+      for (const oneMemo of this.unparsedMemo.values()) {
+        const hist = this.convertToHistory(oneMemo, false);
         historyPromises.push(hist);
 
         processedIndexes.push(oneMemo.index);
       }
 
       // process pending memos
-      let processedPendingIndexes: number[] = [];
-      for (let oneMemo of this.unparsedPendingMemo.values()) {
+      const processedPendingIndexes: number[] = [];
+      for (const oneMemo of this.unparsedPendingMemo.values()) {
         if (this.failedHistory.find(rec => rec.txHash == oneMemo.txHash) === undefined) {
-          let hist = this.convertToHistory(oneMemo, true);
+          const hist = this.convertToHistory(oneMemo, true);
           historyPromises.push(hist);
 
           processedPendingIndexes.push(oneMemo.index);
         }
       }
 
-      let historyRedords = await Promise.all(historyPromises);
+      const historyRedords = await Promise.all(historyPromises);
 
       // delete all pending history records [we'll refresh them immediately]
       for (const [index, record] of this.currentHistory.entries()) {
@@ -401,8 +497,8 @@ export class HistoryStorage {
       }
 
       let newSyncIndex = this.syncIndex;
-      for (let oneSet of historyRedords) {
-        for (let oneRec of oneSet) {
+      for (const oneSet of historyRedords) {
+        for (const oneRec of oneSet) {
           console.log(`History record @${oneRec.index} has been created`);
 
           this.currentHistory.set(oneRec.index, oneRec.record);
@@ -415,11 +511,9 @@ export class HistoryStorage {
         }
       }
 
-      for (let oneIndex of processedIndexes) {
+      for (const oneIndex of processedIndexes) {
         this.unparsedMemo.delete(oneIndex);
       }
-
-      await this.processSendedTxs();
 
       this.syncIndex = newSyncIndex;
       this.db.put(HISTORY_STATE_TABLE, this.syncIndex, 'sync_index');
@@ -435,51 +529,7 @@ export class HistoryStorage {
         }
       }
 
-      await this.processSendedTxs();
-
       console.log(`Memo sync is not required: already up-to-date (on index ${this.syncIndex + 1})`);
-    }
-  }
-
-  // scan sended tx to check if one reverted on the Pool contract
-  private async processSendedTxs(): Promise<void> {
-    for (let oneSendedTxHash of this.sendedTxs.keys()) {
-      const txReceipt = await this.web3.eth.getTransactionReceipt(oneSendedTxHash);
-      if (txReceipt && txReceipt.status !== undefined) {
-        if (txReceipt.status == false) {
-          const txData = await this.web3.eth.getTransaction(oneSendedTxHash);
-          
-          let reason = 'unknown reason';
-          try {
-            await this.web3.eth.call(txData, txData.blockNumber)
-          } catch(err) {
-            reason = err.message;
-          }
-          console.log(`Revert reason for ${oneSendedTxHash}: ${reason}`)
-
-          let records = this.sendedTxs.get(oneSendedTxHash);
-          if (records !== undefined) {
-            for (let oneRecord of records) {
-              oneRecord.state = HistoryRecordState.RejectedByPool;
-              oneRecord.failureReason = reason;
-              
-              this.failedHistory.push(oneRecord);
-              await this.db.put(TX_FAILED_TABLE, oneRecord);
-            }
-          }
-
-          // remove tx from sended transactions - it's now in failedHistory
-          this.sendedTxs.delete(oneSendedTxHash);
-          
-          // remove pending transactions with the same txHash
-          for (const [index, record] of this.currentHistory) {
-            if (record.state == HistoryRecordState.Pending && record.txHash == oneSendedTxHash) {
-              this.currentHistory.delete(index);
-            }
-          }
-
-        }
-      }
     }
   }
 
@@ -489,12 +539,12 @@ export class HistoryStorage {
   }
 
   private async get(index: number): Promise<HistoryRecord | null> {
-    let data = await this.db.get(TX_TABLE, index);
+    const data = await this.db.get(TX_TABLE, index);
     return data;
   }
 
   private async convertToHistory(memo: DecryptedMemo, pending: boolean): Promise<HistoryRecordIdx[]> {
-    let txHash = memo.txHash;
+    const txHash = memo.txHash;
     if (txHash) {
       const txData = await this.web3.eth.getTransaction(txHash);
       if (txData && txData.blockNumber && txData.input) {
@@ -515,7 +565,7 @@ export class HistoryStorage {
                 if (tx.selector.toLowerCase() == "af989083") {
                     // All data is collected here. Let's analyze it
 
-                    let allRecords: HistoryRecordIdx[] = [];
+                    const allRecords: HistoryRecordIdx[] = [];
                     if (tx.txType == TxType.Deposit) {
                       // here is a deposit transaction (approvable method)
                       // source address are recovered from the signature
@@ -524,7 +574,7 @@ export class HistoryStorage {
                         const nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
                         const depositHolderAddr = await this.web3.eth.accounts.recover(nullifier, fullSig);
 
-                        let rec = HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
+                        const rec = HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
                         allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                         
                       } else {
@@ -537,7 +587,7 @@ export class HistoryStorage {
                       // source address in the memo block (20 bytes, starts from 16 bytes offset)
                       const depositHolderAddr = '0x' + tx.memo.substr(32, 40);  // TODO: Check it!
 
-                      let rec = HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
+                      const rec = HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
                       allRecords.push(HistoryRecordIdx.create(rec, memo.index));
 
                     } else if (tx.txType == TxType.Transfer) {
@@ -574,7 +624,7 @@ export class HistoryStorage {
                           return {to: destAddr, amount: BigInt(note.b)};
                         }));
 
-                        let rec = HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
+                        const rec = HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
                         allRecords.push(HistoryRecordIdx.create(rec, memo.index));
 
                         /*for (let {note, index} of memo.inNotes) {
@@ -587,7 +637,7 @@ export class HistoryStorage {
                       // withdrawal transaction (destination address in the memoblock)
                       const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
 
-                      let rec = HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
+                      const rec = HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
                       allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                     }
 
@@ -596,10 +646,10 @@ export class HistoryStorage {
                       // if tx is in pending state - remove it only on success
                       const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
                       if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
-                        this.sendedTxs.delete(txHash);                        
+                        this.removePendingTxByTxHash(txHash);
                       }
                     } else {
-                      this.sendedTxs.delete(txHash);
+                      this.removePendingTxByTxHash(txHash);
                     }
 
                     return allRecords;
@@ -616,15 +666,17 @@ export class HistoryStorage {
           throw new InternalError(`Unable to get timestamp for block ${txData.blockNumber}`);
       } else {
         // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
-        let sendedRecords = this.sendedTxs.get(txHash);
-        if (sendedRecords !== undefined) {
-          console.log(`HistoryStorage: hash ${txHash} doesn't found, but it corresponds to the previously saved ${sendedRecords.length} transaction(s)`);
-          return sendedRecords.map((oneRecord, index) => HistoryRecordIdx.create(oneRecord, memo.index + index));
+        const records = this.sentTxs.get(txHash);
+        if (records !== undefined) {
+          console.log(`HistoryStorage: tx ${txHash} isn't indexed yet, but we have ${records.length} associated history record(s)`);
+          return records.map((oneRecord, index) => HistoryRecordIdx.create(oneRecord, memo.index + index));
+        } else {
+          console.warn(`HistoryStorage: cannot fetch tx ${txHash} and no local associated records`);
         }
       }
 
-      //throw new InternalError(`Unable to get transaction details (${txHash})`);
-      // TODO: make it more precisely
+      // Cannot retrieve transaction info
+      // and there are no associated records
       return [];
 
     }

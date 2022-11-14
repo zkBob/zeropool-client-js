@@ -64,7 +64,7 @@ export function base64ToHex(data: string): string {
 }
 
 export function bigintToArrayLe(num: bigint): Uint8Array {
-  let result = new Uint8Array(32);
+  const result = new Uint8Array(32);
 
   for (let i = 0; num > BigInt(0); ++i) {
     result[i] = Number(num % BigInt(256));
@@ -155,7 +155,7 @@ export class HexStringWriter {
   }
 
   writeBigIntArray(nums: bigint[], numBytes: number) {
-    for (let num of nums) {
+    for (const num of nums) {
       this.writeBigInt(num, numBytes);
     }
   }
@@ -263,7 +263,7 @@ export function toCompactSignature(signature: string): string {
 
   if (signature.length > 128) {
     // it seems it's an extended signature, let's compact it!
-    let v = signature.substr(128, 2);
+    const v = signature.substr(128, 2);
     if (v == "1c") {
       return `${signature.slice(0, 64)}${(parseInt(signature[64], 16) | 8).toString(16)}${signature.slice(65, 128)}`;
     } else if (v != "1b") {
@@ -287,7 +287,7 @@ export function parseCompactSignature(signature: string): {v: string, r: string,
     let s = `0x${signature.slice(64)}`;
     
     let v = `0x1b`;
-    let sHiDigit = parseInt(s[0], 16);
+    const sHiDigit = parseInt(s[0], 16);
     if (sHiDigit > 7) {
       v = `0x1c`;
       s = `0x${(sHiDigit & 7).toString(16)}${s.slice(1)}`;
@@ -313,7 +313,7 @@ export function toCanonicalSignature(signature: string): string {
 }
 
 export function addressFromSignature(signature: string, signedData: string): string {
-  let sigFields = util.fromRpcSig(addHexPrefix(signature));
+  const sigFields = util.fromRpcSig(addHexPrefix(signature));
 
   const dataBuf = hexToBuf(signedData);
   const prefix = Buffer.from("\x19Ethereum Signed Message:\n");
@@ -321,8 +321,8 @@ export function addressFromSignature(signature: string, signedData: string): str
     Buffer.concat([prefix, Buffer.from(String(dataBuf.length)), dataBuf])
   );
 
-  let pub = util.ecrecover(prefixedSignedData, sigFields.v, sigFields.r, sigFields.s);
-  let addrBuf = util.pubToAddress(pub);
+  const pub = util.ecrecover(prefixedSignedData, sigFields.v, sigFields.r, sigFields.s);
+  const addrBuf = util.pubToAddress(pub);
 
   return addHexPrefix(bufToHex(addrBuf));
 }

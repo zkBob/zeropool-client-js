@@ -3,7 +3,7 @@ import { SnarkConfigParams } from './config';
 import { FileCache } from './file-cache';
 export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState } from './client';
 export { TxType } from './tx';
-export { HistoryRecord, HistoryTransactionType } from './history'
+export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
 export * from './errors'
 
@@ -70,7 +70,7 @@ export async function init(
   try {
     let loaded = false;
     worker = wrap(new Worker(workerPath));
-    let initializer: Promise<void> = worker.initWasm(wasmPath, {
+    const initializer: Promise<void> = worker.initWasm(wasmPath, {
       txParams: snarkParams.transferParamsUrl,
       treeParams: snarkParams.treeParamsUrl,
     }, txParamsHash, 

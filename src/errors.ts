@@ -87,3 +87,15 @@ export class RelayerJobError extends BobError {
         this.reason = reason;
     }
 }
+
+export class PoolJobError extends BobError {
+    public jobId: number;
+    public txHash: string;
+    public reason: string;
+    constructor(jobId: number, txHash: string, reason: string) {
+        super(`Tx ${txHash} (job ${jobId}) was reverted on the contract with reason: ${reason}`);
+        this.jobId = jobId;
+        this.txHash = txHash;
+        this.reason = reason;
+    }
+}

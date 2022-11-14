@@ -25,6 +25,10 @@ export class PolkadotNetwork implements NetworkBackend {
         return {index: BigInt(0), root: BigInt(0)};
     }
 
+    public async getTxRevertReason(txHash: string): Promise<string | null> {
+        return null;
+    }
+
     isSignatureCompact(): boolean {
         return false;
     }

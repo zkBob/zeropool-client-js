@@ -1,6 +1,7 @@
 import Web3 from 'web3';
 import { AbiItem } from 'web3-utils';
 import { Contract } from 'web3-eth-contract'
+import { TransactionConfig } from 'web3-core'
 import { NetworkBackend } from './network';
 
 export class EvmNetwork implements NetworkBackend {
@@ -206,6 +207,31 @@ export class EvmNetwork implements NetworkBackend {
 
 
         return {index: BigInt(idx), root: BigInt(root)};
+    }
+
+    public async getTxRevertReason(txHash: string): Promise<string | null> {
+        const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
+        if (txReceipt && txReceipt.status !== undefined) {
+            if (txReceipt.status == false) {
+                const txData = await this.web3.eth.getTransaction(txHash);
+                
+                let reason = 'unknown reason';
+                try {
+                    await this.web3.eth.call(txData as TransactionConfig, txData.blockNumber as number);
+                } catch(err) {
+                    reason = err.message;
+                }
+                console.log(`getTxRevertReason: revert reason for ${txHash}: ${reason}`)
+
+                return reason;
+            } else {
+                console.warn(`getTxRevertReason: ${txHash} was not reverted`);
+            }
+        } else {
+            console.warn(`getTxRevertReason: ${txHash} was not mined yet`);
+        }
+
+        return null;
     }
 
 }
