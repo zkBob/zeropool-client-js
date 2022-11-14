@@ -8,7 +8,7 @@ export class EvmNetwork implements NetworkBackend {
     contract: Contract;
     token: Contract;
     rpcUrl: string;
-    web3: any;
+    web3: Web3;
 
     constructor(rpcUrl: string) {
         this.rpcUrl = rpcUrl;
