@@ -12,7 +12,7 @@ import {
 } from 'libzkbob-rs-wasm-web';
 
 import { 
-  NetworkError, RelayerError, RelayerJobError, TxDepositDeadlineExpiredError,
+  InternalError, NetworkError, PoolJobError, RelayerError, RelayerJobError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
 
@@ -78,16 +78,18 @@ export interface TxToRelayer {
 }
 
 export interface JobInfo {
+  resolvedJobId: string;
   state: string;
-  txHash: string[];
+  txHash: string | null;
   createdOn: number;
-  finishedOn?: number;
-  failedReason?: string;
+  finishedOn: number | null;
+  failedReason: string | null;
 }
 const isJobInfo = (obj: any): obj is JobInfo => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('state') && typeof obj.state === 'string' &&
-    obj.hasOwnProperty('txHash') && (!obj.txHash || Array.isArray(obj.txHash)) &&
+    obj.hasOwnProperty('txHash') && (!obj.txHash || typeof obj.state === 'string') &&
+    obj.hasOwnProperty('resolvedJobId') && typeof obj.resolvedJobId === 'string' &&
     obj.hasOwnProperty('createdOn') && typeof obj.createdOn === 'number';
 }
 
@@ -157,6 +159,10 @@ export class ZkBobClient {
   private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
   private updateStatePromise: Promise<boolean> | undefined;
 
+  // Jobs monitoring
+  private monitoredJobs = new Map<string, JobInfo>();
+  private jobsMonitors  = new Map<string, Promise<JobInfo>>();
+
   public static async create(config: ClientConfig): Promise<ZkBobClient> {
     const client = new ZkBobClient();
     client.zpStates = {};
@@ -180,7 +186,7 @@ export class ZkBobClient {
   }
 
   public async free(): Promise<void> {
-    for (let state of Object.values(this.zpStates)) {
+    for (const state of Object.values(this.zpStates)) {
       await state.free();
     }
   }
@@ -286,77 +292,155 @@ export class ZkBobClient {
   }
 
   // Waiting while relayer process the jobs set
-  public async waitJobsCompleted(tokenAddress: string, jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
-    let promises = jobIds.map(async (jobId) => {
-      const txHashes: string[] = await this.waitJobCompleted(tokenAddress, jobId);
-      return { jobId, txHash: txHashes[0] };
+  public async waitJobsTxHashes(tokenAddress: string, jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
+    const promises = jobIds.map(async (jobId) => {
+      const txHash = await this.waitJobTxHash(tokenAddress, jobId);
+      return { jobId, txHash };
     });
     
     return Promise.all(promises);
   }
 
-  // Waiting while relayer process the job
-  // return transaction(s) hash(es) on success or throw an error
-  public async waitJobCompleted(tokenAddress: string, jobId: string): Promise<string[]> {
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
+  // Waiting while relayer process the job and send it to the Pool
+  // return transaction hash on success or throw an error
+  public async waitJobTxHash(tokenAddress: string, jobId: string): Promise<string> {
+    this.startJobMonitoring(tokenAddress, jobId);
 
-    const INTERVAL_MS = 1000;
-    let hashes: string[];
+    const CHECK_PERIOD_MS = 500;
+    let txHash = '';
     while (true) {
-      const job = await this.getJob(token.relayerUrl, jobId);
+      const job = this.monitoredJobs.get(jobId);
 
-      if (job === null) {
-        throw new RelayerJobError(Number(jobId), 'not found');
-      } else if (job.state === 'failed')  {
-        const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
-        state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
-        throw new RelayerJobError(Number(jobId), relayerReason);
-      } else if (job.state === 'completed') {
-        hashes = job.txHash;
-        break;
+      if (job !== undefined) {
+        if (job.txHash) txHash = job.txHash;
+
+        if (job.state === 'failed') {
+          throw new RelayerJobError(Number(jobId), job.failedReason ? job.failedReason : 'unknown reason');
+        } else if (job.state === 'sent') {
+          if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'sent' state`);
+          break;
+        } else if (job.state === 'reverted')  {
+          throw new PoolJobError(Number(jobId), job.txHash ? job.txHash : 'no_txhash', job.failedReason ?? 'unknown reason');
+        } else if (job.state === 'completed') {
+          if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'completed' state`);
+          break;
+        }
       }
 
-      await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
+      await new Promise(resolve => setTimeout(resolve, CHECK_PERIOD_MS));
     }
 
-    state.history.setTxHashesForQueuedTransactions(jobId, hashes);
-    
-
-    console.info(`Transaction [job ${jobId}] successful: ${hashes.join(", ")}`);
-
-    return hashes;
+    return txHash;
   }
 
-  // Waiting while relayer includes the job transaction in the optimistic state
-  // return transaction(s) hash(es) on success or throw an error
-  // TODO: change job state logic after relayer upgrade! <look for a `queued` state>
-  public async waitJobQueued(tokenAddress: string, jobId: string): Promise<boolean> {
+  // Start monitoring job
+  // Return existing promise or start new one
+  private async startJobMonitoring(tokenAddress: string, jobId: string): Promise<JobInfo> {
+    const existingMonitor = this.jobsMonitors.get(jobId);
+    if (existingMonitor === undefined) {
+      const newMonitor = this.jobMonitoringWorker(tokenAddress, jobId).finally(() => {
+        this.jobsMonitors.delete(jobId);
+      });
+      this.jobsMonitors.set(jobId, newMonitor);
+
+      return newMonitor;
+    } else {
+      return existingMonitor;
+    }
+  }
+
+  // Monitor job while it isn't going to the terminal state
+  // Returns job in terminal state
+  //
+  // Job state machine:
+  // 1. `waiting`  : tx in the relayer's verification/sending queue
+  // 2. `failed`   : tx was rejected by relayer (nothing was sent to the Pool)
+  // 3. `sent`     : tx in the optimistic state (sent on the Pool but not mined yet) and it has a txHash
+  // 4. `reverted` : tx was reverted on the Pool contract and will not resend by relayer (txHash presented)
+  // 5. `completed`: tx was mined and included in the regular state (txHash cannot be changed anymore)
+  //
+  // The normal transaction flow: `waiting` -> `sent` -> `completed`
+  // The following states are terminal (means no any changes in task will happened): `failed`, `reverted`, `completed`
+  // The job state can be switched from `sent` to `waiting` state - it means transaction was resent
+  //
+  private async jobMonitoringWorker(tokenAddress: string, jobId: string): Promise<JobInfo> {
     const token = this.tokens[tokenAddress];
     const state = this.zpStates[tokenAddress];
 
     const INTERVAL_MS = 1000;
-    let hashes: string[];
+    let job: JobInfo;
+    let lastTxHash = '';
+    let lastJobState = '';
     while (true) {
-      const job = await this.getJob(token.relayerUrl, jobId);
-      
-      if (job === null) {
+      const jobInfo = await this.getJob(token.relayerUrl, jobId);
+
+      if (jobInfo === null) {
         throw new RelayerJobError(Number(jobId), 'not found');
-      } else if (job.state === 'failed') {
-        const relayerReason = job.failedReason !== undefined ? job.failedReason : 'unknown reason';
-        state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
-        throw new RelayerJobError(Number(jobId), job.failedReason !== undefined ? job.failedReason : 'unknown reason');
-      } else if (job.state === 'completed') {
-        hashes = job.txHash;
-        break;
+      } else {
+        job = jobInfo;
+        const jobDescr = `job #${jobId}${job.resolvedJobId != jobId ? `(->${job.resolvedJobId})` : ''}`;
+        
+        // update local job info
+        this.monitoredJobs.set(jobId, job);
+        
+        if (job.state === 'waiting')  {
+          // Tx in the relayer's verification/sending queue
+          if (job.state != lastJobState) {
+            console.info(`JobMonitoring: ${jobDescr} waiting while relayer processed it`);
+          }
+        } else if (job.state === 'failed')  {
+          // [TERMINAL STATE] Transaction was failed during relayer's verification
+          const relayerReason = job.failedReason ?? 'unknown reason';
+          state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
+          console.info(`JobMonitoring: ${jobDescr} was discarded by relayer with reason '${relayerReason}'`);
+          break;
+        } else if (job.state === 'sent') {
+          // Tx should appear in the optimistic state with current txHash
+          if (job.txHash) {
+            if (lastTxHash != job.txHash) {
+              state.history.setTxHashForQueuedTransactions(jobId, job.txHash);
+              console.info(`JobMonitoring: ${jobDescr} was ${job.resolvedJobId != jobId ? 'RE' : ''}sent to the pool: ${job.txHash}`);   
+            }
+          } else {
+            console.warn(`JobMonitoring: ${jobDescr} was sent to the pool but has no assigned txHash [relayer issue]`);
+          }
+        } else if (job.state === 'reverted')  {
+          // [TERMINAL STATE] Transaction was reverted on the Pool and won't resend
+          // get revert reason first (from the relayer or from the contract directly)
+          let revertReason: string = 'unknown reason';
+          if (job.failedReason) {
+            revertReason = job.failedReason;  // reason from the relayer
+          } else if (job.txHash) {
+            // the relayer doesn't provide failure reason - fetch it directly
+            const retrievedReason = (await this.config.network.getTxRevertReason(job.txHash));
+            revertReason = retrievedReason ?? 'transaction was not found\\reverted'
+          } else {
+            console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
+          }
+
+          state.history.setSentTransactionFailedByPool(jobId, job.txHash ?? '', revertReason);
+          console.info(`JobMonitoring: ${jobDescr} was reverted on pool with reason '${revertReason}': ${job.txHash}`);
+          break;
+        } else if (job.state === 'completed') {
+          // [TERMINAL STATE] Transaction has been mined successfully and should appear in the regular state
+          state.history.setQueuedTransactionsCompleted(jobId, job.txHash ?? '');
+          if (job.txHash) {
+            console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
+          } else {
+            console.warn(`JobMonitoring: ${jobDescr} was mined but has no assigned txHash [relayer issue]`);
+          }
+          break;
+        }
+
+        lastJobState = job.state;
+        if (job.txHash) lastTxHash = job.txHash;
+
       }
 
       await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
     }
 
-    console.info(`Transaction [job ${jobId}] in optimistic state now`);
-
-    return true;
+    return job;
   }
 
   // ------------------=========< Making Transactions >=========-------------------
@@ -389,7 +473,7 @@ export class ZkBobClient {
 
     let txData;
     if (fromAddress) {
-      let deadline = Math.floor(Date.now() / 1000) + PERMIT_DEADLINE_INTERVAL;
+      const deadline = Math.floor(Date.now() / 1000) + PERMIT_DEADLINE_INTERVAL;
       const holder = ethAddrToBuf(fromAddress);
       txData = await state.createDepositPermittable({ 
         amount: (amountGwei + feeGwei).toString(),
@@ -421,12 +505,13 @@ export class ZkBobClient {
         throw new TxProofError();
       }
 
-      let tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
+      const tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
       const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
+      this.startJobMonitoring(tokenAddress, jobId);
 
       // Temporary save transaction in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      let rec = await HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, "0", true);
+      const rec = await HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, '0', true);
       state.history.keepQueuedTransactions([rec], jobId);
 
       return jobId;
@@ -494,19 +579,20 @@ export class ZkBobClient {
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Transfer};
 
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
+      this.startJobMonitoring(tokenAddress, jobId);
       jobsIds.push(jobId);
 
       // Temporary save transaction parts in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
 
       const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
-      var record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, `${index}`, true, (addr) => this.isMyAddress(tokenAddress, addr));
+      const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
       state.history.keepQueuedTransactions([record], jobId);
 
       if (index < (txParts.length - 1)) {
-        console.log(`Waiting while job ${jobId} queued by relayer`);
+        console.log(`Waiting for the job ${jobId} joining the optimistic state`);
         // if there are few additional tx, we should collect the optimistic state before processing them
-        await this.waitJobQueued(tokenAddress, jobId);
+        await this.waitJobTxHash(tokenAddress, jobId);
 
         optimisticState = await this.getNewState(tokenAddress);
       }
@@ -577,17 +663,18 @@ export class ZkBobClient {
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Withdraw};
 
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
+      this.startJobMonitoring(tokenAddress, jobId);
       jobsIds.push(jobId);
 
       // Temporary save transaction part in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      var record = await HistoryRecord.withdraw(address, onePartAmount, onePart.fee, ts, `${index}`, true);
+      const record = await HistoryRecord.withdraw(address, onePartAmount, onePart.fee, ts, '0', true);
       state.history.keepQueuedTransactions([record], jobId);
 
       if (index < (txParts.length - 1)) {
-        console.log(`Waiting while job ${jobId} queued by relayer`);
+        console.log(`Waiting for the job ${jobId} joining the optimistic state`);
         // if there are few additional tx, we should collect the optimistic state before processing them
-        await this.waitJobQueued(tokenAddress, jobId);
+        await this.waitJobTxHash(tokenAddress, jobId);
 
         optimisticState = await this.getNewState(tokenAddress);
       }
@@ -618,7 +705,7 @@ export class ZkBobClient {
 
     await this.updateState(tokenAddress);
 
-    let txData = await state.createDeposit({
+    const txData = await state.createDeposit({
       amount: (amountGwei + feeGwei).toString(),
       fee: feeGwei.toString(),
     });
@@ -634,7 +721,7 @@ export class ZkBobClient {
     }
 
     // regular deposit through approve allowance: sign transaction nullifier
-    let dataToSign = '0x' + BigInt(txData.public.nullifier).toString(16).padStart(64, '0');
+    const dataToSign = '0x' + BigInt(txData.public.nullifier).toString(16).padStart(64, '0');
 
     // TODO: Sign fromAddress as well?
     const signature = truncateHexPrefix(await sign(dataToSign));
@@ -656,13 +743,14 @@ export class ZkBobClient {
       fullSignature = toCompactSignature(fullSignature);
     }
 
-    let tx = { txType: TxType.Deposit, memo: txData.memo, proof: txProof, depositSignature: fullSignature };
+    const tx = { txType: TxType.Deposit, memo: txData.memo, proof: txProof, depositSignature: fullSignature };
     const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
+    this.startJobMonitoring(tokenAddress, jobId);
 
     if (fromAddress) {
       // Temporary save transaction in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      let rec = await HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, "0", true);
+      const rec = await HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, '0', true);
       state.history.keepQueuedTransactions([rec], jobId);
     }
 
@@ -702,14 +790,15 @@ export class ZkBobClient {
       throw new TxProofError();
     }
 
-    let tx = { txType: TxType.Transfer, memo: txData.memo, proof: txProof };
+    const tx = { txType: TxType.Transfer, memo: txData.memo, proof: txProof };
     const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
+    this.startJobMonitoring(tokenAddress, jobId);
 
     // Temporary save transactions in the history module (to prevent history delays)
     const feePerOut = feeGwei / BigInt(outGwei.length);
-    let recs = await Promise.all(outGwei.map(({to, amount}) => {
+    const recs = await Promise.all(outGwei.map(({to, amount}) => {
       const ts = Math.floor(Date.now() / 1000);
-      return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, `0`, true, (addr) => this.isMyAddress(tokenAddress, addr));
+      return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
     }));
 
     state.history.keepQueuedTransactions(recs, jobId);
@@ -742,21 +831,21 @@ export class ZkBobClient {
     const relayer = await this.getRelayerFee(tokenAddress);
     const l1 = BigInt(0);
     let txCnt = 1;
-    let totalPerTx = relayer + l1;
+    const totalPerTx = relayer + l1;
     let total = totalPerTx;
     let insufficientFunds = false;
 
     if (txType === TxType.Transfer || txType === TxType.Withdraw) {
       // we set allowPartial flag here to get parts anywhere
-      let requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: NULL_ADDRESS} });  // destination address is ignored for estimation purposes
+      const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: NULL_ADDRESS} });  // destination address is ignored for estimation purposes
       const parts = await this.getTransactionParts(tokenAddress, requests, totalPerTx, updateState, true);
       const totalBalance = await this.getTotalBalance(tokenAddress, false);
 
-      let totalSumm = parts
+      const totalSumm = parts
         .map((p) => p.outNotes.reduce((acc, cur) => acc + cur.amountGwei, BigInt(0)))
         .reduce((acc, cur) => acc + cur, BigInt(0));
 
-      let totalRequested = transfersGwei.reduce((acc, cur) => acc + cur, BigInt(0));
+      const totalRequested = transfersGwei.reduce((acc, cur) => acc + cur, BigInt(0));
 
       txCnt = parts.length > 0 ? parts.length : 1;  // if we haven't funds for atomic fee - suppose we can make one tx
       total = totalPerTx * BigInt(txCnt);
@@ -844,7 +933,7 @@ export class ZkBobClient {
     let result: Array<TransferConfig> = [];
     let txNotes: Array<TransferRequest> = [];
     const accountBalance = await state.accountBalance();
-    let notesParts = await this.getGroupedNotes(tokenAddress);
+    const notesParts = await this.getGroupedNotes(tokenAddress);
 
     let requestIdx = 0;
     let txIdx = 0;
@@ -899,9 +988,9 @@ export class ZkBobClient {
     const state = this.zpStates[tokenAddress];
     const usableNotes = await state.usableNotes();
 
-    let notesParts: Array<bigint> = [];
+    const notesParts: Array<bigint> = [];
     let curPart = BigInt(0);
-    for(let i = 0; i < usableNotes.length; i++) {
+    for (let i = 0; i < usableNotes.length; i++) {
       const curNote = usableNotes[i][1];
 
       if (i > 0 && i % CONSTANTS.IN == 0) {
@@ -987,11 +1076,11 @@ export class ZkBobClient {
       try {
         currentLimits = await fetchLimitsFromContract(this.config.network);
       } catch (e) {
-        console.error(`Cannot fetch limits from the contract (${e}). Try to get them from relayer`);
+        console.warn(`Cannot fetch limits from the contract (${e}). Try to get them from relayer`);
         try {
           currentLimits = await this.limits(token.relayerUrl, address)
         } catch (err) {
-          console.error(`Cannot fetch limits from the relayer (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
+          console.warn(`Cannot fetch limits from the relayer (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
           currentLimits = defaultLimits();
         }
       }
@@ -999,11 +1088,11 @@ export class ZkBobClient {
       try {
         currentLimits = await this.limits(token.relayerUrl, address)
       } catch (e) {
-        console.error(`Cannot fetch deposit limits from the relayer (${e}). Try to get them from contract directly`);
+        console.warn(`Cannot fetch deposit limits from the relayer (${e}). Try to get them from contract directly`);
         try {
           currentLimits = await fetchLimitsFromContract(this.config.network);
         } catch (err) {
-          console.error(`Cannot fetch deposit limits from contract (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
+          console.warn(`Cannot fetch deposit limits from contract (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
           currentLimits = defaultLimits();
         }
       }
@@ -1019,11 +1108,11 @@ export class ZkBobClient {
       currentLimits.deposit.daylyForAll.available,
       currentLimits.deposit.poolLimit.available,
     ];
-    let totalDepositLimit = bigIntMin(...allDepositLimits);
+    const totalDepositLimit = bigIntMin(...allDepositLimits);
 
     // Calculate withdraw limits
     const allWithdrawLimits = [ currentLimits.withdraw.daylyForAll.available ];
-    let totalWithdrawLimit = bigIntMin(...allWithdrawLimits);
+    const totalWithdrawLimit = bigIntMin(...allWithdrawLimits);
 
     return {
       deposit: {
@@ -1055,7 +1144,7 @@ export class ZkBobClient {
     const MAX_ATTEMPTS = 300;
     let attepts = 0;
     while (true) {
-      let ready = await this.updateState(tokenAddress);
+      const ready = await this.updateState(tokenAddress);
 
       if (ready) {
         break;
@@ -1152,21 +1241,21 @@ export class ZkBobClient {
       console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
 
       
-      let batches: Promise<BatchResult>[] = [];
+      const batches: Promise<BatchResult>[] = [];
 
       let readyToTransact = true;
 
       for (let i = startIndex; i <= optimisticIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
-        let oneBatch = this.fetchTransactionsOptimistic(token.relayerUrl, BigInt(i), BATCH_SIZE).then( async txs => {
+        const oneBatch = this.fetchTransactionsOptimistic(token.relayerUrl, BigInt(i), BATCH_SIZE).then( async txs => {
           console.log(`Getting ${txs.length} transactions from index ${i}`);
 
-          let batchState = new Map<number, StateUpdate>();
+          const batchState = new Map<number, StateUpdate>();
           
-          let txHashes: Record<number, string> = {};
-          let indexedTxs: IndexedTx[] = [];
+          const txHashes: Record<number, string> = {};
+          const indexedTxs: IndexedTx[] = [];
 
-          let txHashesPending: Record<number, string> = {};
-          let indexedTxsPending: IndexedTx[] = [];
+          const txHashesPending: Record<number, string> = {};
+          const indexedTxsPending: IndexedTx[] = [];
 
           let maxMinedIndex = -1;
           let maxPendingIndex = -1;
@@ -1240,9 +1329,9 @@ export class ZkBobClient {
         batches.push(oneBatch);
       };
 
-      let totalState = new Map<number, StateUpdate>();
-      let initRes: BatchResult = {txCount: 0, maxMinedIndex: -1, maxPendingIndex: -1, state: totalState};
-      let totalRes = (await Promise.all(batches)).reduce((acc, cur) => {
+      const totalState = new Map<number, StateUpdate>();
+      const initRes: BatchResult = {txCount: 0, maxMinedIndex: -1, maxPendingIndex: -1, state: totalState};
+      const totalRes = (await Promise.all(batches)).reduce((acc, cur) => {
         return {
           txCount: acc.txCount + cur.txCount,
           maxMinedIndex: Math.max(acc.maxMinedIndex, cur.maxMinedIndex),
@@ -1251,9 +1340,9 @@ export class ZkBobClient {
         }
       }, initRes);
 
-      let idxs = [...totalRes.state.keys()].sort((i1, i2) => i1 - i2);
-      for (let idx of idxs) {
-        let oneStateUpdate = totalRes.state.get(idx);
+      const idxs = [...totalRes.state.keys()].sort((i1, i2) => i1 - i2);
+      for (const idx of idxs) {
+        const oneStateUpdate = totalRes.state.get(idx);
         if (oneStateUpdate !== undefined) {
           await state.updateState(oneStateUpdate);
         } else {
@@ -1302,10 +1391,10 @@ export class ZkBobClient {
       console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
 
       const numOfTx = Number((optimisticIndex - startIndex) / BigInt(OUTPLUSONE));
-      let stateUpdate = this.fetchTransactionsOptimistic(token.relayerUrl, startIndex, numOfTx).then( async txs => {
+      const stateUpdate = this.fetchTransactionsOptimistic(token.relayerUrl, startIndex, numOfTx).then( async txs => {
         console.log(`Getting ${txs.length} transactions from index ${startIndex}`);
         
-        let indexedTxs: IndexedTx[] = [];
+        const indexedTxs: IndexedTx[] = [];
 
         for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
           const tx = txs[txIdx];
@@ -1349,7 +1438,7 @@ export class ZkBobClient {
 
   public async logStateSync(startIndex: number, endIndex: number, decryptedMemos: DecryptedMemo[]) {
     const OUTPLUSONE = CONSTANTS.OUT + 1;
-    for (let decryptedMemo of decryptedMemos) {
+    for (const decryptedMemo of decryptedMemos) {
       if (decryptedMemo.index > startIndex) {
         console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${decryptedMemo.index - OUTPLUSONE})`);
       }
@@ -1503,7 +1592,7 @@ export class ZkBobClient {
 
       // process 'errors' json response
       if (Array.isArray(responseBody.errors)) {
-        let errorsText = responseBody.errors.map((oneError) => {
+        const errorsText = responseBody.errors.map((oneError) => {
           return `[${oneError.path}]: ${oneError.message}`;
         }).join(', ');
 
