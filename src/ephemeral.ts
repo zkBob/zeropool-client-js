@@ -20,8 +20,8 @@ export interface EphemeralAddress {
     address: string,        // native address
     tokenBalance: bigint,   // token balance (in Gwei)
     nativeBalance: bigint,  // native address balance (in Gwei)
-    permitNonce: number,          // number of outcoming native transactions
-    nativeNonce: number,          // number of outcoming native transactions
+    permitNonce: number,    // number of executed permit allowances
+    nativeNonce: number,    // number of outcoming native transactions
 }
 
 // Interface for keeping ephemeral address additional info
