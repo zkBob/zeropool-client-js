@@ -1689,6 +1689,16 @@ export class ZkBobClient {
     return ephPool.getUsedEphemeralAddresses();
   }
 
+  public async getEphemeralAddressInTxCount(tokenAddress: string, index: number): Promise<number> {
+    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+    return ephPool.getEphemeralAddressInTxCount(index);
+  }
+
+  public async getEphemeralAddressOutTxCount(tokenAddress: string, index: number): Promise<number> {
+    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+    return ephPool.getEphemeralAddressOutTxCount(index);
+  }
+
   public getEphemeralAddressPrivateKey(tokenAddress: string, index: number): string {
     const ephPool = this.zpStates[tokenAddress].ephemeralPool;
     return ephPool.getEphemeralAddressPrivateKey(index);

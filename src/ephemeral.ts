@@ -19,13 +19,18 @@ export interface EphemeralAddress {
     index: number,          // index of address inside a pool (lasst HD path component)
     address: string,        // native address
     tokenBalance: bigint,   // token balance (in Gwei)
-    blockNumber: number,    // block number at the updating moment
-    additional: {   // additional fields (to detect address usage)
-        nativeBalance: bigint,  // native address balance (in Gwei)
-        nonce: number,          // number of outcoming native transactions
-        inTokenTxCnt: number,   // number of incoming token transfers
-        outTokenTxCnt: number,  // number of outcoming token transfers
-    },
+    nativeBalance: bigint,  // native address balance (in Gwei)
+    permitNonce: number,          // number of outcoming native transactions
+    nativeNonce: number,          // number of outcoming native transactions
+}
+
+// Interface for keeping ephemeral address additional info
+// Currently it holds just transfers count
+// but it designed to support additional fields like txHashes etc in future
+interface TransfersInfo {
+    index: number;
+    blockNumber: number;
+    txCount: number;
 }
 
 // The pool of the ephemeral native addresses which are used to support multisig
@@ -44,9 +49,14 @@ export class EphemeralPool {
     private scanPromise: Promise<number> | undefined;
     // we cache every scanned address to reduce info retrieving
     private cachedAddresses = new Map<number, EphemeralAddress>();
+    // cached token transfers info (mapped by ephemeral address index)
+    private cachedInTransfersInfo = new Map<number, TransfersInfo>();
+    private cachedOutTransfersInfo = new Map<number, TransfersInfo>();
 
     // Unused currently (TODO: find an effective way to retrieve contract creation block)
     // Supposed that it can reduce in/out token transfers count retrieving time
+    // NOTE: Etherscan solution for verified contracts:
+    //       https://docs.etherscan.io/api-endpoints/contracts#get-contract-creator-and-creation-tx-hash 
     private tokenCreationBlock = -1;
 
 
@@ -85,6 +95,20 @@ export class EphemeralPool {
                 type: 'uint256'
             }],
             payable: false,
+            stateMutability: 'view',
+            type: 'function'
+        }, {
+            inputs: [{
+                internalType: 'address',
+                name: '',
+                type: 'address'
+            }],
+            name: 'nonces',
+            outputs: [{
+                internalType: 'uint256',
+                name: '',
+                type: 'uint256'
+            }],
             stateMutability: 'view',
             type: 'function'
         }, {
@@ -146,8 +170,13 @@ export class EphemeralPool {
         if (cachedData == undefined) {
             // no current address in the cache -> create new one
             const address = this.getAddress(index);
-            let additional = { nativeBalance: BigInt(0), nonce: 0, inTokenTxCnt: 0, outTokenTxCnt: 0 }
-            let newAddress = { index, address, tokenBalance: BigInt(0), blockNumber: 0, additional };
+            let newAddress = { index,
+                                address,
+                                tokenBalance: BigInt(0),
+                                nativeBalance: BigInt(0),
+                                permitNonce: 0,
+                                nativeNonce: 0 
+                            };
             await this.updateAddressInfo(newAddress);
 
             this.cachedAddresses.set(index, newAddress);
@@ -215,6 +244,44 @@ export class EphemeralPool {
         throw new InternalError(`Cannot generate private key for ephemeral address at index ${index}`);
     }
 
+    // Get number of incoming token transfers
+    public async getEphemeralAddressInTxCount(index: number): Promise<number> {
+        const address = this.getAddress(index);
+        const curBlock = await this.web3.eth.getBlockNumber();
+        let info = this.cachedInTransfersInfo.get(index);
+        if (info === undefined) {
+            info = {index, blockNumber: -1, txCount: 0 };
+        }
+
+        let txCnt = await this.getIncomingTokenTxCount(address, curBlock, info.blockNumber + 1);
+
+        info.blockNumber = curBlock;
+        info.txCount += txCnt;
+
+        this.cachedInTransfersInfo.set(index, info);
+
+        return info.txCount;
+    }
+
+    // Get number of outcoming token transfers
+    public async getEphemeralAddressOutTxCount(index: number): Promise<number> {
+        const address = this.getAddress(index);
+        const curBlock = await this.web3.eth.getBlockNumber();
+        let info = this.cachedOutTransfersInfo.get(index);
+        if (info === undefined) {
+            info = {index, blockNumber: -1, txCount: 0 };
+        }
+
+        let txCnt = await this.getOutcomingTokenTxCount(address, curBlock, info.blockNumber + 1);
+
+        info.blockNumber = curBlock;
+        info.txCount += txCnt;
+
+        this.cachedOutTransfersInfo.set(index, info);
+
+        return info.txCount;
+    }
+
     // Sign permittable deposit with desired data
     // data should be object in format as described in https://eips.ethereum.org/EIPS/eip-712
     public async signTypedData(data: any, index: number): Promise<string> {
@@ -241,7 +308,7 @@ export class EphemeralPool {
     }
 
     // ------------------=========< Private Routines >=========--------------------
-    // | Updating and monitoring state                                            |
+    // | Retrieving address info                                                  |
     // ----------------------------------------------------------------------------
 
     // Binary search for the contract creation block
@@ -286,22 +353,18 @@ export class EphemeralPool {
 
     // get and update address details
     private async updateAddressInfo(existing: EphemeralAddress): Promise<EphemeralAddress> {
-        const blockNumber = await this.web3.eth.getBlockNumber();
         let promises = [
             this.getTokenBalance(existing.address),
             this.getNativeBalance(existing.address),
+            this.getPermitNonce(existing.address),
             this.web3.eth.getTransactionCount(existing.address),
-            this.getIncomingTokenTxCount(existing.address, blockNumber, existing.blockNumber + 1),
-            this.getOutcomingTokenTxCount(existing.address, blockNumber, existing.blockNumber + 1),
         ];
-        const [tokenBalance, nativeBalance, nonce, inTokenTxCnt, outTokenTxCnt] = await Promise.all(promises);
+        const [tokenBalance, nativeBalance, permitNonce, nativeNonce] = await Promise.all(promises);
 
-        existing.blockNumber = Number(blockNumber);
         existing.tokenBalance = BigInt(tokenBalance);
-        existing.additional.nonce = Number(nonce);
-        existing.additional.nativeBalance = BigInt(nativeBalance);
-        existing.additional.inTokenTxCnt += Number(inTokenTxCnt);
-        existing.additional.outTokenTxCnt += Number(outTokenTxCnt);
+        existing.nativeBalance = BigInt(nativeBalance);
+        existing.permitNonce = Number(permitNonce);
+        existing.nativeNonce = Number(nativeNonce);
         
         return existing;
     }
@@ -318,6 +381,13 @@ export class EphemeralPool {
         const result = await this.token.methods.balanceOf(address).call();
         
         return BigInt(result) / this.poolDenominator;
+    }
+
+    // number of outgoing transfers via permit
+    private async getPermitNonce(address: string): Promise<number> {
+        const result = await this.token.methods.nonces(address).call();
+        
+        return Number(result);
     }
 
     // Find first unused account
@@ -368,10 +438,9 @@ export class EphemeralPool {
     // address nonused criteria
     private isAddressNonused(address: EphemeralAddress): boolean {
         if (address.tokenBalance == BigInt(0) && 
-            address.additional.nativeBalance == BigInt(0) &&
-            address.additional.nonce == 0 &&
-            address.additional.inTokenTxCnt == 0 &&
-            address.additional.outTokenTxCnt == 0)
+            address.nativeBalance == BigInt(0) &&
+            address.permitNonce == 0 &&
+            address.nativeNonce == 0)
         {
             return true;
         }
