@@ -818,12 +818,10 @@ export class ZkBobClient {
     const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
     this.startJobMonitoring(tokenAddress, jobId);
 
-    if (fromAddress) {
-      // Temporary save transaction in the history module (to prevent history delays)
-      const ts = Math.floor(Date.now() / 1000);
-      const rec = await HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, '0', true);
-      state.history.keepQueuedTransactions([rec], jobId);
-    }
+    // Temporary save transaction in the history module (to prevent history delays)
+    const ts = Math.floor(Date.now() / 1000);
+    const rec = await HistoryRecord.deposit(addrFromSig, amountGwei, feeGwei, ts, '0', true);
+    state.history.keepQueuedTransactions([rec], jobId);
 
     return jobId;
   }
