@@ -1,6 +1,6 @@
 import Web3 from 'web3';
 
-import { TransactionData, Proof, Params, SnarkProof, UserAccount, VK } from 'libzkbob-rs-wasm-web';
+import { TransactionData, SnarkProof, UserAccount } from 'libzkbob-rs-wasm-web';
 import { HexStringReader, HexStringWriter } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
@@ -44,7 +44,6 @@ export class ShieldedTx {
     txData: TransactionData,
     txType: TxType,
     acc: UserAccount,
-    snarkParams: { transferVk?: VK; treeVk?: VK; },
     web3: Web3,
     worker: any,
   ): Promise<ShieldedTx> {
@@ -77,12 +76,12 @@ export class ShieldedTx {
       prev_leaf: prevLeaf,
     });
 
-    const txValid = Proof.verify(snarkParams.transferVk!, txProof.inputs, txProof.proof);
+    const txValid = worker.verifyTxProof(txProof.inputs, txProof.proof);
     if (!txValid) {
       throw new InternalError('invalid tx proof');
     }
 
-    const treeValid = Proof.verify(snarkParams.treeVk!, treeProof.inputs, treeProof.proof);
+    const treeValid = worker.verifyTreeProof(treeProof.inputs, treeProof.proof);
     if (!treeValid) {
       throw new InternalError('invalid tree proof');
     }
@@ -147,8 +146,8 @@ export class ShieldedTx {
   }
 
   static decode(data: string): ShieldedTx {
-    let tx = new ShieldedTx();
-    let reader = new HexStringReader(data);
+    const tx = new ShieldedTx();
+    const reader = new HexStringReader(data);
 
     tx.selector = reader.readHex(4)!;
     assertNotNull(tx.selector);
@@ -185,7 +184,7 @@ export class ShieldedTx {
 
 export function parseHashes(ciphertext: string): string[] {
   const reader = new HexStringReader(ciphertext);
-  let numItems = reader.readNumber(4, true);
+  const numItems = reader.readNumber(4, true);
   if (!numItems || numItems > CONSTANTS.OUT + 1) {
     throw new InternalError(`Invalid transaction: invalid number of outputs ${numItems}`);
   }

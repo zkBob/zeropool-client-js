@@ -1,6 +1,7 @@
 import Web3 from 'web3';
 import { AbiItem } from 'web3-utils';
 import { Contract } from 'web3-eth-contract'
+import { TransactionConfig } from 'web3-core'
 import { NetworkBackend } from './network';
 
 export class EvmNetwork implements NetworkBackend {
@@ -111,38 +112,65 @@ export class EvmNetwork implements NetworkBackend {
                 type: 'function',
             }
         ];
-        this.contract = new this.web3.eth.Contract(abi) as Contract;
+        this.contract = new this.web3.eth.Contract(abi) as unknown as Contract;
 
         // just the Transfer() event definition is sufficient in this case
-        const abiTokenJson: AbiItem[] = [
-            {
+        const abiTokenJson: AbiItem[] = [{
                 anonymous: false,
-                inputs: [
-                    {
-                        indexed: true,
-                        name: 'from',
-                        type: 'address'
-                    },
-                    {
-                        indexed: true,
-                        name: 'to',
-                        type: 'address'
-                    },
-                    {
-                        indexed: false,
-                        name: 'value',
-                        type: 'uint256'
-                    }
-                ],
+                inputs: [{
+                    indexed: true,
+                    name: 'from',
+                    type: 'address'
+                }, {
+                    indexed: true,
+                    name: 'to',
+                    type: 'address'
+                }, {
+                    indexed: false,
+                    name: 'value',
+                    type: 'uint256'
+                }],
                 name: 'Transfer',
                 type: 'event'
-            }
-        ];
-        this.token = new this.web3.eth.Contract(abiTokenJson) as Contract;
+            }, {
+                inputs: [],
+                name: 'name',
+                outputs: [{
+                    internalType: 'string',
+                    name: '',
+                    type: 'string'
+                }],
+                stateMutability: 'view',
+                type: 'function'
+            }, {
+                inputs: [{
+                    internalType: 'address',
+                    name: '',
+                    type: 'address'
+                }],
+                name: 'nonces',
+                outputs: [{
+                    internalType: 'uint256',
+                    name: '',
+                    type: 'uint256'
+                }],
+                stateMutability: 'view',
+                type: 'function'
+            }];
+        this.token = new this.web3.eth.Contract(abiTokenJson) as unknown as Contract;
     }
 
     public async getChainId(): Promise<number> {
         return await this.web3.eth.getChainId();
+    }
+
+    public async getTokenName(tokenAddress: string): Promise<string> {
+        this.token.options.address = tokenAddress;
+        return await this.token.methods.name().call();
+    }
+    public async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
+        this.token.options.address = tokenAddress;
+        return Number(await this.token.methods.nonces(address).call());
     }
 
     public async getDenominator(contractAddress: string): Promise<bigint> {
@@ -179,6 +207,31 @@ export class EvmNetwork implements NetworkBackend {
 
 
         return {index: BigInt(idx), root: BigInt(root)};
+    }
+
+    public async getTxRevertReason(txHash: string): Promise<string | null> {
+        const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
+        if (txReceipt && txReceipt.status !== undefined) {
+            if (txReceipt.status == false) {
+                const txData = await this.web3.eth.getTransaction(txHash);
+                
+                let reason = 'unknown reason';
+                try {
+                    await this.web3.eth.call(txData as TransactionConfig, txData.blockNumber as number);
+                } catch(err) {
+                    reason = err.message;
+                }
+                console.log(`getTxRevertReason: revert reason for ${txHash}: ${reason}`)
+
+                return reason;
+            } else {
+                console.warn(`getTxRevertReason: ${txHash} was not reverted`);
+            }
+        } else {
+            console.warn(`getTxRevertReason: ${txHash} was not mined yet`);
+        }
+
+        return null;
     }
 
 }

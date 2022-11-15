@@ -1,10 +1,10 @@
 import { wrap } from 'comlink';
-import { Params, default as initWasm } from 'libzkbob-rs-wasm-web';
-import { SnarkConfigParams, SnarkParams } from './config';
+import { SnarkConfigParams } from './config';
 import { FileCache } from './file-cache';
 export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState } from './client';
 export { TxType } from './tx';
-export { HistoryRecord, HistoryTransactionType } from './history'
+export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
+export { EphemeralAddress, EphemeralPool } from './ephemeral'
 export * from './errors'
 
 
@@ -28,7 +28,6 @@ export type InitLibCallback = (status: InitStatus) => void;
 export class ZkBobLibState {
   public fileCache: FileCache;
   public worker: any;
-  public snarkParams: SnarkParams;
 }
 
 async function fetchTxParamsHash(relayerUrl: string): Promise<string> {
@@ -66,17 +65,19 @@ export async function init(
   }
 
   let worker: any;
-  let transferVk: any;
-  let treeVk: any;
 
   // Intercept all possible exceptions to process `Failed` status
   try {
     let loaded = false;
     worker = wrap(new Worker(workerPath));
-    let initializer: Promise<void> = worker.initWasm(wasmPath, {
+    const initializer: Promise<void> = worker.initWasm(wasmPath, {
       txParams: snarkParams.transferParamsUrl,
       treeParams: snarkParams.treeParamsUrl,
-    }, txParamsHash);
+    }, txParamsHash, 
+    {
+      transferVkUrl: snarkParams.transferVkUrl,
+      treeVkUrl: snarkParams.treeVkUrl,
+    });
 
     
     initializer.then(() => {
@@ -118,12 +119,6 @@ export async function init(
       await initializer;
     }
 
-    console.time(`Wasm engine initializing`);
-    await initWasm(wasmPath);
-    transferVk = await (await fetch(snarkParams.transferVkUrl)).json();
-    treeVk = await (await fetch(snarkParams.treeVkUrl)).json();
-    console.timeEnd(`Wasm engine initializing`);
-
     if (statusCallback !== undefined) {
       statusCallback({ state: InitState.Completed, download: lastProgress });
     }
@@ -137,9 +132,5 @@ export async function init(
   return {
     fileCache,
     worker,
-    snarkParams: {
-      transferVk,
-      treeVk,
-    }
   };
 }

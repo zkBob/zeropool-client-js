@@ -1,12 +1,12 @@
 import { Privkey } from 'hdwallet-babyjub';
 import { numberToHex, padLeft } from 'web3-utils';
-import { validateAddress } from 'libzkbob-rs-wasm-web';
 
 import { NetworkType } from './network-type';
 import { InternalError } from './errors';
 
 const util = require('ethereumjs-util');
 
+// It's a healthy-man function
 export function deriveSpendingKey(mnemonic: string, networkType: NetworkType): Uint8Array {
   const path = NetworkType.privateDerivationPath(networkType);
   const sk = bigintToArrayLe(Privkey(mnemonic, path).k);
@@ -14,14 +14,33 @@ export function deriveSpendingKey(mnemonic: string, networkType: NetworkType): U
   return sk;
 }
 
-export function verifyShieldedAddress(address: string): boolean {
-  return validateAddress(address);
+// And here is a smoker's variant of above implementation :D
+export function deriveSpendingKeyZkBob(mnemonic: string, networkType: NetworkType): Uint8Array {
+  if (networkType == NetworkType.polygon || networkType == NetworkType.sepolia) {
+    // There are few factors why we introduce this hack here:
+    //  1. zkBob prod deployment on Polygon was made with `ethereum` environment variable
+    //  2. `polygon` network type was not implemented in this library at the moment of zkBob prod deployment
+    //  3. staging deployment on Sepolia was also using `ethereum` network type
+    //  4. `hdwallet-babyjub` npm package had an error which lead to similar HD path for every network
+    //  5. we can't change HD path for existing prod users because their assets will become losed
+    return bigintToArrayLe(Privkey(mnemonic, "m/0'/0'").k);
+  }
+
+  return deriveSpendingKey(mnemonic, networkType);
 }
 
 const HEX_TABLE: string[] = [];
 for (let n = 0; n <= 0xff; ++n) {
   const octet = n.toString(16).padStart(2, '0');
   HEX_TABLE.push(octet);
+}
+
+export function concatenateBuffers(buf1: Uint8Array, buf2: Uint8Array): Uint8Array {
+  var res = new Uint8Array(buf1.byteLength + buf2.byteLength);
+  res.set(buf1, 0);
+  res.set(buf2, buf1.byteLength);
+
+  return res;
 }
 
 export function bufToHex(buffer: Uint8Array): string {
@@ -45,7 +64,7 @@ export function base64ToHex(data: string): string {
 }
 
 export function bigintToArrayLe(num: bigint): Uint8Array {
-  let result = new Uint8Array(32);
+  const result = new Uint8Array(32);
 
   for (let i = 0; num > BigInt(0); ++i) {
     result[i] = Number(num % BigInt(256));
@@ -136,7 +155,7 @@ export class HexStringWriter {
   }
 
   writeBigIntArray(nums: bigint[], numBytes: number) {
-    for (let num of nums) {
+    for (const num of nums) {
       this.writeBigInt(num, numBytes);
     }
   }
@@ -244,7 +263,7 @@ export function toCompactSignature(signature: string): string {
 
   if (signature.length > 128) {
     // it seems it's an extended signature, let's compact it!
-    let v = signature.substr(128, 2);
+    const v = signature.substr(128, 2);
     if (v == "1c") {
       return `${signature.slice(0, 64)}${(parseInt(signature[64], 16) | 8).toString(16)}${signature.slice(65, 128)}`;
     } else if (v != "1b") {
@@ -268,7 +287,7 @@ export function parseCompactSignature(signature: string): {v: string, r: string,
     let s = `0x${signature.slice(64)}`;
     
     let v = `0x1b`;
-    let sHiDigit = parseInt(s[0], 16);
+    const sHiDigit = parseInt(s[0], 16);
     if (sHiDigit > 7) {
       v = `0x1c`;
       s = `0x${(sHiDigit & 7).toString(16)}${s.slice(1)}`;
@@ -294,7 +313,7 @@ export function toCanonicalSignature(signature: string): string {
 }
 
 export function addressFromSignature(signature: string, signedData: string): string {
-  let sigFields = util.fromRpcSig(addHexPrefix(signature));
+  const sigFields = util.fromRpcSig(addHexPrefix(signature));
 
   const dataBuf = hexToBuf(signedData);
   const prefix = Buffer.from("\x19Ethereum Signed Message:\n");
@@ -302,8 +321,8 @@ export function addressFromSignature(signature: string, signedData: string): str
     Buffer.concat([prefix, Buffer.from(String(dataBuf.length)), dataBuf])
   );
 
-  let pub = util.ecrecover(prefixedSignedData, sigFields.v, sigFields.r, sigFields.s);
-  let addrBuf = util.pubToAddress(pub);
+  const pub = util.ecrecover(prefixedSignedData, sigFields.v, sigFields.r, sigFields.s);
+  const addrBuf = util.pubToAddress(pub);
 
   return addHexPrefix(bufToHex(addrBuf));
 }
