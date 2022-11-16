@@ -31,17 +31,17 @@ export interface RelayerInfo {
   optimisticDeltaIndex: bigint;
 }
 
-export interface TreeState {
-  root: bigint;
-  index: bigint;
-}
-
 const isRelayerInfo = (obj: any): obj is RelayerInfo => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('root') && typeof obj.root === 'string' &&
     obj.hasOwnProperty('optimisticRoot') && typeof obj.optimisticRoot === 'string' &&
     obj.hasOwnProperty('deltaIndex') && typeof obj.deltaIndex === 'number' &&
     obj.hasOwnProperty('optimisticDeltaIndex') && typeof obj.optimisticDeltaIndex === 'number';
+}
+
+export interface TreeState {
+  root: bigint;
+  index: bigint;
 }
 
 export interface BatchResult {
@@ -140,6 +140,19 @@ export interface LimitsFetch {
   tier: number;
 }
 
+// Used to collect state synchronization statistic
+// It could be helpful to monitor average sync time
+export interface SyncStat {
+  txCount: number;  // total txs count (relayer + CDN)
+  cdnTxCnt: number; // number of transactions fetched in binary format from CDN (cold storage)
+  decryptedLeafs: number; // deposit/withdrawal = 1 leaf,
+                          // transfer = 1 + notes_cnt leafs
+  fullSync: boolean;  // true in case of bulding full Merkle tree on the client
+
+  totalTime: number; // msec
+  timePerTx: number;  // msec
+}
+
 export interface ClientConfig {
   /** Spending key. */
   sk: Uint8Array;
@@ -159,6 +172,7 @@ export class ZkBobClient {
   private config: ClientConfig;
   private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
   private updateStatePromise: Promise<boolean> | undefined;
+  private syncStats: SyncStat[] = [];
 
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
