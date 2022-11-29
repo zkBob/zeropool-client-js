@@ -23,6 +23,7 @@ const DEFAULT_TX_FEE = BigInt(100000000);
 const BATCH_SIZE = 1000;
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
+const DEFAULT_DENOMINATOR = BigInt(1000000000);
 
 export interface RelayerInfo {
   root: string;
@@ -179,8 +180,14 @@ export class ZkBobClient {
     }
 
     for (const [address, token] of Object.entries(config.tokens)) {
-      const denominator = await config.network.getDenominator(token.poolAddress);
-      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, address, client.worker);
+      let denominator: bigint
+      try {
+        denominator = await config.network.getDenominator(token.poolAddress);
+      } catch (err) {
+        console.error(`Cannot fetch denominator value from the relayer, will using default 10^9: ${err}`);
+        denominator = DEFAULT_DENOMINATOR;
+      }
+      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, address, client.worker, token.coldStorageConfig);
     }
 
     return client;
@@ -1296,9 +1303,8 @@ export class ZkBobClient {
 
     const zpState = this.zpStates[tokenAddress];
     const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
 
-    const startIndex = Number(await zpState.getNextIndex());
+    let startIndex = Number(await zpState.getNextIndex());
 
     const stateInfo = await this.info(token.relayerUrl);
     const nextIndex = Number(stateInfo.deltaIndex);
@@ -1306,6 +1312,31 @@ export class ZkBobClient {
 
     if (optimisticIndex > startIndex) {
       const startTime = Date.now();
+
+      if (startIndex == 0) {
+        // try get txs from the cold storage
+        try {
+          console.log(`[] Loading cold storage up to index ${zpState.coldStorageConfig.next_index}...`);
+          const coldStorageBaseAddr = token.coldStorageConfig.substring(0, token.coldStorageConfig.lastIndexOf('/'));
+          const promises = zpState.coldStorageConfig.bulks.map(async (bulkInfo) => {
+            let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
+            let aBulk = await response.arrayBuffer();
+
+            return new Uint8Array(aBulk);
+          });
+          
+          let bulks_data = await Promise.all(promises);
+
+          let decMemos: DecryptedMemo[] = await zpState.updateStateColdStorage(bulks_data);
+          console.log(`Cold storage has been loaded`);
+          decMemos.forEach((aMemo) => {
+            zpState.history.saveDecryptedMemo(aMemo, false);
+          })
+          startIndex = Number(zpState.coldStorageConfig.next_index);
+        } catch (err) {
+          console.warn(`Cannot load txs from the cold storage: ${err}`);
+        }
+      }
       
       console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
 
@@ -1413,7 +1444,7 @@ export class ZkBobClient {
       for (const idx of idxs) {
         const oneStateUpdate = totalRes.state.get(idx);
         if (oneStateUpdate !== undefined) {
-          await state.updateState(oneStateUpdate);
+          await zpState.updateState(oneStateUpdate);
         } else {
           throw Error(`Cannot find state batch at index ${idx}`);
         }
