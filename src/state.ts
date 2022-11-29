@@ -140,6 +140,6 @@ export class ZkBobState {
   }
 
   public async updateStateColdStorage(bulks: Uint8Array[]): Promise<any> {
-    return await this.worker.updateState(this.tokenAddress, bulks);
+    return await this.worker.updateStateColdStorage(this.tokenAddress, bulks);
   }
 }

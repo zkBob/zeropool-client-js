@@ -240,7 +240,10 @@ const obj = {
 
   async updateStateColdStorage(address: string, bulks: Uint8Array[]): Promise<DecryptedMemo[]> {
     return new Promise(async resolve => {
-      resolve(zpAccounts[address].updateStateColdStorage(bulks));
+      console.debug('Web worker: updateStateColdStorage #1');
+      let result = zpAccounts[address].updateStateColdStorage(bulks);
+      console.debug('Web worker: updateStateColdStorage #2');
+      resolve(result);
     });
   },
 
