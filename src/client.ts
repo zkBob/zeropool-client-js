@@ -1305,6 +1305,7 @@ export class ZkBobClient {
     const token = this.tokens[tokenAddress];
 
     let startIndex = Number(await zpState.getNextIndex());
+    let txCntFromColdStorage = Number(0);
 
     const stateInfo = await this.info(token.relayerUrl);
     const nextIndex = Number(stateInfo.deltaIndex);
@@ -1316,7 +1317,7 @@ export class ZkBobClient {
       if (startIndex == 0) {
         // try get txs from the cold storage
         try {
-          console.log(`[] Loading cold storage up to index ${zpState.coldStorageConfig.next_index}...`);
+          console.log(`Loading cold storage up to index ${zpState.coldStorageConfig.next_index}...`);
           const coldStorageBaseAddr = token.coldStorageConfig.substring(0, token.coldStorageConfig.lastIndexOf('/'));
           const promises = zpState.coldStorageConfig.bulks.map(async (bulkInfo) => {
             let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
@@ -1328,11 +1329,15 @@ export class ZkBobClient {
           let bulks_data = await Promise.all(promises);
 
           let decMemos: DecryptedMemo[] = await zpState.updateStateColdStorage(bulks_data);
-          console.log(`Cold storage has been loaded`);
           decMemos.forEach((aMemo) => {
             zpState.history.saveDecryptedMemo(aMemo, false);
           })
+
           startIndex = Number(zpState.coldStorageConfig.next_index);
+          txCntFromColdStorage = zpState.coldStorageConfig.total_txs_count;
+
+          console.log(`${zpState.coldStorageConfig.total_txs_count} txs have been loaded from the cold storage`);
+          console.log(`Root: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
         } catch (err) {
           console.warn(`Cannot load txs from the cold storage: ${err}`);
         }
@@ -1455,10 +1460,11 @@ export class ZkBobClient {
       zpState.history.setLastPendingTxIndex(totalRes.maxPendingIndex);
 
 
+      const totalTxs = (totalRes.txCount + txCntFromColdStorage);
       const msElapsed = Date.now() - startTime;
-      const avgSpeed = msElapsed / totalRes.txCount
+      const avgSpeed = msElapsed / totalTxs;
 
-      console.log(`Sync finished in ${msElapsed / 1000} sec | ${totalRes.txCount} tx, avg speed ${avgSpeed.toFixed(1)} ms/tx`);
+      console.log(`Sync finished in ${msElapsed / 1000} sec | ${totalTxs} tx, avg speed ${avgSpeed.toFixed(1)} ms/tx`);
 
       return readyToTransact;
     } else {
