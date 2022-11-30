@@ -139,7 +139,7 @@ export class ZkBobState {
     return await this.worker.updateState(this.tokenAddress, stateUpdate);
   }
 
-  public async updateStateColdStorage(bulks: Uint8Array[]): Promise<any> {
-    return await this.worker.updateStateColdStorage(this.tokenAddress, bulks);
+  public async updateStateColdStorage(bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<any> {
+    return await this.worker.updateStateColdStorage(this.tokenAddress, bulks, indexFrom, indexTo);
   }
 }

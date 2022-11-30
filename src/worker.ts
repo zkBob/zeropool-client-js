@@ -1,5 +1,11 @@
 import { expose } from 'comlink';
-import { Proof, Params, TxParser, IndexedTx, ParseTxsResult, default as init, initThreadPool, UserState, UserAccount, StateUpdate, validateAddress, assembleAddress, SnarkProof, ITransferData, IDepositData, IWithdrawData, IDepositPermittableData, DecryptedMemo } from 'libzkbob-rs-wasm-web';
+
+import { Proof, Params, TxParser, IndexedTx, ParseTxsResult, ParseTxsColdStorageResult,
+  default as init, initThreadPool, UserState, UserAccount,
+  StateUpdate, validateAddress, assembleAddress,
+  SnarkProof, ITransferData, IDepositData, IWithdrawData, IDepositPermittableData,
+} from 'libzkbob-rs-wasm-web';
+
 import { FileCache } from './file-cache';
 
 let txParams: Params;
@@ -238,9 +244,10 @@ const obj = {
     });
   },
 
-  async updateStateColdStorage(address: string, bulks: Uint8Array[]): Promise<DecryptedMemo[]> {
+  async updateStateColdStorage(address: string, bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<ParseTxsColdStorageResult> {
     return new Promise(async resolve => {
-      let result = zpAccounts[address].updateStateColdStorage(bulks);
+      console.debug('Web worker: updateStateColdStorage');
+      let result = zpAccounts[address].updateStateColdStorage(bulks, indexFrom, indexTo);
       resolve(result);
     });
   },
