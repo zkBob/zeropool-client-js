@@ -1,5 +1,5 @@
 import { Tokens } from './config';
-import { ethAddrToBuf, toCompactSignature, truncateHexPrefix, toTwosComplementHex, addressFromSignature } from './utils';
+import { ethAddrToBuf, toCompactSignature, truncateHexPrefix, toTwosComplementHex, addressFromSignature, isRangesIntersected } from './utils';
 import { ZkBobState } from './state';
 import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
@@ -16,6 +16,7 @@ import {
   InternalError, NetworkError, PoolJobError, RelayerError, RelayerJobError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
+import { MAX_UINT64 } from '@ethereumjs/util';
 
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const MIN_TX_AMOUNT = BigInt(50000000);
@@ -24,6 +25,7 @@ const BATCH_SIZE = 1000;
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
 const DEFAULT_DENOMINATOR = BigInt(1000000000);
+const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
 
 export interface RelayerInfo {
   root: string;
@@ -187,7 +189,7 @@ export class ZkBobClient {
         console.error(`Cannot fetch denominator value from the relayer, will using default 10^9: ${err}`);
         denominator = DEFAULT_DENOMINATOR;
       }
-      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, address, client.worker, token.coldStorageConfig);
+      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, address, client.worker, token.coldStorageConfigPath);
     }
 
     return client;
@@ -1313,35 +1315,6 @@ export class ZkBobClient {
 
     if (optimisticIndex > startIndex) {
       const startTime = Date.now();
-
-      if (startIndex == 0) {
-        // try get txs from the cold storage
-        try {
-          console.log(`Loading cold storage up to index ${zpState.coldStorageConfig.next_index}...`);
-          const coldStorageBaseAddr = token.coldStorageConfig.substring(0, token.coldStorageConfig.lastIndexOf('/'));
-          const promises = zpState.coldStorageConfig.bulks.map(async (bulkInfo) => {
-            let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
-            let aBulk = await response.arrayBuffer();
-
-            return new Uint8Array(aBulk);
-          });
-          
-          let bulks_data = await Promise.all(promises);
-
-          let decMemos: DecryptedMemo[] = await zpState.updateStateColdStorage(bulks_data);
-          decMemos.forEach((aMemo) => {
-            zpState.history.saveDecryptedMemo(aMemo, false);
-          })
-
-          startIndex = Number(zpState.coldStorageConfig.next_index);
-          txCntFromColdStorage = zpState.coldStorageConfig.total_txs_count;
-
-          console.log(`${zpState.coldStorageConfig.total_txs_count} txs have been loaded from the cold storage`);
-          console.log(`Root: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
-        } catch (err) {
-          console.warn(`Cannot load txs from the cold storage: ${err}`);
-        }
-      }
       
       console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
 
@@ -1560,6 +1533,58 @@ export class ZkBobClient {
     if (startIndex < endIndex) {
       console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${endIndex - OUTPLUSONE})`);
     }
+  }
+
+  private async loadColdStorageTxs(tokenAddress: string, fromIndex?: number, toIndex?: number): Promise<number> {
+    const token = this.tokens[tokenAddress];
+    const zpState = this.zpStates[tokenAddress];
+
+    const coldConfig = zpState.coldStorageConfig;
+    const OUTPLUSONE = CONSTANTS.OUT + 1;
+
+    const startRange = fromIndex ?? 0;  // inclusively
+    const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
+    const actualRangeStart = Math.max(startRange, Number(coldConfig.index_from));
+    const actualRangeEnd = Math.min(endRange, Number(coldConfig.next_index));
+
+    if ((startRange % OUTPLUSONE) == 0 && 
+        (endRange % OUTPLUSONE) == 0 &&
+        isRangesIntersected(startRange, endRange, Number(coldConfig.index_from), Number(coldConfig.next_index)) &&
+        ((actualRangeEnd - actualRangeStart) / OUTPLUSONE) >= COLD_STORAGE_USAGE_THRESHOLD
+    ) {
+      // try get txs from the cold storage
+      try {
+        console.log(`Loading cold storage up to index ${zpState.coldStorageConfig.next_index}...`);
+        const coldStorageBaseAddr = token.coldStorageConfigPath.substring(0, token.coldStorageConfigPath.lastIndexOf('/'));
+        const promises = zpState.coldStorageConfig.bulks
+          .filter(aBulk => {
+            return isRangesIntersected(actualRangeStart, actualRangeEnd, Number(aBulk.index_from), Number(aBulk.next_index))
+          })
+          .map(async (bulkInfo) => {
+            let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
+            let aBulk = await response.arrayBuffer();
+
+            return new Uint8Array(aBulk);
+          });
+        
+        let bulks_data = await Promise.all(promises);
+
+        let decMemos: DecryptedMemo[] = await zpState.updateStateColdStorage(bulks_data);
+        decMemos.forEach((aMemo) => {
+          zpState.history.saveDecryptedMemo(aMemo, false);
+        })
+
+        //startIndex = Number(zpState.coldStorageConfig.next_index);
+        //txCntFromColdStorage = zpState.coldStorageConfig.total_txs_count;
+
+        //console.log(`${zpState.coldStorageConfig.total_txs_count} txs have been loaded from the cold storage`);
+        //console.log(`Root: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
+      } catch (err) {
+        console.warn(`Cannot load txs from the cold storage: ${err}`);
+      }
+    }
+
+    return Number(await zpState.getNextIndex());
   }
 
   public async verifyShieldedAddress(address: string): Promise<boolean> {
