@@ -1348,7 +1348,7 @@ export class ZkBobClient {
       const curStat: SyncStat = {
         txCount: (optimisticIndex - startIndex) / OUTPLUSONE,
         cdnTxCnt: coldResult.txCount,
-        decryptedLeafs: 0,
+        decryptedLeafs: coldResult.decryptedLeafs,
         fullSync: startIndex == 0 ? true : false,
         totalTime: coldResult.totalTime,
         timePerTx: 0,
