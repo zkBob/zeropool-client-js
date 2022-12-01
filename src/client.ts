@@ -190,6 +190,7 @@ export class ZkBobClient {
   private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
   private updateStatePromise: Promise<boolean> | undefined;
   private syncStats: SyncStat[] = [];
+  private skipColdStorage: boolean = false;
 
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
@@ -1335,14 +1336,13 @@ export class ZkBobClient {
     const token = this.tokens[tokenAddress];
 
     let startIndex = Number(await zpState.getNextIndex());
-    let txCntFromColdStorage = Number(0);
 
     const stateInfo = await this.info(token.relayerUrl);
     const nextIndex = Number(stateInfo.deltaIndex);
     const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
     if (optimisticIndex > startIndex) {
-      // Load transactions from the cold storage
+      // Use the cold storage first
       const coldResult = await this.loadColdStorageTxs(tokenAddress, startIndex);
 
       const curStat: SyncStat = {
@@ -1617,7 +1617,8 @@ export class ZkBobClient {
       totalTime: 0,
     };
 
-    if ((startRange % OUTPLUSONE) == 0 && 
+    if (this.skipColdStorage == false &&
+        (startRange % OUTPLUSONE) == 0 && 
         (endRange % OUTPLUSONE) == 0 &&
         isRangesIntersected(startRange, endRange, Number(coldConfig.index_from), Number(coldConfig.next_index)) &&
         ((actualRangeEnd - actualRangeStart) / OUTPLUSONE) >= COLD_STORAGE_USAGE_THRESHOLD
@@ -1634,14 +1635,28 @@ export class ZkBobClient {
           })
           .map(async (bulkInfo) => {
             let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
-            let aBulk = await response.arrayBuffer();
+            if (response.ok) {
+              let aBulk = await response.arrayBuffer();
+              if (aBulk.byteLength == bulkInfo.bytes) {
+                console.log(`🧊[ColdSync] got bulk ${bulkInfo.filename} with ${bulkInfo.tx_count} txs (${bulkInfo.bytes} bytes)`);
 
-            return new Uint8Array(aBulk);
+                return new Uint8Array(aBulk);
+              }
+
+              //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: got ${aBulk.byteLength} bytes, expected ${bulkInfo.bytes} bytes`);
+              //return new Uint8Array();
+              throw new InternalError(`Cold storage corrupted (invalid file size: ${aBulk.byteLength})`)
+            } else {
+              //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: response code ${response.status} (${response.statusText})`);
+              //return new Uint8Array();
+              throw new InternalError(`Couldn't load cold storage (invalid response code: ${response.status})`)
+            }
           });
         
-        let bulks_data = await Promise.all(promises);
+        let bulksData = (await Promise.all(promises)).filter(data => data.length > 0);
+        
 
-        let result: ParseTxsColdStorageResult = await zpState.updateStateColdStorage(bulks_data, BigInt(actualRangeStart), BigInt(actualRangeEnd));
+        let result: ParseTxsColdStorageResult = await zpState.updateStateColdStorage(bulksData, BigInt(actualRangeStart), BigInt(actualRangeEnd));
         result.decryptedMemos.forEach((aMemo) => {
           zpState.history.saveDecryptedMemo(aMemo, false);
         });
@@ -1656,7 +1671,7 @@ export class ZkBobClient {
         console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
         
       } catch (err) {
-        console.warn(`🧊[ColdSync] cannot load txs from the cold storage: ${err}`);
+        console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
       }
     }
 

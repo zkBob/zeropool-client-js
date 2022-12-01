@@ -245,10 +245,14 @@ const obj = {
   },
 
   async updateStateColdStorage(address: string, bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<ParseTxsColdStorageResult> {
-    return new Promise(async resolve => {
+    return new Promise(async (resolve, reject) => {
       console.debug('Web worker: updateStateColdStorage');
-      let result = zpAccounts[address].updateStateColdStorage(bulks, indexFrom, indexTo);
-      resolve(result);
+      try {
+        let result = zpAccounts[address].updateStateColdStorage(bulks, indexFrom, indexTo);
+        resolve(result);
+      } catch (e) {
+        reject(e)
+      }
     });
   },
 
