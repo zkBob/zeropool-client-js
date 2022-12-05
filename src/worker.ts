@@ -1,5 +1,9 @@
 import { expose } from 'comlink';
-import { Proof, Params, TxParser, IndexedTx, ParseTxsResult, default as init, initThreadPool, UserState, UserAccount, StateUpdate, validateAddress, assembleAddress, SnarkProof, ITransferData, IDepositData, IWithdrawData, IDepositPermittableData } from 'libzkbob-rs-wasm-web';
+import { Proof, SnarkProof, Params, TxParser, IndexedTx, ParseTxsResult,
+        default as init, initThreadPool,
+        UserState, UserAccount, StateUpdate,
+        validateAddress, assembleAddress,
+        ITransferData, IDepositData, IWithdrawData, IDepositPermittableData, TreeNode } from 'libzkbob-rs-wasm-web';
 import { FileCache } from './file-cache';
 
 let txParams: Params;
@@ -229,6 +233,26 @@ const obj = {
   async getRoot(address: string): Promise<string> {
     return new Promise(async resolve => {
       resolve(zpAccounts[address].getRoot());
+    });
+  },
+
+  async getRootAt(address: string, index: bigint): Promise<string> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        resolve(zpAccounts[address].getRootAt(index));
+      } catch (e) {
+        reject(e)
+      }
+    });
+  },
+
+  async getLeftSiblings(address: string, index: bigint): Promise<TreeNode[]> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        resolve(zpAccounts[address].getLeftSiblings(index));
+      } catch (e) {
+        reject(e)
+      }
     });
   },
 

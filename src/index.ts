@@ -2,6 +2,7 @@ import { wrap } from 'comlink';
 import { SnarkConfigParams } from './config';
 import { FileCache } from './file-cache';
 export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState } from './client';
+export { TreeNode } from 'libzkbob-rs-wasm-web';
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'

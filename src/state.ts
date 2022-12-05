@@ -1,4 +1,4 @@
-import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData, StateUpdate } from 'libzkbob-rs-wasm-web';
+import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData, StateUpdate, TreeNode } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
 import { bufToHex } from './utils';
 import { hash } from 'tweetnacl';
@@ -67,6 +67,14 @@ export class ZkBobState {
 
   public async getRoot(): Promise<bigint> {
     return BigInt(await this.worker.getRoot(this.tokenAddress));
+  }
+
+  public async getRootAt(index: bigint): Promise<bigint> {
+    return BigInt(await this.worker.getRootAt(this.tokenAddress, index));
+  }
+
+  public async getLeftSiblings(index: bigint): Promise<TreeNode[]> {
+    return await this.worker.getLeftSiblings(this.tokenAddress, index);
   }
 
   public async getNextIndex(): Promise<bigint> {

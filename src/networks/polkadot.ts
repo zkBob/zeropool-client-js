@@ -21,7 +21,7 @@ export class PolkadotNetwork implements NetworkBackend {
         return undefined; // FIXME
     }
 
-    async poolState(contractAddress: string): Promise<{index: bigint, root: bigint}> {
+    async poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
         return {index: BigInt(0), root: BigInt(0)};
     }
 

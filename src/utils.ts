@@ -4,6 +4,8 @@ import { numberToHex, padLeft } from 'web3-utils';
 import { NetworkType } from './network-type';
 import { InternalError } from './errors';
 
+import { TreeNode } from 'libzkbob-rs-wasm-web';
+
 const util = require('ethereumjs-util');
 
 // It's a healthy-man function
@@ -133,7 +135,6 @@ export function isEqualBuffers(buf1: Uint8Array, buf2: Uint8Array): boolean {
 
   return true;
 }
-
 
 export class HexStringWriter {
   buf: string;
@@ -325,4 +326,26 @@ export function addressFromSignature(signature: string, signedData: string): str
   const addrBuf = util.pubToAddress(pub);
 
   return addHexPrefix(bufToHex(addrBuf));
+}
+
+export function nodeToHex(node: TreeNode): string {
+  const writer = new HexStringWriter();
+  writer.writeNumber(node.height, 1);
+  writer.writeNumber(node.index, 6);
+  writer.writeBigInt(BigInt(node.value), 32);
+
+  return writer.toString();
+}
+
+export function hexToNode(data: string): TreeNode | null {
+  const reader = new HexStringReader(data);
+  const height = reader.readNumber(1);
+  const index = reader.readNumber(6);
+  const value = reader.readBigInt(32);
+
+  if (height && index && value) {
+    return { height, index, value: value.toString()};
+  }
+  
+  return null;
 }

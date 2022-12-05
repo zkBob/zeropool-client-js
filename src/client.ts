@@ -9,7 +9,7 @@ import { EphemeralAddress } from './ephemeral';
 
 import { 
   Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
-  ParseTxsResult, StateUpdate, IndexedTx 
+  ParseTxsResult, StateUpdate, IndexedTx, TreeNode 
 } from 'libzkbob-rs-wasm-web';
 
 import { 
@@ -1231,11 +1231,18 @@ export class ZkBobClient {
   }
 
   // Get the local Merkle tree root & index
-  public async getLocalState(tokenAddress: string): Promise<TreeState> {
-    const root = await this.zpStates[tokenAddress].getRoot();
-    const index = await this.zpStates[tokenAddress].getNextIndex();
+  // Retuned the latest root when the index is undefined
+  public async getLocalState(tokenAddress: string, index?: bigint): Promise<TreeState> {
+    if (index === undefined) {
+      const index = await this.zpStates[tokenAddress].getNextIndex();
+      const root = await this.zpStates[tokenAddress].getRoot();
 
-    return {root, index};
+      return {root, index};
+    } else {
+      const root = await this.zpStates[tokenAddress].getRootAt(index);
+
+      return {root, index};
+    }
   }
 
   // Get relayer regular root & index
@@ -1255,11 +1262,17 @@ export class ZkBobClient {
   }
 
   // Get pool info (direct web3 request)
-  public async getPoolState(tokenAddress: string): Promise<TreeState> {
+  public async getPoolState(tokenAddress: string, index?: bigint): Promise<TreeState> {
     const token = this.tokens[tokenAddress];
-    const res = await this.config.network.poolState(token.poolAddress);
+    const res = await this.config.network.poolState(token.poolAddress, index);
 
     return {index: res.index, root: res.root};
+  }
+
+  public async getLeftSiblings(tokenAddress: string, index: bigint): Promise<TreeNode[]> {
+    const siblings = await this.zpStates[tokenAddress].getLeftSiblings(index);
+
+    return siblings;
   }
 
   // Getting array of accounts and notes for the current account
