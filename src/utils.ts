@@ -343,7 +343,7 @@ export function hexToNode(data: string): TreeNode | null {
   const index = reader.readNumber(6);
   const value = reader.readBigInt(32);
 
-  if (height && index && value) {
+  if (height != null && index != null && value != null) {
     return { height, index, value: value.toString()};
   }
   

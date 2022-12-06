@@ -256,9 +256,9 @@ const obj = {
     });
   },
 
-  async updateState(address: string, stateUpdate: StateUpdate): Promise<void> {
+  async updateState(address: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
     return new Promise(async resolve => {
-      resolve(zpAccounts[address].updateState(stateUpdate));
+      resolve(zpAccounts[address].updateState(stateUpdate, siblings));
     });
   },
 

@@ -1,5 +1,5 @@
 import { Tokens } from './config';
-import { ethAddrToBuf, toCompactSignature, truncateHexPrefix, toTwosComplementHex, addressFromSignature } from './utils';
+import { ethAddrToBuf, toCompactSignature, truncateHexPrefix, toTwosComplementHex, addressFromSignature, hexToNode } from './utils';
 import { ZkBobState } from './state';
 import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
@@ -23,6 +23,7 @@ const DEFAULT_TX_FEE = BigInt(100000000);
 const BATCH_SIZE = 1000;
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
+const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
 
 export interface RelayerInfo {
   root: string;
@@ -141,15 +142,20 @@ export interface LimitsFetch {
 }
 
 export interface ClientConfig {
-  /** Spending key. */
+  // Spending key
   sk: Uint8Array;
-  /** A map of supported tokens (token address => token params). */
+  // A map of supported tokens (token address => token params)
   tokens: Tokens;
-  /** A worker instance acquired through init() function of this package. */
+  // A worker instance acquired through init() function of this package
   worker: any;
-  /** The name of the network is only used for storage. */
+  // The name of the network is only used for storage
   networkName: string | undefined;
+  // An endpoint to interact with the blockchain
   network: NetworkBackend;
+  // Account birthday:
+  //  no transactions associated with the account should exist lower that index
+  //  set -1 to use the latest index (create _NEW_ account)
+  birthindex: number | undefined;
 }
 
 export class ZkBobClient {
@@ -1311,13 +1317,30 @@ export class ZkBobClient {
     const token = this.tokens[tokenAddress];
     const state = this.zpStates[tokenAddress];
 
-    const startIndex = Number(await zpState.getNextIndex());
+    let startIndex = Number(await zpState.getNextIndex());
 
     const stateInfo = await this.info(token.relayerUrl);
     const nextIndex = Number(stateInfo.deltaIndex);
     const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
     if (optimisticIndex > startIndex) {
+      // Use partial tree loading if possible
+      let birthindex = this.config.birthindex ?? 0;
+      if (birthindex < 0 || birthindex >= Number(stateInfo.deltaIndex)) {
+        // we should grab almost one transaction from the current state
+        birthindex = Number(stateInfo.deltaIndex) - OUTPLUSONE;
+      }
+      let siblings: TreeNode[] | undefined;
+      if (startIndex == 0 && birthindex >= PARTIAL_TREE_USAGE_THRESHOLD) {
+        try {
+          siblings = await this.siblings(token.relayerUrl, birthindex);
+          console.log(`Got ${siblings.length} sibling(s) for index ${birthindex}`);
+          startIndex = birthindex;
+        } catch (err) {
+          console.warn(`Cannot retrieve siblings: ${err}`);
+        }
+      }
+
       const startTime = Date.now();
       
       console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
@@ -1426,7 +1449,7 @@ export class ZkBobClient {
       for (const idx of idxs) {
         const oneStateUpdate = totalRes.state.get(idx);
         if (oneStateUpdate !== undefined) {
-          await state.updateState(oneStateUpdate);
+          await state.updateState(oneStateUpdate, siblings);
         } else {
           throw Error(`Cannot find state batch at index ${idx}`);
         }
@@ -1640,6 +1663,37 @@ export class ZkBobClient {
       },
       tier: res.tier === undefined ? 0 : Number(res.tier)
     };
+  }
+
+  private async siblings(relayerUrl: string, index: number): Promise<TreeNode[]> {
+    const url = new URL(`/siblings`, relayerUrl);
+    url.searchParams.set('index', index.toString());
+    const headers = {'content-type': 'application/json;charset=UTF-8'};
+
+    const siblings = await this.fetchJson(url.toString(), {headers});
+    // TODO: here is a test case only, remove after testing
+    /*let siblings: string[] = [];
+    if (index == 278016) {
+      siblings = [
+        "0900000000021e0f3a711be80e44496151924743c5587860a3fbde0f283659c9d0d21659c544b5",
+        "0a00000000010e11de590842d36b791ffa3c0d15cfdc89d44dfe77c9254102cffe892718788c3b",
+        "0b0000000000861cb6c5ce6d5849ff46f84dfb01bcda53923f9a25cb00798112dcb7b323b6301a",
+        "0c000000000042010b42a01303918e0323f44294ad8fbbfdca86a967ee2c2b5775a866ed1cca2b",
+        "0d00000000002004be1969bae104b72efcc0ac9e887fa1d8c6a581e7cbfa769663c5f11ae39f29",
+        "12000000000000297f215cef4bd2b5991071b43389a9de1d3b947538612a62daab13aa29c13d3f"
+      ];
+    }*/
+    if (!Array.isArray(siblings)) {
+      throw new RelayerError(200, `Response should be an array`);
+    }
+  
+    return siblings.map((aNode) => {
+      let node = hexToNode(aNode)
+      if (!node) {
+        throw new RelayerError(200, `Cannot convert \'${aNode}\' to a TreeNode`);
+      }
+      return node;
+    });
   }
 
   // Universal response parser

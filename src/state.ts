@@ -119,7 +119,7 @@ export class ZkBobState {
     return await this.worker.createTransfer(this.tokenAddress, transfer);
   }
 
-  public async updateState(stateUpdate: StateUpdate): Promise<void> {
-    return await this.worker.updateState(this.tokenAddress, stateUpdate);
+  public async updateState(stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
+    return await this.worker.updateState(this.tokenAddress, stateUpdate, siblings);
   }
 }
