@@ -230,6 +230,12 @@ const obj = {
     });
   },
 
+  async firstTreeIndex(address: string): Promise<bigint | undefined> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].firstTreeIndex());
+    });
+  },
+
   async getRoot(address: string): Promise<string> {
     return new Promise(async resolve => {
       resolve(zpAccounts[address].getRoot());

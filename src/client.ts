@@ -1275,10 +1275,18 @@ export class ZkBobClient {
     return {index: res.index, root: res.root};
   }
 
+  // Just for testing purposes. This method do not need for client
   public async getLeftSiblings(tokenAddress: string, index: bigint): Promise<TreeNode[]> {
     const siblings = await this.zpStates[tokenAddress].getLeftSiblings(index);
 
     return siblings;
+  }
+
+  // Just informal method needed for the debug purposes
+  public async getTreeStartIndex(tokenAddress: string): Promise<bigint | undefined> {
+    const index = await this.zpStates[tokenAddress].getFirstIndex();
+
+    return index;
   }
 
   // Getting array of accounts and notes for the current account
@@ -1327,7 +1335,7 @@ export class ZkBobClient {
       // Use partial tree loading if possible
       let birthindex = this.config.birthindex ?? 0;
       if (birthindex < 0 || birthindex >= Number(stateInfo.deltaIndex)) {
-        // we should grab almost one transaction from the current state
+        // we should grab almost one transaction from the regular state
         birthindex = Number(stateInfo.deltaIndex) - OUTPLUSONE;
       }
       let siblings: TreeNode[] | undefined;
@@ -1465,6 +1473,8 @@ export class ZkBobClient {
 
       console.log(`Sync finished in ${msElapsed / 1000} sec | ${totalRes.txCount} tx, avg speed ${avgSpeed.toFixed(1)} ms/tx`);
 
+      await this.verifyState(tokenAddress);
+
       return readyToTransact;
     } else {
       zpState.history.setLastMinedTxIndex(nextIndex - OUTPLUSONE);
@@ -1559,6 +1569,25 @@ export class ZkBobClient {
     if (startIndex < endIndex) {
       console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${endIndex - OUTPLUSONE})`);
     }
+  }
+
+  private async verifyState(tokenAddress: string): Promise<boolean> {
+    const zpState = this.zpStates[tokenAddress];
+    const token = this.tokens[tokenAddress];
+    const state = this.zpStates[tokenAddress];
+
+    const checkIndex = Number(await zpState.getNextIndex());
+    const localRoot = await zpState.getRoot();
+    const poolRoot =  (await this.config.network.poolState(token.poolAddress, BigInt(checkIndex))).root;
+
+    if (localRoot != poolRoot) {
+      console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch! Trying to restore...`);
+
+
+      return false;
+    }
+
+    return true;
   }
 
   public async verifyShieldedAddress(address: string): Promise<boolean> {

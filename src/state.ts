@@ -81,6 +81,10 @@ export class ZkBobState {
     return await this.worker.nextTreeIndex(this.tokenAddress);
   }
 
+  public async getFirstIndex(): Promise<bigint | undefined> {
+    return await this.worker.firstTreeIndex(this.tokenAddress);
+  }
+
   public async rawState(): Promise<any> {
     return await this.worker.rawState(this.tokenAddress);
   }
