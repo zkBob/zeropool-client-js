@@ -6,7 +6,17 @@ export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
 export * from './errors'
+import { threads } from 'wasm-feature-detect';
 
+const WASM_ST_PATH = new URL('libzkbob-rs-wasm-web/libzkbob_rs_wasm_bg.wasm', import.meta.url).href;
+const WASM_MT_PATH = new URL('libzkbob-rs-wasm-web-mt/libzkbob_rs_wasm_bg.wasm', import.meta.url).href;
+
+export type Paths = {
+  workerMt?: string,
+  workerSt?: string,
+  wasmMt?: string,
+  wasmSt?: string,
+};
 
 export enum InitState {
   Started = 1,
@@ -39,12 +49,22 @@ async function fetchTxParamsHash(relayerUrl: string): Promise<string> {
 }
 
 export async function init(
-  wasmPath: string,
-  workerPath: string,
   snarkParams: SnarkConfigParams,
   relayerURL: string | undefined = undefined, // we'll try to fetch parameters hash for verification
-  statusCallback: InitLibCallback | undefined = undefined 
+  statusCallback: InitLibCallback | undefined = undefined,
+  paths: Paths = {}
 ): Promise<ZkBobLibState> {
+  // Safari doesn't support spawning Workers from inside other Workers yet.
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  const isMt = await threads() && !isSafari;
+  let wasmPath = paths.wasmSt || WASM_ST_PATH;
+  if (isMt) {
+    console.log('Using multi-threaded version');
+    wasmPath = paths.wasmMt || WASM_MT_PATH;
+  } else {
+    console.log('Using single-threaded version. Proof generation will be significantly slower.');
+  }
+  
   const fileCache = await FileCache.init();
 
   let lastProgress = {loaded: -1, total: -1};
@@ -69,7 +89,13 @@ export async function init(
   // Intercept all possible exceptions to process `Failed` status
   try {
     let loaded = false;
-    worker = wrap(new Worker(workerPath));
+
+    if (isMt) {
+      worker = wrap(new Worker(paths.workerMt || new URL('./workerMt.js', import.meta.url), { type: 'module' }));
+    } else {
+      worker = wrap(new Worker(paths.workerSt || new URL('./workerSt.js', import.meta.url), { type: 'module' }));
+    }
+    
     const initializer: Promise<void> = worker.initWasm(wasmPath, {
       txParams: snarkParams.transferParamsUrl,
       treeParams: snarkParams.treeParamsUrl,

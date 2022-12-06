@@ -2,13 +2,14 @@
   "compilerOptions": {
     "declaration": true,
     "strictNullChecks": true,
-    "target": "es2017",
+    "target": "es2020",
     "outDir": "lib",
-    "module": "CommonJS",
+    "module": "es2020",
     "moduleResolution": "node",
     "sourceMap": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
+    "experimentalDecorators": true,
     "lib": [
       "es2019",
       "dom"

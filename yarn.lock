@@ -2855,10 +2855,11 @@ levn@^0.3.0, levn@~0.3.0:
     prelude-ls "~1.1.2"
     type-check "~0.3.2"
 
-libzkbob-rs-wasm-web@0.8.0:
+"libzkbob-rs-wasm-web-mt@file:../libzkbob-rs/libzkbob-rs-wasm/web-mt":
   version "0.8.0"
-  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web/-/libzkbob-rs-wasm-web-0.8.0.tgz#b133aa0f1a381567fde082662ce4c4e46ea7aa47"
-  integrity sha512-EIPeDyl2wmpSMx299LnG0UCqg5wy8sr7TqfCdgPDxA8kH5Gu92MF12KOOOx7sfLpoYZ965y7MbkkuUfz5OzVAg==
+
+"libzkbob-rs-wasm-web@file:../libzkbob-rs/libzkbob-rs-wasm/web":
+  version "0.8.0"
 
 loader-runner@^4.2.0:
   version "4.3.0"
@@ -4401,6 +4402,11 @@ verror@1.10.0:
     assert-plus "^1.0.0"
     core-util-is "1.0.2"
     extsprintf "^1.2.0"
+
+wasm-feature-detect@^1.2.11:
+  version "1.3.0"
+  resolved "https://registry.yarnpkg.com/wasm-feature-detect/-/wasm-feature-detect-1.3.0.tgz#fb3fc5dd4a1ba950a429be843daad67fe048bc42"
+  integrity sha512-w9datO3OReMouWgKOelvu1CozmLK/VbkXOtlzNTanBJpR0uBHyUwS3EYdXf5vBPoHKYS0lpuYo91rpqMNIZM9g==
 
 watchpack@^2.4.0:
   version "2.4.0"
