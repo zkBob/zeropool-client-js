@@ -24,6 +24,8 @@ const BATCH_SIZE = 1000;
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
+const CORRUPT_STATE_ROLLBACK_ATTEMPTS = 2; // number of state restore attempts (via rollback)
+const CORRUPT_STATE_WIPE_ATTEMPTS = 100; // number of state restore attempts (via wipe)
 
 export interface RelayerInfo {
   root: string;
@@ -169,6 +171,10 @@ export class ZkBobClient {
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
   private jobsMonitors  = new Map<string, Promise<JobInfo>>();
+
+  // State self-healing
+  private rollbackAttempts = 0;
+  private wipeAttempts = 0;
 
   public static async create(config: ClientConfig): Promise<ZkBobClient> {
     const client = new ZkBobClient();
@@ -1573,20 +1579,36 @@ export class ZkBobClient {
     }
   }
 
+  // returns false when recovery is impossible
   private async verifyState(tokenAddress: string): Promise<boolean> {
     const zpState = this.zpStates[tokenAddress];
     const token = this.tokens[tokenAddress];
     const state = this.zpStates[tokenAddress];
 
-    const checkIndex = Number(await zpState.getNextIndex());
+    const checkIndex = await zpState.getNextIndex();
     const localRoot = await zpState.getRoot();
-    const poolRoot =  (await this.config.network.poolState(token.poolAddress, BigInt(checkIndex))).root;
+    const poolRoot =  (await this.config.network.poolState(token.poolAddress, checkIndex)).root;
 
     if (localRoot != poolRoot) {
-      console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch! Trying to restore...`);
+      console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
+      if (this.rollbackAttempts < CORRUPT_STATE_ROLLBACK_ATTEMPTS) {
+        this.rollbackAttempts++;
+        const rollbackIndex = await zpState.lastVerifiedIndex();
+        let realRollbackIndex = await zpState.rollback(rollbackIndex);
+        console.log(`🚑[StateVerify] Rollback tree to ${realRollbackIndex} index`);
+      } else if (this.wipeAttempts < CORRUPT_STATE_WIPE_ATTEMPTS) {
+        this.wipeAttempts++;
+        await zpState.clean();
+        console.log(`🚑[StateVerify] Wipe tree`);
+      } else {
+        return false;
+      }
 
-
-      return false;
+      await this.updateStateOptimisticWorker(tokenAddress);
+    } else {
+      await zpState.setLastVerifiedIndex(checkIndex);
+      this.rollbackAttempts = 0;
+      this.wipeAttempts = 0;
     }
 
     return true;

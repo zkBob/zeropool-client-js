@@ -134,4 +134,12 @@ export class ZkBobState {
   public async updateState(stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
     return await this.worker.updateState(this.tokenAddress, stateUpdate, siblings);
   }
+
+  public async lastVerifiedIndex(): Promise<bigint> {
+    return await this.worker.getTreeLastStableIndex(this.tokenAddress);
+  }
+
+  public async setLastVerifiedIndex(index: bigint): Promise<bigint> {
+    return await this.worker.setTreeLastStableIndex(this.tokenAddress, index);
+  }
 }

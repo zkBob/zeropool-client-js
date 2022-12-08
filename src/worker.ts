@@ -282,6 +282,18 @@ const obj = {
     });
   },
 
+  async getTreeLastStableIndex(address: string): Promise<bigint> {
+    return new Promise(async (resolve) => {
+      resolve(zpAccounts[address].treeGetStableIndex());
+    });
+  },
+
+  async setTreeLastStableIndex(address: string, index: bigint): Promise<void> {
+    return new Promise(async (resolve) => {
+      resolve(zpAccounts[address].treeSetStableIndex(index));
+    });
+  },
+
   async updateState(address: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
     return new Promise(async resolve => {
       resolve(zpAccounts[address].updateState(stateUpdate, siblings));
