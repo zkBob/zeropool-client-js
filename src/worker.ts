@@ -262,6 +262,26 @@ const obj = {
     });
   },
 
+  async rollbackState(address: string, index: bigint): Promise<bigint> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        resolve(zpAccounts[address].rollbackState(index));
+      } catch (e) {
+        reject(e)
+      }
+    });
+  },
+
+  async wipeState(address: string): Promise<void> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        resolve(zpAccounts[address].wipeState());
+      } catch (e) {
+        reject(e)
+      }
+    });
+  },
+
   async updateState(address: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
     return new Promise(async resolve => {
       resolve(zpAccounts[address].updateState(stateUpdate, siblings));

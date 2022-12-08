@@ -89,9 +89,17 @@ export class ZkBobState {
     return await this.worker.rawState(this.tokenAddress);
   }
 
-  // TODO: implement thiss method
+  // Wipe whole user's state
+  public async rollback(rollbackIndex: bigint): Promise<bigint> {
+    const realRollbackIndex = await this.worker.rollbackState(this.tokenAddress, rollbackIndex);
+    await this.history.rollbackHistory(Number(realRollbackIndex));
+
+    return realRollbackIndex;
+  }
+
+  // Wipe whole user's state
   public async clean(): Promise<void> {
-    //await this.account.cleanState();
+    await this.worker.wipeState(this.tokenAddress);
     await this.history.cleanHistory();
   }
 

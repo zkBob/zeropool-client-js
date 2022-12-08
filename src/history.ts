@@ -471,6 +471,47 @@ export class HistoryStorage {
     await this.db.delete(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(index, true));
   }
 
+  public async rollbackHistory(rollbackIndex: number): Promise<void> {
+    if (this.syncHistoryPromise) {
+      // wait while sync is finished (if started)
+      await this.syncHistoryPromise;
+    }
+
+    // rollback local objects
+    this.currentHistory.forEach((_value: HistoryRecord, key: number) => {
+      if (key >= rollbackIndex) {
+        this.currentHistory.delete(key);
+      }
+    });
+    let new_sync_index = -1;
+    this.unparsedMemo.forEach((_value: DecryptedMemo, key: number) => {
+      if (key >= rollbackIndex) {
+        this.unparsedMemo.delete(key);
+      } else if (key > new_sync_index) {
+        new_sync_index = key;
+      }
+    });
+    this.unparsedPendingMemo.forEach((_value: DecryptedMemo, key: number) => {
+      if (key >= rollbackIndex) {
+        this.unparsedPendingMemo.delete(key);
+      }
+    });
+
+
+    // Remove records after the specified idex from the database
+    await this.db.delete(TX_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
+    await this.db.delete(DECRYPTED_MEMO_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
+    await this.db.delete(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
+
+    // update sync_index
+    this.syncIndex = new_sync_index
+    if (this.syncIndex < 0) {
+      this.db.delete(HISTORY_STATE_TABLE, 'sync_index');
+    } else {
+      this.db.put(HISTORY_STATE_TABLE, this.syncIndex, 'sync_index');
+    }
+  }
+
   public async cleanHistory(): Promise<void> {
     if (this.syncHistoryPromise) {
       // wait while sync is finished (if started)
@@ -489,6 +530,7 @@ export class HistoryStorage {
     this.unparsedMemo.clear();
     this.unparsedPendingMemo.clear();
     this.currentHistory.clear();
+    this.failedHistory = [];
   }
 
   // ------- Private rouutines --------

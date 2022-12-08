@@ -1294,8 +1294,10 @@ export class ZkBobClient {
     return await this.zpStates[tokenAddress].rawState();
   }
   
-
-  // TODO: implement correct state cleaning
+  public async rollbackState(tokenAddress: string, index: bigint): Promise<bigint> {
+    return await this.zpStates[tokenAddress].rollback(index);
+  }
+  
   public async cleanState(tokenAddress: string): Promise<void> {
     await this.zpStates[tokenAddress].clean();
   }
