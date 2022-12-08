@@ -22,5 +22,6 @@ module.exports = {
   output: {
     path: path.join(process.cwd(), 'lib'),
     filename: '[name].js',
+    chunkFilename: '[name].worker.js',
   },
 };

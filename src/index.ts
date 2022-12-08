@@ -57,10 +57,14 @@ export async function init(
   // Safari doesn't support spawning Workers from inside other Workers yet.
   const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
   const isMt = await threads() && !isSafari;
+  
   let wasmPath = paths.wasmSt || WASM_ST_PATH;
+  let workerPath = paths.workerSt || new URL('./workerSt.js', import.meta.url);
+
   if (isMt) {
     console.log('Using multi-threaded version');
     wasmPath = paths.wasmMt || WASM_MT_PATH;
+    workerPath = paths.workerMt || new URL('./workerMt.js', import.meta.url);
   } else {
     console.log('Using single-threaded version. Proof generation will be significantly slower.');
   }
@@ -90,12 +94,7 @@ export async function init(
   try {
     let loaded = false;
 
-    if (isMt) {
-      worker = wrap(new Worker(paths.workerMt || new URL('./workerMt.js', import.meta.url), { type: 'module' }));
-    } else {
-      worker = wrap(new Worker(paths.workerSt || new URL('./workerSt.js', import.meta.url), { type: 'module' }));
-    }
-    
+    worker = wrap(new Worker(workerPath, { type: 'module' }));
     const initializer: Promise<void> = worker.initWasm(wasmPath, {
       txParams: snarkParams.transferParamsUrl,
       treeParams: snarkParams.treeParamsUrl,
