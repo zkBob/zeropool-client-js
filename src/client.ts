@@ -25,7 +25,7 @@ const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
 const CORRUPT_STATE_ROLLBACK_ATTEMPTS = 2; // number of state restore attempts (via rollback)
-const CORRUPT_STATE_WIPE_ATTEMPTS = 100; // number of state restore attempts (via wipe)
+const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via wipe)
 
 export interface RelayerInfo {
   root: string;
@@ -1339,6 +1339,8 @@ export class ZkBobClient {
     const nextIndex = Number(stateInfo.deltaIndex);
     const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
+    let readyToTransact = true;
+
     if (optimisticIndex > startIndex) {
       // Use partial tree loading if possible
       let birthindex = this.config.birthindex ?? 0;
@@ -1358,14 +1360,9 @@ export class ZkBobClient {
       }
 
       const startTime = Date.now();
-      
+    
       console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
-
-      
       const batches: Promise<BatchResult>[] = [];
-
-      let readyToTransact = true;
-
       for (let i = startIndex; i <= optimisticIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
         const oneBatch = this.fetchTransactionsOptimistic(token.relayerUrl, BigInt(i), BATCH_SIZE).then( async txs => {
           console.log(`Getting ${txs.length} transactions from index ${i}`);
@@ -1398,6 +1395,11 @@ export class ZkBobClient {
               memo: memo,
               commitment: commitment,
             }
+
+            // TESTING CASE: artifitial relayer glitch at a fixed index
+            //if (memo_idx == 284800 && this.wipeAttempts < 3) {
+            //  indexedTx.commitment = "25833f16e95ed85bb5570a670cca39f63a76e7a41f29e0504ee1efcea4121ce7";
+            //}
 
             // 3. Get txHash
             const txHash = tx.substr(1, 64);
@@ -1480,18 +1482,43 @@ export class ZkBobClient {
       const avgSpeed = msElapsed / totalRes.txCount
 
       console.log(`Sync finished in ${msElapsed / 1000} sec | ${totalRes.txCount} tx, avg speed ${avgSpeed.toFixed(1)} ms/tx`);
-
-      await this.verifyState(tokenAddress);
-
-      return readyToTransact;
     } else {
       zpState.history.setLastMinedTxIndex(nextIndex - OUTPLUSONE);
       zpState.history.setLastPendingTxIndex(-1);
 
       console.log(`Local state is up to date @${startIndex}`);
-
-      return true;
     }
+
+    // Self-healing code
+    const checkIndex = await zpState.getNextIndex();
+    const stableIndex = await zpState.lastVerifiedIndex();
+    if (checkIndex != stableIndex) {
+      const isStateCorrect = await this.verifyState(tokenAddress);
+      if (!isStateCorrect) {
+        console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
+        if (stableIndex > 0 && stableIndex < checkIndex &&
+          this.rollbackAttempts < CORRUPT_STATE_ROLLBACK_ATTEMPTS
+        ) {
+          let realRollbackIndex = await zpState.rollback(stableIndex);
+          console.log(`🚑[StateVerify] The user state was rollbacked to index ${realRollbackIndex} [attempt ${this.rollbackAttempts + 1}]`);
+          this.rollbackAttempts++;
+        } else if (this.wipeAttempts < CORRUPT_STATE_WIPE_ATTEMPTS) {
+          await zpState.clean();
+          console.log(`🚑[StateVerify] Full user state was wiped [attempt ${this.wipeAttempts + 1}]...`);
+          this.wipeAttempts++;
+        } else {
+          throw new InternalError(`Unable to synchronize pool state`);
+        }
+
+        // resync the state
+        return await this.updateStateOptimisticWorker(tokenAddress);
+      } else {
+        this.rollbackAttempts = 0;
+        this.wipeAttempts = 0;
+      }
+    }
+
+    return readyToTransact;
   }
 
   // Just fetch and process the new state without local state updating
@@ -1589,29 +1616,13 @@ export class ZkBobClient {
     const localRoot = await zpState.getRoot();
     const poolRoot =  (await this.config.network.poolState(token.poolAddress, checkIndex)).root;
 
-    if (localRoot != poolRoot) {
-      console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
-      if (this.rollbackAttempts < CORRUPT_STATE_ROLLBACK_ATTEMPTS) {
-        this.rollbackAttempts++;
-        const rollbackIndex = await zpState.lastVerifiedIndex();
-        let realRollbackIndex = await zpState.rollback(rollbackIndex);
-        console.log(`🚑[StateVerify] Rollback tree to ${realRollbackIndex} index`);
-      } else if (this.wipeAttempts < CORRUPT_STATE_WIPE_ATTEMPTS) {
-        this.wipeAttempts++;
-        await zpState.clean();
-        console.log(`🚑[StateVerify] Wipe tree`);
-      } else {
-        return false;
-      }
-
-      await this.updateStateOptimisticWorker(tokenAddress);
-    } else {
+    if (localRoot == poolRoot) {
       await zpState.setLastVerifiedIndex(checkIndex);
-      this.rollbackAttempts = 0;
-      this.wipeAttempts = 0;
+      
+      return true;
     }
 
-    return true;
+    return false;
   }
 
   public async verifyShieldedAddress(address: string): Promise<boolean> {
