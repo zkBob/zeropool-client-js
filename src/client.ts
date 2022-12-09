@@ -1505,6 +1505,13 @@ export class ZkBobClient {
         } else if (this.wipeAttempts < CORRUPT_STATE_WIPE_ATTEMPTS) {
           await zpState.clean();
           console.log(`🚑[StateVerify] Full user state was wiped [attempt ${this.wipeAttempts + 1}]...`);
+
+          if(this.rollbackAttempts > 0) {
+            // If the first wipe has no effect
+            // reset account birthday if presented
+            this.config.birthindex = undefined;
+          }
+
           this.wipeAttempts++;
         } else {
           throw new InternalError(`Unable to synchronize pool state`);
