@@ -32,6 +32,8 @@ const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold sto
 
 const MIN_TX_COUNT_FOR_STAT = 10;
 
+const MIN_TX_COUNT_FOR_STAT = 10;
+
 export interface RelayerInfo {
   root: string;
   optimisticRoot: string;
@@ -1360,6 +1362,15 @@ export class ZkBobClient {
       console.log(`🔥[HotSync] fetching transactions between ${startIndex} and ${optimisticIndex}...`);
 
       const startTime = Date.now();
+
+      const curStat: SyncStat = {
+        txCount: (optimisticIndex - startIndex) / OUTPLUSONE,
+        cdnTxCnt: 0,
+        decryptedLeafs: 0,
+        fullSync: startIndex == 0 ? true : false,
+        totalTime: 0,
+        timePerTx: 0,
+      };
 
       
       const batches: Promise<BatchResult>[] = [];
