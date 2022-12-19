@@ -1,17 +1,12 @@
 import { expose } from 'comlink';
-
-import { Proof, Params, TxParser, IndexedTx, ParseTxsResult, ParseTxsColdStorageResult,
-  default as init, initThreadPool, UserState, UserAccount,
-  StateUpdate, validateAddress, assembleAddress,
-  SnarkProof, ITransferData, IDepositData, IWithdrawData, IDepositPermittableData,
-} from 'libzkbob-rs-wasm-web';
-
+import { IndexedTx, ParseTxsResult, StateUpdate, SnarkProof, ITransferData, IDepositData, IWithdrawData, IDepositPermittableData } from 'libzkbob-rs-wasm-web';
 import { FileCache } from './file-cache';
+import { threads } from 'wasm-feature-detect';
 
-let txParams: Params;
-let treeParams: Params;
-let txParser: TxParser;
-let zpAccounts: { [tokenAddress: string]: UserAccount } = {};
+let txParams: any;
+let treeParams: any;
+let txParser: any;
+let zpAccounts: { [tokenAddress: string]: any } = {};
 let transferVk: any;
 let treeVk: any;
 
@@ -31,17 +26,31 @@ let loadingStage: LoadingStage = LoadingStage.Unknown;
 let loadedBytes: number = 0;
 let totalBytes: number = 0;
 
+let wasm: any;
+
 const obj = {
   async initWasm(
-    url: string,
     paramUrls: { txParams: string; treeParams: string },
     txParamsHash: string | undefined = undefined,  // skip hash checking when undefined
     vkUrls: {transferVkUrl: string, treeVkUrl: string},
   ) {
     loadingStage = LoadingStage.Init;
     console.info('Initializing web worker...');
-    await init(url);
-    await initThreadPool(navigator.hardwareConcurrency);
+    
+    // Safari doesn't support spawning Workers from inside other Workers yet.
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    const isMt = await threads() && !isSafari;
+    
+    if (isMt) {
+      console.log('Using multi-threaded version');
+      wasm = await import('libzkbob-rs-wasm-web-mt');
+      await wasm.default();
+      await wasm.initThreadPool(navigator.hardwareConcurrency);
+    } else {
+      console.log('Using single-threaded version. Proof generation will be significantly slower.');
+      wasm = await import('libzkbob-rs-wasm-web');
+      await wasm.default()
+    }
 
     const cache = await FileCache.init();
 
@@ -82,7 +91,7 @@ const obj = {
       loadingStage = LoadingStage.LoadObjects;
       await new Promise(resolve => setTimeout(resolve, 20)); // workaround to proper stage updating
       console.time(`Creating Params object`);
-      txParams = Params.fromBinary(new Uint8Array(txParamsData!));
+      txParams = wasm.Params.fromBinary(new Uint8Array(txParamsData!));
       console.timeEnd(`Creating Params object`);
 
     } else {
@@ -94,11 +103,11 @@ const obj = {
       loadingStage = LoadingStage.LoadObjects;
       await new Promise(resolve => setTimeout(resolve, 20)); // workaround to proper stage updating
       console.time(`Creating Params object`);
-      txParams = Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false);
+      txParams = wasm.Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false);
       console.timeEnd(`Creating Params object`);
     }
 
-    txParser = TxParser._new()
+    txParser = wasm.TxParser._new()
 
     console.time(`VK initializing`);
     transferVk = await (await fetch(vkUrls.transferVkUrl)).json();
@@ -121,7 +130,7 @@ const obj = {
   async proveTx(pub, sec) {
     return new Promise(async resolve => {
       console.debug('Web worker: proveTx');
-      const result = Proof.tx(txParams, pub, sec);
+      const result = wasm.Proof.tx(txParams, pub, sec);
       resolve(result);
     });
   },
@@ -129,7 +138,7 @@ const obj = {
   async proveTree(pub, sec) {
     return new Promise(async resolve => {
       console.debug('Web worker: proveTree');
-      const result = Proof.tree(treeParams, pub, sec);
+      const result = wasm.Proof.tree(treeParams, pub, sec);
       resolve(result);
     });
   },
@@ -147,8 +156,8 @@ const obj = {
     return new Promise(async resolve => {
       console.debug('Web worker: createAccount');
       try {
-        const state = await UserState.init(`zp.${networkName}.${userId}`);
-        const acc = new UserAccount(sk, state);
+        const state = await wasm.UserState.init(`zp.${networkName}.${userId}`);
+        const acc = new wasm.UserAccount(sk, state);
         zpAccounts[address] = acc;
       } catch (e) {
         console.error(e);
@@ -258,25 +267,25 @@ const obj = {
 
   async verifyTxProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
     return new Promise(async resolve => {
-      resolve(Proof.verify(transferVk!, inputs, proof));
+      resolve(wasm.Proof.verify(transferVk!, inputs, proof));
     });
   },
 
   async verifyTreeProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
     return new Promise(async resolve => {
-      resolve(Proof.verify(treeVk!, inputs, proof));
+      resolve(wasm.Proof.verify(treeVk!, inputs, proof));
     });
   },
 
   async verifyShieldedAddress(shieldedAddress: string): Promise<boolean> {
     return new Promise(async resolve => {
-      resolve(validateAddress(shieldedAddress));
+      resolve(wasm.validateAddress(shieldedAddress));
     });
   },
 
   async assembleAddress(d: string, p_d: string): Promise<string> {
     return new Promise(async resolve => {
-      resolve(assembleAddress(d, p_d));
+      resolve(wasm.assembleAddress(d, p_d));
     });
   }
 };
