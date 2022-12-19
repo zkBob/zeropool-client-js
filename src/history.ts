@@ -6,6 +6,8 @@ import { toCanonicalSignature } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 
+const LOG_HISTORY_SYNC = false;
+
 export enum HistoryTransactionType {
   Deposit = 1,
   TransferIn,
@@ -575,7 +577,9 @@ export class HistoryStorage {
       let newSyncIndex = this.syncIndex;
       for (const oneSet of historyRedords) {
         for (const oneRec of oneSet) {
-          console.log(`History record @${oneRec.index} has been created`);
+          if (LOG_HISTORY_SYNC) {
+            console.log(`History record @${oneRec.index} has been created`);
+          }
 
           this.currentHistory.set(oneRec.index, oneRec.record);
 

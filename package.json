@@ -26,9 +26,16 @@
     "hdwallet-babyjub": "^0.0.2",
     "idb": "^7.0.0",
     "libzkbob-rs-wasm-web": "file:../libzkbob-rs/libzkbob-rs-wasm/web",
+    "libzkbob-rs-wasm-web-mt": "file:../libzkbob-rs/libzkbob-rs-wasm/web-mt",
     "regenerator-runtime": "^0.13.9",
     "web3": "1.8.0",
-    "web3-utils": "1.8.0"
+    "@ethereumjs/util": "^8.0.2",
+    "web3-utils": "1.8.0",
+    "fast-sha256": "^1.3.0",
+    "@scure/bip32": "1.1.1",
+    "@scure/bip39": "1.1.0",
+    "@metamask/eth-sig-util": "5.0.0",
+    "wasm-feature-detect": "^1.2.11"
   },
   "devDependencies": {
     "@types/ethereum-protocol": "^1.0.1",

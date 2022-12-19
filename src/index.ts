@@ -1,13 +1,12 @@
 import { wrap } from 'comlink';
 import { SnarkConfigParams } from './config';
 import { FileCache } from './file-cache';
-export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState } from './client';
 export { TreeNode } from 'libzkbob-rs-wasm-web';
+export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState, SyncStat } from './client';
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
 export * from './errors'
-
 
 export enum InitState {
   Started = 1,
@@ -40,11 +39,9 @@ async function fetchTxParamsHash(relayerUrl: string): Promise<string> {
 }
 
 export async function init(
-  wasmPath: string,
-  workerPath: string,
   snarkParams: SnarkConfigParams,
   relayerURL: string | undefined = undefined, // we'll try to fetch parameters hash for verification
-  statusCallback: InitLibCallback | undefined = undefined 
+  statusCallback: InitLibCallback | undefined = undefined,
 ): Promise<ZkBobLibState> {
   const fileCache = await FileCache.init();
 
@@ -70,8 +67,9 @@ export async function init(
   // Intercept all possible exceptions to process `Failed` status
   try {
     let loaded = false;
-    worker = wrap(new Worker(workerPath));
-    const initializer: Promise<void> = worker.initWasm(wasmPath, {
+
+    worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
+    const initializer: Promise<void> = worker.initWasm({
       txParams: snarkParams.transferParamsUrl,
       treeParams: snarkParams.treeParamsUrl,
     }, txParamsHash, 
