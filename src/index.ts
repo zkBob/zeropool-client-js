@@ -6,10 +6,6 @@ export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
 export * from './errors'
-import { threads } from 'wasm-feature-detect';
-
-const WASM_ST_PATH = new URL('libzkbob-rs-wasm-web/libzkbob_rs_wasm_bg.wasm', import.meta.url).href;
-const WASM_MT_PATH = new URL('libzkbob-rs-wasm-web-mt/libzkbob_rs_wasm_bg.wasm', import.meta.url).href;
 
 export type Paths = {
   workerMt?: string,
@@ -52,23 +48,7 @@ export async function init(
   snarkParams: SnarkConfigParams,
   relayerURL: string | undefined = undefined, // we'll try to fetch parameters hash for verification
   statusCallback: InitLibCallback | undefined = undefined,
-  paths: Paths = {}
 ): Promise<ZkBobLibState> {
-  // Safari doesn't support spawning Workers from inside other Workers yet.
-  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-  const isMt = await threads() && !isSafari;
-  
-  let wasmPath = paths.wasmSt || WASM_ST_PATH;
-  let workerPath = paths.workerSt || new URL('./workerSt.js', import.meta.url);
-
-  if (isMt) {
-    console.log('Using multi-threaded version');
-    wasmPath = paths.wasmMt || WASM_MT_PATH;
-    workerPath = paths.workerMt || new URL('./workerMt.js', import.meta.url);
-  } else {
-    console.log('Using single-threaded version. Proof generation will be significantly slower.');
-  }
-  
   const fileCache = await FileCache.init();
 
   let lastProgress = {loaded: -1, total: -1};
@@ -94,8 +74,8 @@ export async function init(
   try {
     let loaded = false;
 
-    worker = wrap(new Worker(workerPath, { type: 'module' }));
-    const initializer: Promise<void> = worker.initWasm(wasmPath, {
+    worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
+    const initializer: Promise<void> = worker.initWasm({
       txParams: snarkParams.transferParamsUrl,
       treeParams: snarkParams.treeParamsUrl,
     }, txParamsHash, 

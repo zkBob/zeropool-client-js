@@ -2,8 +2,7 @@ const path = require('path');
 
 module.exports = {
   entry: {
-    workerSt: './src/workerSt.ts',
-    workerMt: './src/workerMt.ts',
+    workerSt: './src/worker.ts',
   },
   target: 'webworker',
   mode: 'production',
@@ -22,6 +21,5 @@ module.exports = {
   output: {
     path: path.join(process.cwd(), 'lib'),
     filename: '[name].js',
-    chunkFilename: '[name].worker.js',
   },
 };
