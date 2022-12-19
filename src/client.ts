@@ -1769,14 +1769,27 @@ export class ZkBobClient {
           zpState.history.saveDecryptedMemo(aMemo, false);
         });
 
+
         syncResult.txCount = result.txCnt;
         syncResult.decryptedLeafs = result.decryptedLeafsCnt;
         syncResult.firstIndex = actualRangeStart;
         syncResult.nextIndex = actualRangeEnd;
         syncResult.totalTime = Date.now() - startTime;
+        
+        const isStateCorrect = await this.verifyState(tokenAddress);
+        if (!isStateCorrect) {
+          console.warn(`🧊[ColdSync] Merkle tree root at index ${await zpState.getNextIndex()} mistmatch! Wiping the state...`);
+          await zpState.clean();  // rollback to 0
+          this.skipColdStorage = true;  // prevent cold storage usage
 
-        console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
-        console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
+          syncResult.txCount = 0;
+          syncResult.decryptedLeafs = 0;
+          syncResult.firstIndex = 0;
+          syncResult.nextIndex = 0;
+        } else {
+          console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
+          console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
+        }
         
       } catch (err) {
         console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
