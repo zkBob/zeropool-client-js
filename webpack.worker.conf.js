@@ -1,9 +1,7 @@
 const path = require('path');
 
 module.exports = {
-  entry: {
-    workerSt: './src/worker.ts',
-  },
+  entry: './src/worker.ts',
   target: 'webworker',
   mode: 'production',
   module: {

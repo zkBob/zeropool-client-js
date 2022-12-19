@@ -7,13 +7,6 @@ export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './his
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
 export * from './errors'
 
-export type Paths = {
-  workerMt?: string,
-  workerSt?: string,
-  wasmMt?: string,
-  wasmSt?: string,
-};
-
 export enum InitState {
   Started = 1,
   DownloadingParams,
