@@ -1,5 +1,5 @@
 import { Tokens } from './config';
-import { ethAddrToBuf, toCompactSignature, truncateHexPrefix, toTwosComplementHex, addressFromSignature } from './utils';
+import { ethAddrToBuf, toCompactSignature, truncateHexPrefix, toTwosComplementHex, addressFromSignature, isRangesIntersected } from './utils';
 import { ZkBobState } from './state';
 import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
@@ -7,15 +7,19 @@ import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
 import { EphemeralAddress } from './ephemeral';
 
+const LOG_STATE_HOTSYNC = false;
+
 import { 
   Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
-  ParseTxsResult, StateUpdate, IndexedTx 
+  ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, IndexedTx 
 } from 'libzkbob-rs-wasm-web';
 
 import { 
   InternalError, NetworkError, PoolJobError, RelayerError, RelayerJobError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
+import { MAX_UINT64 } from '@ethereumjs/util';
+//import { SyncStat, SyncStat } from '.';
 
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const MIN_TX_AMOUNT = BigInt(50000000);
@@ -23,6 +27,10 @@ const DEFAULT_TX_FEE = BigInt(100000000);
 const BATCH_SIZE = 1000;
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
+const DEFAULT_DENOMINATOR = BigInt(1000000000);
+const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
+
+const MIN_TX_COUNT_FOR_STAT = 10;
 
 export interface RelayerInfo {
   root: string;
@@ -31,17 +39,17 @@ export interface RelayerInfo {
   optimisticDeltaIndex: bigint;
 }
 
-export interface TreeState {
-  root: bigint;
-  index: bigint;
-}
-
 const isRelayerInfo = (obj: any): obj is RelayerInfo => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('root') && typeof obj.root === 'string' &&
     obj.hasOwnProperty('optimisticRoot') && typeof obj.optimisticRoot === 'string' &&
     obj.hasOwnProperty('deltaIndex') && typeof obj.deltaIndex === 'number' &&
     obj.hasOwnProperty('optimisticDeltaIndex') && typeof obj.optimisticDeltaIndex === 'number';
+}
+
+export interface TreeState {
+  root: bigint;
+  index: bigint;
 }
 
 export interface BatchResult {
@@ -140,6 +148,28 @@ export interface LimitsFetch {
   tier: number;
 }
 
+// Used to collect state synchronization statistic
+// It could be helpful to monitor average sync time
+export interface SyncStat {
+  txCount: number;  // total txs count (relayer + CDN)
+  cdnTxCnt: number; // number of transactions fetched in binary format from CDN (cold storage)
+  decryptedLeafs: number; // deposit/withdrawal = 1 leaf,
+                          // transfer = 1 + notes_cnt leafs
+  fullSync: boolean;  // true in case of bulding full Merkle tree on the client
+
+  totalTime: number; // msec
+  timePerTx: number;  // msec
+}
+
+export interface PartialSyncResult {
+  txCount: number;  // total txs count (relayer + CDN)
+  decryptedLeafs: number; // deposit/withdrawal = 1 leaf,
+                          // transfer = 1 + notes_cnt leafs
+  firstIndex: number; // first index of the synced range
+  nextIndex: number;  // index after synced range
+  totalTime: number; // msec
+}
+
 export interface ClientConfig {
   /** Spending key. */
   sk: Uint8Array;
@@ -159,6 +189,8 @@ export class ZkBobClient {
   private config: ClientConfig;
   private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
   private updateStatePromise: Promise<boolean> | undefined;
+  private syncStats: SyncStat[] = [];
+  private skipColdStorage: boolean = false;
 
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
@@ -179,8 +211,14 @@ export class ZkBobClient {
     }
 
     for (const [address, token] of Object.entries(config.tokens)) {
-      const denominator = await config.network.getDenominator(token.poolAddress);
-      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, address, client.worker);
+      let denominator: bigint
+      try {
+        denominator = await config.network.getDenominator(token.poolAddress);
+      } catch (err) {
+        console.error(`Cannot fetch denominator value from the relayer, will using default 10^9: ${err}`);
+        denominator = DEFAULT_DENOMINATOR;
+      }
+      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, address, client.worker, token.coldStorageConfigPath);
     }
 
     return client;
@@ -1296,18 +1334,32 @@ export class ZkBobClient {
 
     const zpState = this.zpStates[tokenAddress];
     const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
 
-    const startIndex = Number(await zpState.getNextIndex());
+    let startIndex = Number(await zpState.getNextIndex());
 
     const stateInfo = await this.info(token.relayerUrl);
     const nextIndex = Number(stateInfo.deltaIndex);
     const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
     if (optimisticIndex > startIndex) {
-      const startTime = Date.now();
+      // Use the cold storage first
+      const coldResult = await this.loadColdStorageTxs(tokenAddress, startIndex);
+
+      const curStat: SyncStat = {
+        txCount: (optimisticIndex - startIndex) / OUTPLUSONE,
+        cdnTxCnt: coldResult.txCount,
+        decryptedLeafs: coldResult.decryptedLeafs,
+        fullSync: startIndex == 0 ? true : false,
+        totalTime: coldResult.totalTime,
+        timePerTx: 0,
+      };
+
+      // change hot sync position
+      startIndex = coldResult.nextIndex;
       
-      console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
+      console.log(`🔥[HotSync] fetching transactions between ${startIndex} and ${optimisticIndex}...`);
+
+      const startTime = Date.now();
 
       
       const batches: Promise<BatchResult>[] = [];
@@ -1316,7 +1368,7 @@ export class ZkBobClient {
 
       for (let i = startIndex; i <= optimisticIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
         const oneBatch = this.fetchTransactionsOptimistic(token.relayerUrl, BigInt(i), BATCH_SIZE).then( async txs => {
-          console.log(`Getting ${txs.length} transactions from index ${i}`);
+          console.log(`🔥[HotSync] got ${txs.length} transactions from index ${i}`);
 
           const batchState = new Map<number, StateUpdate>();
           
@@ -1341,6 +1393,9 @@ export class ZkBobClient {
             // 2. Get transaction commitment
             const commitment = tx.substr(65, 64)
             
+            // TEST-CASE: sync tree partially
+            //if (memo_idx >= 85248) continue;
+
             const indexedTx: IndexedTx = {
               index: memo_idx,
               memo: memo,
@@ -1366,8 +1421,9 @@ export class ZkBobClient {
             const parseResult: ParseTxsResult = await this.worker.parseTxs(this.config.sk, indexedTxs);
             const decryptedMemos = parseResult.decryptedMemos;
             batchState.set(i, parseResult.stateUpdate);
-            //state.account.updateState(parseResult.stateUpdate);
-            this.logStateSync(i, i + txs.length * OUTPLUSONE, decryptedMemos);
+            if (LOG_STATE_HOTSYNC) {
+              this.logStateSync(i, i + txs.length * OUTPLUSONE, decryptedMemos);
+            }
             for (let decryptedMemoIndex = 0; decryptedMemoIndex < decryptedMemos.length; ++decryptedMemoIndex) {
               // save memos corresponding to the our account to restore history
               const myMemo = decryptedMemos[decryptedMemoIndex];
@@ -1413,7 +1469,9 @@ export class ZkBobClient {
       for (const idx of idxs) {
         const oneStateUpdate = totalRes.state.get(idx);
         if (oneStateUpdate !== undefined) {
-          await state.updateState(oneStateUpdate);
+          await zpState.updateState(oneStateUpdate);
+
+          curStat.decryptedLeafs += oneStateUpdate.newLeafs.length;
         } else {
           throw Error(`Cannot find state batch at index ${idx}`);
         }
@@ -1424,10 +1482,24 @@ export class ZkBobClient {
       zpState.history.setLastPendingTxIndex(totalRes.maxPendingIndex);
 
 
-      const msElapsed = Date.now() - startTime;
-      const avgSpeed = msElapsed / totalRes.txCount
+      const hotSyncTime = Date.now() - startTime;
+      const hotSyncTimePerTx = hotSyncTime / totalRes.txCount;
 
-      console.log(`Sync finished in ${msElapsed / 1000} sec | ${totalRes.txCount} tx, avg speed ${avgSpeed.toFixed(1)} ms/tx`);
+      curStat.txCount = totalRes.txCount + coldResult.txCount;
+      curStat.cdnTxCnt = coldResult.txCount;
+      curStat.totalTime = hotSyncTime + coldResult.totalTime;
+      curStat.timePerTx = curStat.totalTime / curStat.txCount;
+
+      // save relevant stats only
+      if (curStat.txCount >= MIN_TX_COUNT_FOR_STAT) {
+        this.syncStats.push(curStat);
+      }
+
+
+      console.log(`🔥[HotSync] finished in ${hotSyncTime / 1000} sec | ${totalRes.txCount} tx, avg speed ${hotSyncTimePerTx.toFixed(1)} ms/tx`);
+      if (coldResult.txCount > 0) {
+        console.log(`🧊🔥[TotalSync] finished in ${curStat.totalTime / 1000} sec | ${curStat.txCount} tx, avg speed ${curStat.timePerTx.toFixed(1)} ms/tx`);
+      }
 
       return readyToTransact;
     } else {
@@ -1523,6 +1595,87 @@ export class ZkBobClient {
     if (startIndex < endIndex) {
       console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${endIndex - OUTPLUSONE})`);
     }
+  }
+
+  private async loadColdStorageTxs(tokenAddress: string, fromIndex?: number, toIndex?: number): Promise<PartialSyncResult> {
+    const token = this.tokens[tokenAddress];
+    const zpState = this.zpStates[tokenAddress];
+
+    const coldConfig = zpState.coldStorageConfig;
+    const OUTPLUSONE = CONSTANTS.OUT + 1;
+
+    const startRange = fromIndex ?? 0;  // inclusively
+    const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
+    const actualRangeStart = Math.max(startRange, Number(coldConfig.index_from));
+    const actualRangeEnd = Math.min(endRange, Number(coldConfig.next_index));
+
+    const syncResult: PartialSyncResult = {
+      txCount: 0,
+      decryptedLeafs: 0,
+      firstIndex: startRange,
+      nextIndex: startRange,
+      totalTime: 0,
+    };
+
+    if (this.skipColdStorage == false &&
+        (startRange % OUTPLUSONE) == 0 && 
+        (endRange % OUTPLUSONE) == 0 &&
+        isRangesIntersected(startRange, endRange, Number(coldConfig.index_from), Number(coldConfig.next_index)) &&
+        ((actualRangeEnd - actualRangeStart) / OUTPLUSONE) >= COLD_STORAGE_USAGE_THRESHOLD
+    ) {
+      const startTime = Date.now();
+
+      // try get txs from the cold storage
+      try {
+        console.log(`🧊[ColdSync] loading txs up to index ${zpState.coldStorageConfig.next_index}...`);
+        const coldStorageBaseAddr = token.coldStorageConfigPath.substring(0, token.coldStorageConfigPath.lastIndexOf('/'));
+        const promises = zpState.coldStorageConfig.bulks
+          .filter(aBulk => {
+            return isRangesIntersected(actualRangeStart, actualRangeEnd, Number(aBulk.index_from), Number(aBulk.next_index))
+          })
+          .map(async (bulkInfo) => {
+            let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
+            if (response.ok) {
+              let aBulk = await response.arrayBuffer();
+              if (aBulk.byteLength == bulkInfo.bytes) {
+                console.log(`🧊[ColdSync] got bulk ${bulkInfo.filename} with ${bulkInfo.tx_count} txs (${bulkInfo.bytes} bytes)`);
+
+                return new Uint8Array(aBulk);
+              }
+
+              //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: got ${aBulk.byteLength} bytes, expected ${bulkInfo.bytes} bytes`);
+              //return new Uint8Array();
+              throw new InternalError(`Cold storage corrupted (invalid file size: ${aBulk.byteLength})`)
+            } else {
+              //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: response code ${response.status} (${response.statusText})`);
+              //return new Uint8Array();
+              throw new InternalError(`Couldn't load cold storage (invalid response code: ${response.status})`)
+            }
+          });
+        
+        let bulksData = (await Promise.all(promises)).filter(data => data.length > 0);
+        
+
+        let result: ParseTxsColdStorageResult = await zpState.updateStateColdStorage(bulksData, BigInt(actualRangeStart), BigInt(actualRangeEnd));
+        result.decryptedMemos.forEach((aMemo) => {
+          zpState.history.saveDecryptedMemo(aMemo, false);
+        });
+
+        syncResult.txCount = result.txCnt;
+        syncResult.decryptedLeafs = result.decryptedLeafsCnt;
+        syncResult.firstIndex = actualRangeStart;
+        syncResult.nextIndex = actualRangeEnd;
+        syncResult.totalTime = Date.now() - startTime;
+
+        console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
+        console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
+        
+      } catch (err) {
+        console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
+      }
+    }
+
+    return syncResult;
   }
 
   public async verifyShieldedAddress(address: string): Promise<boolean> {
@@ -1707,4 +1860,27 @@ export class ZkBobClient {
     const ephPool = this.zpStates[tokenAddress].ephemeralPool;
     return ephPool.getEphemeralAddressPrivateKey(index);
   }
+
+  // ----------------=========< Statistic Routines >=========-----------------
+  // | Calculating sync time                                                 |
+  // -------------------------------------------------------------------------
+  public getStatFullSync(): SyncStat | undefined {
+    for (const aStat of this.syncStats) {
+      if (aStat.fullSync) {
+        return aStat;
+      }
+    }
+
+    return undefined; // relevant stat doesn't found
+  }
+
+  // milliseconds
+  public getAverageTimePerTx(): number | undefined {
+    if (this.syncStats.length > 0) {
+      return this.syncStats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / this.syncStats.length;
+    }
+
+    return undefined; // relevant stat doesn't found
+  }
+  
 }

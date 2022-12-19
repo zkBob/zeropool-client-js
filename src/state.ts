@@ -4,6 +4,8 @@ import { bufToHex } from './utils';
 import { hash } from 'tweetnacl';
 import { EphemeralPool } from './ephemeral';
 import { NetworkType } from './network-type';
+import { ColdStorageConfig } from './coldstorage';
+import { InternalError } from './errors';
 
 export class ZkBobState {
   public denominator: bigint;
@@ -11,12 +13,21 @@ export class ZkBobState {
   public ephemeralPool: EphemeralPool;
   public tokenAddress: string;
   public worker: any;
+  public coldStorageConfig: ColdStorageConfig;
   
   // Mapping shieldedAddress -> isOwnAddress (local cache)
   // need to decrease time in isOwnAddress() function 
   private shieldedAddressCache = new Map<string, Promise<boolean>>();
 
-  public static async create(sk: Uint8Array, networkName: string, rpcUrl: string, denominator: bigint, tokenAddress: string, worker: any): Promise<ZkBobState> {
+  public static async create(
+    sk: Uint8Array,
+    networkName: string,
+    rpcUrl: string,
+    denominator: bigint,
+    tokenAddress: string,
+    worker: any,
+    bulkConfigPath: string | undefined = undefined,
+  ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
     zpState.denominator = denominator;
     
@@ -28,6 +39,19 @@ export class ZkBobState {
 
     let network = networkName as NetworkType;
     zpState.ephemeralPool = await EphemeralPool.init(sk, tokenAddress, network, rpcUrl, denominator);
+
+    if (bulkConfigPath !== undefined) {
+      try {
+        let response = await fetch(bulkConfigPath);
+        let config: ColdStorageConfig = await response.json();
+        if (config.network.toLowerCase() != networkName.toLowerCase()) {
+          throw new InternalError('Incorrect cold storage configuration');
+        }
+        zpState.coldStorageConfig = config;
+      } catch (err) {
+        console.error(`Cannot initialize cold storage: ${err}`);
+      }
+    }
 
     return zpState;
   }
@@ -113,5 +137,9 @@ export class ZkBobState {
 
   public async updateState(stateUpdate: StateUpdate): Promise<void> {
     return await this.worker.updateState(this.tokenAddress, stateUpdate);
+  }
+
+  public async updateStateColdStorage(bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<any> {
+    return await this.worker.updateStateColdStorage(this.tokenAddress, bulks, indexFrom, indexTo);
   }
 }

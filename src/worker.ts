@@ -253,6 +253,18 @@ const obj = {
     });
   },
 
+  async updateStateColdStorage(address: string, bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<ParseTxsColdStorageResult> {
+    return new Promise(async (resolve, reject) => {
+      console.debug('Web worker: updateStateColdStorage');
+      try {
+        let result = zpAccounts[address].updateStateColdStorage(bulks, indexFrom, indexTo);
+        resolve(result);
+      } catch (e) {
+        reject(e)
+      }
+    });
+  },
+
   async verifyTxProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
     return new Promise(async resolve => {
       resolve(wasm.Proof.verify(transferVk!, inputs, proof));

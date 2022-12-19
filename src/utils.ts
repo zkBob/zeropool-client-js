@@ -326,3 +326,23 @@ export function addressFromSignature(signature: string, signedData: string): str
 
   return addHexPrefix(bufToHex(addrBuf));
 }
+
+// 'from' boundaries are inclusively, 'to' ones are exclusively
+export function isRangesIntersected(r1from: number, r1to: number, r2from: number, r2to: number): boolean {
+  if (r1from < r1to && r2from < r2to && r1from < r2to && r1to > r2from) {
+    return true;
+  }
+  return false;
+}
+
+export function rangesIntersectionLength(r1from: number, r1to: number, r2from: number, r2to: number): number {
+  if (isRangesIntersected(r1from, r1to, r2from, r2to)) {
+    const intersectStart = Math.max(r1from, r2from);
+    const intersectEnd = Math.min(r1to, r2to);
+    if (intersectEnd > intersectStart) {
+      return intersectEnd - intersectStart;
+    }
+  }
+
+  return 0;
+}
