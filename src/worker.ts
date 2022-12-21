@@ -1,5 +1,5 @@
 import { expose } from 'comlink';
-import { IndexedTx, ParseTxsResult, StateUpdate, SnarkProof, ITransferData, IDepositData, IWithdrawData, IDepositPermittableData } from 'libzkbob-rs-wasm-web';
+import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, ITransferData, IDepositData, IWithdrawData, IDepositPermittableData } from 'libzkbob-rs-wasm-web';
 import { FileCache } from './file-cache';
 import { threads } from 'wasm-feature-detect';
 
