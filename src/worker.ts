@@ -308,8 +308,13 @@ const obj = {
   },
 
   async updateState(address: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
-    return new Promise(async resolve => {
-      resolve(zpAccounts[address].updateState(stateUpdate, siblings));
+    return new Promise(async (resolve, reject) => {
+      try {
+        let result = zpAccounts[address].updateState(stateUpdate, siblings);
+        resolve(result)
+      } catch (e) {
+        reject(e)
+      }
     });
   },
 

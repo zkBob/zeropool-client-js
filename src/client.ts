@@ -1442,20 +1442,12 @@ export class ZkBobClient {
 
             // 2. Get transaction commitment
             const commitment = tx.substr(65, 64)
-            
-            // TEST-CASE: sync tree partially
-            //if (memo_idx >= 85248) continue;
 
             const indexedTx: IndexedTx = {
               index: memo_idx,
               memo: memo,
               commitment: commitment,
             }
-
-            // TESTING CASE: artifitial relayer glitch at a fixed index
-            //if (memo_idx == 284800 && this.wipeAttempts < 3) {
-            //  indexedTx.commitment = "25833f16e95ed85bb5570a670cca39f63a76e7a41f29e0504ee1efcea4121ce7";
-            //}
 
             // 3. Get txHash
             const txHash = tx.substr(1, 64);
@@ -1524,11 +1516,17 @@ export class ZkBobClient {
       for (const idx of idxs) {
         const oneStateUpdate = totalRes.state.get(idx);
         if (oneStateUpdate !== undefined) {
-          await zpState.updateState(oneStateUpdate, siblings);
+          try {
+            await zpState.updateState(oneStateUpdate, siblings);
+          } catch (err) {
+            const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
+            console.warn(`🔥[HotSync] cannot update state from index ${idx}${siblingsDescr}`);
+            throw new InternalError(`Unable to synchronize pool state`);
+          }
 
           curStat.decryptedLeafs += oneStateUpdate.newLeafs.length;
         } else {
-          throw Error(`Cannot find state batch at index ${idx}`);
+          throw new InternalError(`Cannot find state batch at index ${idx}`);
         }
       }
 
@@ -1909,18 +1907,6 @@ export class ZkBobClient {
     const headers = {'content-type': 'application/json;charset=UTF-8'};
 
     const siblings = await this.fetchJson(url.toString(), {headers});
-    // TODO: here is a test case only, remove after testing
-    /*let siblings: string[] = [];
-    if (index == 278016) {
-      siblings = [
-        "0900000000021e0f3a711be80e44496151924743c5587860a3fbde0f283659c9d0d21659c544b5",
-        "0a00000000010e11de590842d36b791ffa3c0d15cfdc89d44dfe77c9254102cffe892718788c3b",
-        "0b0000000000861cb6c5ce6d5849ff46f84dfb01bcda53923f9a25cb00798112dcb7b323b6301a",
-        "0c000000000042010b42a01303918e0323f44294ad8fbbfdca86a967ee2c2b5775a866ed1cca2b",
-        "0d00000000002004be1969bae104b72efcc0ac9e887fa1d8c6a581e7cbfa769663c5f11ae39f29",
-        "12000000000000297f215cef4bd2b5991071b43389a9de1d3b947538612a62daab13aa29c13d3f"
-      ];
-    }*/
     if (!Array.isArray(siblings)) {
       throw new RelayerError(200, `Response should be an array`);
     }

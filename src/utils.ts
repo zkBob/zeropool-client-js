@@ -151,8 +151,12 @@ export class HexStringWriter {
     this.buf += hex;
   }
 
-  writeBigInt(num: bigint, numBytes: number) {
-    this.buf += toTwosComplementHex(num, numBytes);
+  writeBigInt(num: bigint, numBytes: number, le: boolean = false) {
+    let hex = toTwosComplementHex(num, numBytes);
+    if (le) {
+      hex = hex.match(/../g)!.reverse().join('');
+    }
+    this.buf += hex;
   }
 
   writeBigIntArray(nums: bigint[], numBytes: number) {
@@ -332,7 +336,7 @@ export function nodeToHex(node: TreeNode): string {
   const writer = new HexStringWriter();
   writer.writeNumber(node.height, 1);
   writer.writeNumber(node.index, 6);
-  writer.writeBigInt(BigInt(node.value), 32);
+  writer.writeBigInt(BigInt(node.value), 32, true);
 
   return writer.toString();
 }
@@ -341,7 +345,7 @@ export function hexToNode(data: string): TreeNode | null {
   const reader = new HexStringReader(data);
   const height = reader.readNumber(1);
   const index = reader.readNumber(6);
-  const value = reader.readBigInt(32);
+  const value = reader.readBigInt(32, true);
 
   if (height != null && index != null && value != null) {
     return { height, index, value: value.toString()};
