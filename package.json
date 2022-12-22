@@ -1,6 +1,6 @@
 {
   "name": "zkbob-client-js",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "zkBob integration library",
   "repository": "git@github.com:zkBob/libzkbob-client-js.git",
   "author": "Dmitry Vdovin <voidxnull@gmail.com>",
@@ -17,10 +17,16 @@
     "clean": "rm -rf lib/"
   },
   "dependencies": {
+    "@ethereumjs/util": "^8.0.2",
+    "@metamask/eth-sig-util": "5.0.0",
+    "@scure/bip32": "1.1.1",
+    "@scure/bip39": "1.1.0",
     "comlink": "^4.3.1",
+    "fast-sha256": "^1.3.0",
     "hdwallet-babyjub": "^0.0.2",
     "idb": "^7.0.0",
-    "libzkbob-rs-wasm-web": "0.8.0",
+    "libzkbob-rs-wasm-web": "0.9.0",
+    "libzkbob-rs-wasm-web-mt": "0.9.0",
     "regenerator-runtime": "^0.13.9",
     "web3": "1.8.0",
     "@ethereumjs/util": "^8.0.2",
@@ -28,15 +34,16 @@
     "fast-sha256": "^1.3.0",
     "@scure/bip32": "1.1.1",
     "@scure/bip39": "1.1.0",
-    "@metamask/eth-sig-util": "5.0.0"
+    "@metamask/eth-sig-util": "5.0.0",
+    "wasm-feature-detect": "^1.2.11"
   },
   "devDependencies": {
+    "@types/ethereum-protocol": "^1.0.1",
+    "@types/web3": "1.0.20",
     "ts-loader": "^9.2.6",
     "typescript": "^4.1.2",
     "webpack": "^5.64.2",
-    "webpack-cli": "^4.9.1",
-    "@types/ethereum-protocol": "^1.0.1",
-    "@types/web3": "1.0.20"
+    "webpack-cli": "^4.9.1"
   },
   "resolutions": {
     "@types/responselike": "1.0.0"

@@ -4,6 +4,8 @@ import { numberToHex, padLeft } from 'web3-utils';
 import { NetworkType } from './network-type';
 import { InternalError } from './errors';
 
+import { TreeNode } from 'libzkbob-rs-wasm-web';
+
 const util = require('ethereumjs-util');
 
 // It's a healthy-man function
@@ -134,7 +136,6 @@ export function isEqualBuffers(buf1: Uint8Array, buf2: Uint8Array): boolean {
   return true;
 }
 
-
 export class HexStringWriter {
   buf: string;
 
@@ -150,8 +151,12 @@ export class HexStringWriter {
     this.buf += hex;
   }
 
-  writeBigInt(num: bigint, numBytes: number) {
-    this.buf += toTwosComplementHex(num, numBytes);
+  writeBigInt(num: bigint, numBytes: number, le: boolean = false) {
+    let hex = toTwosComplementHex(num, numBytes);
+    if (le) {
+      hex = hex.match(/../g)!.reverse().join('');
+    }
+    this.buf += hex;
   }
 
   writeBigIntArray(nums: bigint[], numBytes: number) {
@@ -325,4 +330,46 @@ export function addressFromSignature(signature: string, signedData: string): str
   const addrBuf = util.pubToAddress(pub);
 
   return addHexPrefix(bufToHex(addrBuf));
+}
+
+export function nodeToHex(node: TreeNode): string {
+  const writer = new HexStringWriter();
+  writer.writeNumber(node.height, 1);
+  writer.writeNumber(node.index, 6);
+  writer.writeBigInt(BigInt(node.value), 32, true);
+
+  return writer.toString();
+}
+
+export function hexToNode(data: string): TreeNode | null {
+  const reader = new HexStringReader(data);
+  const height = reader.readNumber(1);
+  const index = reader.readNumber(6);
+  const value = reader.readBigInt(32, true);
+
+  if (height != null && index != null && value != null) {
+    return { height, index, value: value.toString()};
+  }
+  
+  return null;
+}
+
+// 'from' boundaries are inclusively, 'to' ones are exclusively
+export function isRangesIntersected(r1from: number, r1to: number, r2from: number, r2to: number): boolean {
+  if (r1from < r1to && r2from < r2to && r1from < r2to && r1to > r2from) {
+    return true;
+  }
+  return false;
+}
+
+export function rangesIntersectionLength(r1from: number, r1to: number, r2from: number, r2to: number): number {
+  if (isRangesIntersected(r1from, r1to, r2from, r2to)) {
+    const intersectStart = Math.max(r1from, r2from);
+    const intersectEnd = Math.min(r1to, r2to);
+    if (intersectEnd > intersectStart) {
+      return intersectEnd - intersectStart;
+    }
+  }
+
+  return 0;
 }
