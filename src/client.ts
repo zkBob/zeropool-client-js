@@ -1,5 +1,8 @@
 import { Tokens } from './config';
-import { ethAddrToBuf, toCompactSignature, truncateHexPrefix, toTwosComplementHex, addressFromSignature, isRangesIntersected } from './utils';
+import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
+          toTwosComplementHex, addressFromSignature,
+          isRangesIntersected, hexToNode
+        } from './utils';
 import { ZkBobState } from './state';
 import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
@@ -11,7 +14,7 @@ const LOG_STATE_HOTSYNC = false;
 
 import { 
   Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
-  ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, IndexedTx 
+  ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, IndexedTx, TreeNode
 } from 'libzkbob-rs-wasm-web';
 
 import { 
@@ -27,9 +30,11 @@ const DEFAULT_TX_FEE = BigInt(100000000);
 const BATCH_SIZE = 1000;
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
+const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
+const CORRUPT_STATE_ROLLBACK_ATTEMPTS = 2; // number of state restore attempts (via rollback)
+const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via wipe)
 const DEFAULT_DENOMINATOR = BigInt(1000000000);
 const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
-
 const MIN_TX_COUNT_FOR_STAT = 10;
 
 export interface RelayerInfo {
@@ -171,15 +176,20 @@ export interface PartialSyncResult {
 }
 
 export interface ClientConfig {
-  /** Spending key. */
+  // Spending key
   sk: Uint8Array;
-  /** A map of supported tokens (token address => token params). */
+  // A map of supported tokens (token address => token params)
   tokens: Tokens;
-  /** A worker instance acquired through init() function of this package. */
+  // A worker instance acquired through init() function of this package
   worker: any;
-  /** The name of the network is only used for storage. */
+  // The name of the network is only used for storage
   networkName: string | undefined;
+  // An endpoint to interact with the blockchain
   network: NetworkBackend;
+  // Account birthday:
+  //  no transactions associated with the account should exist lower that index
+  //  set -1 to use the latest index (create _NEW_ account)
+  birthindex: number | undefined;
 }
 
 export class ZkBobClient {
@@ -195,6 +205,10 @@ export class ZkBobClient {
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
   private jobsMonitors  = new Map<string, Promise<JobInfo>>();
+
+  // State self-healing
+  private rollbackAttempts = 0;
+  private wipeAttempts = 0;
 
   public static async create(config: ClientConfig): Promise<ZkBobClient> {
     const client = new ZkBobClient();
@@ -1269,11 +1283,18 @@ export class ZkBobClient {
   }
 
   // Get the local Merkle tree root & index
-  public async getLocalState(tokenAddress: string): Promise<TreeState> {
-    const root = await this.zpStates[tokenAddress].getRoot();
-    const index = await this.zpStates[tokenAddress].getNextIndex();
+  // Retuned the latest root when the index is undefined
+  public async getLocalState(tokenAddress: string, index?: bigint): Promise<TreeState> {
+    if (index === undefined) {
+      const index = await this.zpStates[tokenAddress].getNextIndex();
+      const root = await this.zpStates[tokenAddress].getRoot();
 
-    return {root, index};
+      return {root, index};
+    } else {
+      const root = await this.zpStates[tokenAddress].getRootAt(index);
+
+      return {root, index};
+    }
   }
 
   // Get relayer regular root & index
@@ -1293,11 +1314,25 @@ export class ZkBobClient {
   }
 
   // Get pool info (direct web3 request)
-  public async getPoolState(tokenAddress: string): Promise<TreeState> {
+  public async getPoolState(tokenAddress: string, index?: bigint): Promise<TreeState> {
     const token = this.tokens[tokenAddress];
-    const res = await this.config.network.poolState(token.poolAddress);
+    const res = await this.config.network.poolState(token.poolAddress, index);
 
     return {index: res.index, root: res.root};
+  }
+
+  // Just for testing purposes. This method do not need for client
+  public async getLeftSiblings(tokenAddress: string, index: bigint): Promise<TreeNode[]> {
+    const siblings = await this.zpStates[tokenAddress].getLeftSiblings(index);
+
+    return siblings;
+  }
+
+  // Just informal method needed for the debug purposes
+  public async getTreeStartIndex(tokenAddress: string): Promise<bigint | undefined> {
+    const index = await this.zpStates[tokenAddress].getFirstIndex();
+
+    return index;
   }
 
   // Getting array of accounts and notes for the current account
@@ -1305,8 +1340,10 @@ export class ZkBobClient {
     return await this.zpStates[tokenAddress].rawState();
   }
   
-
-  // TODO: implement correct state cleaning
+  public async rollbackState(tokenAddress: string, index: bigint): Promise<bigint> {
+    return await this.zpStates[tokenAddress].rollback(index);
+  }
+  
   public async cleanState(tokenAddress: string): Promise<void> {
     await this.zpStates[tokenAddress].clean();
   }
@@ -1341,8 +1378,27 @@ export class ZkBobClient {
     const nextIndex = Number(stateInfo.deltaIndex);
     const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
+    let readyToTransact = true;
+
     if (optimisticIndex > startIndex) {
-      // Use the cold storage first
+      // Use partial tree loading if possible
+      let birthindex = this.config.birthindex ?? 0;
+      if (birthindex < 0 || birthindex >= Number(stateInfo.deltaIndex)) {
+        // we should grab almost one transaction from the regular state
+        birthindex = Number(stateInfo.deltaIndex) - OUTPLUSONE;
+      }
+      let siblings: TreeNode[] | undefined;
+      if (startIndex == 0 && birthindex >= PARTIAL_TREE_USAGE_THRESHOLD) {
+        try {
+          siblings = await this.siblings(token.relayerUrl, birthindex);
+          console.log(`🍰[PartialSync] got ${siblings.length} sibling(s) for index ${birthindex}`);
+          startIndex = birthindex;
+        } catch (err) {
+          console.warn(`🍰[PartialSync] cannot retrieve siblings: ${err}`);
+        }
+      }
+
+      // Try to using the cold storage
       const coldResult = await this.loadColdStorageTxs(tokenAddress, startIndex);
 
       const curStat: SyncStat = {
@@ -1356,16 +1412,10 @@ export class ZkBobClient {
 
       // change hot sync position
       startIndex = coldResult.nextIndex;
-      
       console.log(`🔥[HotSync] fetching transactions between ${startIndex} and ${optimisticIndex}...`);
-
       const startTime = Date.now();
 
-      
       const batches: Promise<BatchResult>[] = [];
-
-      let readyToTransact = true;
-
       for (let i = startIndex; i <= optimisticIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
         const oneBatch = this.fetchTransactionsOptimistic(token.relayerUrl, BigInt(i), BATCH_SIZE).then( async txs => {
           console.log(`🔥[HotSync] got ${txs.length} transactions from index ${i}`);
@@ -1392,9 +1442,6 @@ export class ZkBobClient {
 
             // 2. Get transaction commitment
             const commitment = tx.substr(65, 64)
-            
-            // TEST-CASE: sync tree partially
-            //if (memo_idx >= 85248) continue;
 
             const indexedTx: IndexedTx = {
               index: memo_idx,
@@ -1469,11 +1516,17 @@ export class ZkBobClient {
       for (const idx of idxs) {
         const oneStateUpdate = totalRes.state.get(idx);
         if (oneStateUpdate !== undefined) {
-          await zpState.updateState(oneStateUpdate);
+          try {
+            await zpState.updateState(oneStateUpdate, siblings);
+          } catch (err) {
+            const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
+            console.warn(`🔥[HotSync] cannot update state from index ${idx}${siblingsDescr}`);
+            throw new InternalError(`Unable to synchronize pool state`);
+          }
 
           curStat.decryptedLeafs += oneStateUpdate.newLeafs.length;
         } else {
-          throw Error(`Cannot find state batch at index ${idx}`);
+          throw new InternalError(`Cannot find state batch at index ${idx}`);
         }
       }
 
@@ -1500,16 +1553,50 @@ export class ZkBobClient {
       if (coldResult.txCount > 0) {
         console.log(`🧊🔥[TotalSync] finished in ${curStat.totalTime / 1000} sec | ${curStat.txCount} tx, avg speed ${curStat.timePerTx.toFixed(1)} ms/tx`);
       }
-
-      return readyToTransact;
     } else {
       zpState.history.setLastMinedTxIndex(nextIndex - OUTPLUSONE);
       zpState.history.setLastPendingTxIndex(-1);
 
       console.log(`Local state is up to date @${startIndex}`);
-
-      return true;
     }
+
+    // Self-healing code
+    const checkIndex = await zpState.getNextIndex();
+    const stableIndex = await zpState.lastVerifiedIndex();
+    if (checkIndex != stableIndex) {
+      const isStateCorrect = await this.verifyState(tokenAddress);
+      if (!isStateCorrect) {
+        console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
+        if (stableIndex > 0 && stableIndex < checkIndex &&
+          this.rollbackAttempts < CORRUPT_STATE_ROLLBACK_ATTEMPTS
+        ) {
+          let realRollbackIndex = await zpState.rollback(stableIndex);
+          console.log(`🚑[StateVerify] The user state was rollbacked to index ${realRollbackIndex} [attempt ${this.rollbackAttempts + 1}]`);
+          this.rollbackAttempts++;
+        } else if (this.wipeAttempts < CORRUPT_STATE_WIPE_ATTEMPTS) {
+          await zpState.clean();
+          console.log(`🚑[StateVerify] Full user state was wiped [attempt ${this.wipeAttempts + 1}]...`);
+
+          if(this.rollbackAttempts > 0) {
+            // If the first wipe has no effect
+            // reset account birthday if presented
+            this.config.birthindex = undefined;
+          }
+
+          this.wipeAttempts++;
+        } else {
+          throw new InternalError(`Unable to synchronize pool state`);
+        }
+
+        // resync the state
+        return await this.updateStateOptimisticWorker(tokenAddress);
+      } else {
+        this.rollbackAttempts = 0;
+        this.wipeAttempts = 0;
+      }
+    }
+
+    return readyToTransact;
   }
 
   // Just fetch and process the new state without local state updating
@@ -1597,6 +1684,25 @@ export class ZkBobClient {
     }
   }
 
+  // returns false when the local state is inconsistent
+  private async verifyState(tokenAddress: string): Promise<boolean> {
+    const zpState = this.zpStates[tokenAddress];
+    const token = this.tokens[tokenAddress];
+    const state = this.zpStates[tokenAddress];
+
+    const checkIndex = await zpState.getNextIndex();
+    const localRoot = await zpState.getRoot();
+    const poolRoot =  (await this.config.network.poolState(token.poolAddress, checkIndex)).root;
+
+    if (localRoot == poolRoot) {
+      await zpState.setLastVerifiedIndex(checkIndex);
+      
+      return true;
+    }
+
+    return false;
+  }
+
   private async loadColdStorageTxs(tokenAddress: string, fromIndex?: number, toIndex?: number): Promise<PartialSyncResult> {
     const token = this.tokens[tokenAddress];
     const zpState = this.zpStates[tokenAddress];
@@ -1661,14 +1767,27 @@ export class ZkBobClient {
           zpState.history.saveDecryptedMemo(aMemo, false);
         });
 
+
         syncResult.txCount = result.txCnt;
         syncResult.decryptedLeafs = result.decryptedLeafsCnt;
         syncResult.firstIndex = actualRangeStart;
         syncResult.nextIndex = actualRangeEnd;
         syncResult.totalTime = Date.now() - startTime;
+        
+        const isStateCorrect = await this.verifyState(tokenAddress);
+        if (!isStateCorrect) {
+          console.warn(`🧊[ColdSync] Merkle tree root at index ${await zpState.getNextIndex()} mistmatch! Wiping the state...`);
+          await zpState.clean();  // rollback to 0
+          this.skipColdStorage = true;  // prevent cold storage usage
 
-        console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
-        console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
+          syncResult.txCount = 0;
+          syncResult.decryptedLeafs = 0;
+          syncResult.firstIndex = 0;
+          syncResult.nextIndex = 0;
+        } else {
+          console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
+          console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
+        }
         
       } catch (err) {
         console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
@@ -1780,6 +1899,25 @@ export class ZkBobClient {
       },
       tier: res.tier === undefined ? 0 : Number(res.tier)
     };
+  }
+
+  private async siblings(relayerUrl: string, index: number): Promise<TreeNode[]> {
+    const url = new URL(`/siblings`, relayerUrl);
+    url.searchParams.set('index', index.toString());
+    const headers = {'content-type': 'application/json;charset=UTF-8'};
+
+    const siblings = await this.fetchJson(url.toString(), {headers});
+    if (!Array.isArray(siblings)) {
+      throw new RelayerError(200, `Response should be an array`);
+    }
+  
+    return siblings.map((aNode) => {
+      let node = hexToNode(aNode)
+      if (!node) {
+        throw new RelayerError(200, `Cannot convert \'${aNode}\' to a TreeNode`);
+      }
+      return node;
+    });
   }
 
   // Universal response parser

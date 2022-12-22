@@ -1,6 +1,7 @@
 import { wrap } from 'comlink';
 import { SnarkConfigParams } from './config';
 import { FileCache } from './file-cache';
+export { TreeNode } from 'libzkbob-rs-wasm-web';
 export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState, SyncStat } from './client';
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'

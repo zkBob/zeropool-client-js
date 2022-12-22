@@ -1,5 +1,7 @@
 import { expose } from 'comlink';
-import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, ITransferData, IDepositData, IWithdrawData, IDepositPermittableData } from 'libzkbob-rs-wasm-web';
+import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, TreeNode,
+          ITransferData, IDepositData, IWithdrawData, IDepositPermittableData
+        } from 'libzkbob-rs-wasm-web';
 import { FileCache } from './file-cache';
 import { threads } from 'wasm-feature-detect';
 
@@ -241,15 +243,78 @@ const obj = {
     });
   },
 
+  async firstTreeIndex(address: string): Promise<bigint | undefined> {
+    return new Promise(async resolve => {
+      resolve(zpAccounts[address].firstTreeIndex());
+    });
+  },
+
   async getRoot(address: string): Promise<string> {
     return new Promise(async resolve => {
       resolve(zpAccounts[address].getRoot());
     });
   },
 
-  async updateState(address: string, stateUpdate: StateUpdate): Promise<void> {
-    return new Promise(async resolve => {
-      resolve(zpAccounts[address].updateState(stateUpdate));
+  async getRootAt(address: string, index: bigint): Promise<string> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        resolve(zpAccounts[address].getRootAt(index));
+      } catch (e) {
+        reject(e)
+      }
+    });
+  },
+
+  async getLeftSiblings(address: string, index: bigint): Promise<TreeNode[]> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        resolve(zpAccounts[address].getLeftSiblings(index));
+      } catch (e) {
+        reject(e)
+      }
+    });
+  },
+
+  async rollbackState(address: string, index: bigint): Promise<bigint> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        resolve(zpAccounts[address].rollbackState(index));
+      } catch (e) {
+        reject(e)
+      }
+    });
+  },
+
+  async wipeState(address: string): Promise<void> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        resolve(zpAccounts[address].wipeState());
+      } catch (e) {
+        reject(e)
+      }
+    });
+  },
+
+  async getTreeLastStableIndex(address: string): Promise<bigint> {
+    return new Promise(async (resolve) => {
+      resolve(zpAccounts[address].treeGetStableIndex());
+    });
+  },
+
+  async setTreeLastStableIndex(address: string, index: bigint): Promise<void> {
+    return new Promise(async (resolve) => {
+      resolve(zpAccounts[address].treeSetStableIndex(index));
+    });
+  },
+
+  async updateState(address: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        let result = zpAccounts[address].updateState(stateUpdate, siblings);
+        resolve(result)
+      } catch (e) {
+        reject(e)
+      }
     });
   },
 

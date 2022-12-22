@@ -1,4 +1,4 @@
-import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData, StateUpdate } from 'libzkbob-rs-wasm-web';
+import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData, StateUpdate, TreeNode } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
 import { bufToHex } from './utils';
 import { hash } from 'tweetnacl';
@@ -93,17 +93,37 @@ export class ZkBobState {
     return BigInt(await this.worker.getRoot(this.tokenAddress));
   }
 
+  public async getRootAt(index: bigint): Promise<bigint> {
+    return BigInt(await this.worker.getRootAt(this.tokenAddress, index));
+  }
+
+  public async getLeftSiblings(index: bigint): Promise<TreeNode[]> {
+    return await this.worker.getLeftSiblings(this.tokenAddress, index);
+  }
+
   public async getNextIndex(): Promise<bigint> {
     return await this.worker.nextTreeIndex(this.tokenAddress);
+  }
+
+  public async getFirstIndex(): Promise<bigint | undefined> {
+    return await this.worker.firstTreeIndex(this.tokenAddress);
   }
 
   public async rawState(): Promise<any> {
     return await this.worker.rawState(this.tokenAddress);
   }
 
-  // TODO: implement thiss method
+  // Wipe whole user's state
+  public async rollback(rollbackIndex: bigint): Promise<bigint> {
+    const realRollbackIndex = await this.worker.rollbackState(this.tokenAddress, rollbackIndex);
+    await this.history.rollbackHistory(Number(realRollbackIndex));
+
+    return realRollbackIndex;
+  }
+
+  // Wipe whole user's state
   public async clean(): Promise<void> {
-    //await this.account.cleanState();
+    await this.worker.wipeState(this.tokenAddress);
     await this.history.cleanHistory();
   }
 
@@ -135,8 +155,16 @@ export class ZkBobState {
     return await this.worker.createTransfer(this.tokenAddress, transfer);
   }
 
-  public async updateState(stateUpdate: StateUpdate): Promise<void> {
-    return await this.worker.updateState(this.tokenAddress, stateUpdate);
+  public async updateState(stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
+    return await this.worker.updateState(this.tokenAddress, stateUpdate, siblings);
+  }
+
+  public async lastVerifiedIndex(): Promise<bigint> {
+    return await this.worker.getTreeLastStableIndex(this.tokenAddress);
+  }
+
+  public async setLastVerifiedIndex(index: bigint): Promise<bigint> {
+    return await this.worker.setTreeLastStableIndex(this.tokenAddress, index);
   }
 
   public async updateStateColdStorage(bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<any> {

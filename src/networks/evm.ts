@@ -200,9 +200,14 @@ export class EvmNetwork implements NetworkBackend {
         return await this.contract.methods.getLimitsFor(addr).call();
     }
 
-    public async poolState(contractAddress: string): Promise<{index: bigint, root: bigint}> {
+    public async poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
         this.contract.options.address = contractAddress;
-        const idx = await this.contract.methods.pool_index().call();
+        let idx;
+        if (index === undefined) {
+            idx = await this.contract.methods.pool_index().call();
+        } else {
+            idx = index?.toString();
+        }
         const root = await this.contract.methods.roots(idx).call();
 
 
