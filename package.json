@@ -1,6 +1,6 @@
 {
   "name": "zkbob-client-js",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "zkBob integration library",
   "repository": "git@github.com:zkBob/libzkbob-client-js.git",
   "author": "Dmitry Vdovin <voidxnull@gmail.com>",
