@@ -126,15 +126,15 @@ export interface PoolLimits { // all values are in Gwei
     total: bigint;
     components: {
       singleOperation: bigint;
-      daylyForAddress: Limit;
-      daylyForAll: Limit;
+      dailyForAddress: Limit;
+      dailyForAll: Limit;
       poolLimit: Limit;
     };
   }
   withdraw: {
     total: bigint;
     components: {
-      daylyForAll: Limit;
+      dailyForAll: Limit;
     };
   }
   tier: number;
@@ -143,12 +143,12 @@ export interface PoolLimits { // all values are in Gwei
 export interface LimitsFetch { 
   deposit: {
     singleOperation: bigint;
-    daylyForAddress: Limit;
-    daylyForAll: Limit;
+    dailyForAddress: Limit;
+    dailyForAll: Limit;
     poolLimit: Limit;
   }
   withdraw: {
-    daylyForAll: Limit;
+    dailyForAll: Limit;
   }
   tier: number;
 }
@@ -1157,11 +1157,11 @@ export class ZkBobClient {
       return {
         deposit: {
           singleOperation: BigInt(poolLimits.depositCap),
-          daylyForAddress: {
+          dailyForAddress: {
             total: BigInt(poolLimits.dailyUserDepositCap),
             available: BigInt(poolLimits.dailyUserDepositCap) - BigInt(poolLimits.dailyUserDepositCapUsage),
           },
-          daylyForAll: {
+          dailyForAll: {
             total:      BigInt(poolLimits.dailyDepositCap),
             available:  BigInt(poolLimits.dailyDepositCap) - BigInt(poolLimits.dailyDepositCapUsage),
           },
@@ -1171,7 +1171,7 @@ export class ZkBobClient {
           },
         },
         withdraw: {
-          daylyForAll: {
+          dailyForAll: {
             total:      BigInt(poolLimits.dailyWithdrawalCap),
             available:  BigInt(poolLimits.dailyWithdrawalCap) - BigInt(poolLimits.dailyWithdrawalCapUsage),
           },
@@ -1185,11 +1185,11 @@ export class ZkBobClient {
       return {
         deposit: {
           singleOperation: BigInt(10000000000000),  // 10k tokens
-          daylyForAddress: {
+          dailyForAddress: {
             total: BigInt(10000000000000),  // 10k tokens
             available: BigInt(10000000000000),  // 10k tokens
           },
-          daylyForAll: {
+          dailyForAll: {
             total:      BigInt(100000000000000),  // 100k tokens
             available:  BigInt(100000000000000),  // 100k tokens
           },
@@ -1199,7 +1199,7 @@ export class ZkBobClient {
           },
         },
         withdraw: {
-          daylyForAll: {
+          dailyForAll: {
             total:      BigInt(100000000000000),  // 100k tokens
             available:  BigInt(100000000000000),  // 100k tokens
           },
@@ -1242,14 +1242,14 @@ export class ZkBobClient {
     // Calculate deposit limits
     const allDepositLimits = [
       currentLimits.deposit.singleOperation,
-      currentLimits.deposit.daylyForAddress.available,
-      currentLimits.deposit.daylyForAll.available,
+      currentLimits.deposit.dailyForAddress.available,
+      currentLimits.deposit.dailyForAll.available,
       currentLimits.deposit.poolLimit.available,
     ];
     const totalDepositLimit = bigIntMin(...allDepositLimits);
 
     // Calculate withdraw limits
-    const allWithdrawLimits = [ currentLimits.withdraw.daylyForAll.available ];
+    const allWithdrawLimits = [ currentLimits.withdraw.dailyForAll.available ];
     const totalWithdrawLimit = bigIntMin(...allWithdrawLimits);
 
     return {
@@ -1899,13 +1899,13 @@ export class ZkBobClient {
     return {
       deposit: {
         singleOperation: BigInt(res.deposit.singleOperation),
-        daylyForAddress: {
-          total:     BigInt(res.deposit.daylyForAddress.total),
-          available: BigInt(res.deposit.daylyForAddress.available),
+        dailyForAddress: {
+          total:     BigInt(res.deposit.dailyForAddress.total),
+          available: BigInt(res.deposit.dailyForAddress.available),
         },
-        daylyForAll: {
-          total:      BigInt(res.deposit.daylyForAll.total),
-          available:  BigInt(res.deposit.daylyForAll.available),
+        dailyForAll: {
+          total:      BigInt(res.deposit.dailyForAll.total),
+          available:  BigInt(res.deposit.dailyForAll.available),
         },
         poolLimit: {
           total:      BigInt(res.deposit.poolLimit.total),
@@ -1913,9 +1913,9 @@ export class ZkBobClient {
         },
       },
       withdraw: {
-        daylyForAll: {
-          total:      BigInt(res.withdraw.daylyForAll.total),
-          available:  BigInt(res.withdraw.daylyForAll.available),
+        dailyForAll: {
+          total:      BigInt(res.withdraw.dailyForAll.total),
+          available:  BigInt(res.withdraw.dailyForAll.available),
         },
       },
       tier: res.tier === undefined ? 0 : Number(res.tier)
