@@ -186,10 +186,8 @@ export interface ClientConfig {
   networkName: string | undefined;
   // An endpoint to interact with the blockchain
   network: NetworkBackend;
-  // Account birthday:
-  //  no transactions associated with the account should exist lower that index
-  //  set -1 to use the latest index (create _NEW_ account)
-  birthindex: number | undefined;
+  // Account birthday [moved to Token object]
+  //birthindex: number | undefined;
 }
 
 export class ZkBobClient {
@@ -226,6 +224,25 @@ export class ZkBobClient {
 
     for (const [address, token] of Object.entries(config.tokens)) {
       let denominator: bigint
+      if (token.birthindex == -1) {
+        // fetch current birthindex right away
+        try {
+          let curIndex = Number((await client.info(token.relayerUrl)).deltaIndex);
+          const OUTPLUSONE = CONSTANTS.OUT + 1;
+          if (curIndex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE) && curIndex >= OUTPLUSONE) {
+            curIndex -= OUTPLUSONE; // we should grab almost one transaction from the regular state
+            console.log(`Retrieved account birthindex: ${curIndex}`);
+            token.birthindex = curIndex;
+          } else {
+            console.log(`Birthindex is lower than threshold (${PARTIAL_TREE_USAGE_THRESHOLD} txs). It'll be ignored`);
+            token.birthindex = undefined;
+          }
+        } catch (err) {
+          console.warn(`Cannot retrieve actual birthindex (Error: ${err.message}). The full sync will be performed`);
+          token.birthindex = undefined;
+        }
+      }
+
       try {
         denominator = await config.network.getDenominator(token.poolAddress);
       } catch (err) {
@@ -1382,13 +1399,13 @@ export class ZkBobClient {
 
     if (optimisticIndex > startIndex) {
       // Use partial tree loading if possible
-      let birthindex = this.config.birthindex ?? 0;
-      if (birthindex < 0 || birthindex >= Number(stateInfo.deltaIndex)) {
+      let birthindex = token.birthindex ?? 0;
+      if (birthindex >= Number(stateInfo.deltaIndex)) {
         // we should grab almost one transaction from the regular state
         birthindex = Number(stateInfo.deltaIndex) - OUTPLUSONE;
       }
       let siblings: TreeNode[] | undefined;
-      if (startIndex == 0 && birthindex >= PARTIAL_TREE_USAGE_THRESHOLD) {
+      if (startIndex == 0 && birthindex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE)) {
         try {
           siblings = await this.siblings(token.relayerUrl, birthindex);
           console.log(`🍰[PartialSync] got ${siblings.length} sibling(s) for index ${birthindex}`);
@@ -1521,6 +1538,10 @@ export class ZkBobClient {
           } catch (err) {
             const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
             console.warn(`🔥[HotSync] cannot update state from index ${idx}${siblingsDescr}`);
+            if (siblings != undefined) {
+              // if we try to update state with siblings and got an error - do not use partial sync again
+              token.birthindex = undefined;
+            }
             throw new InternalError(`Unable to synchronize pool state`);
           }
 
@@ -1580,7 +1601,7 @@ export class ZkBobClient {
           if(this.rollbackAttempts > 0) {
             // If the first wipe has no effect
             // reset account birthday if presented
-            this.config.birthindex = undefined;
+            token.birthindex = undefined;
           }
 
           this.wipeAttempts++;

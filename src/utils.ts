@@ -336,7 +336,7 @@ export function nodeToHex(node: TreeNode): string {
   const writer = new HexStringWriter();
   writer.writeNumber(node.height, 1);
   writer.writeNumber(node.index, 6);
-  writer.writeBigInt(BigInt(node.value), 32, true);
+  writer.writeBigInt(BigInt(node.value), 32);
 
   return writer.toString();
 }
@@ -345,7 +345,7 @@ export function hexToNode(data: string): TreeNode | null {
   const reader = new HexStringReader(data);
   const height = reader.readNumber(1);
   const index = reader.readNumber(6);
-  const value = reader.readBigInt(32, true);
+  const value = reader.readBigInt(32);
 
   if (height != null && index != null && value != null) {
     return { height, index, value: value.toString()};
