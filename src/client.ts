@@ -595,7 +595,7 @@ export class ZkBobClient {
       } catch (err) {
         throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
       }
-      if (balance < amountGwei) {
+      if (balance < (amountGwei + feeGwei)) {
         throw new TxInsufficientFundsError(amountGwei, balance);
       }
 
@@ -918,7 +918,7 @@ export class ZkBobClient {
     } catch (err) {
       throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
     }
-    if (balance < amountGwei) {
+    if (balance < (amountGwei + feeGwei)) {
       throw new TxInsufficientFundsError(amountGwei, balance);
     }
 
