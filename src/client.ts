@@ -24,7 +24,7 @@ import {
 import { MAX_UINT64 } from '@ethereumjs/util';
 //import { SyncStat, SyncStat } from '.';
 
-const OUTPLUSONE = CONSTANTS.OUT + 1;
+const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const MIN_TX_AMOUNT = BigInt(50000000);
@@ -188,8 +188,6 @@ export interface ClientConfig {
   networkName: string | undefined;
   // An endpoint to interact with the blockchain
   network: NetworkBackend;
-  // Account birthday [moved to Token object]
-  //birthindex: number | undefined;
 }
 
 export class ZkBobClient {
