@@ -24,6 +24,8 @@ import {
 import { MAX_UINT64 } from '@ethereumjs/util';
 //import { SyncStat, SyncStat } from '.';
 
+const OUTPLUSONE = CONSTANTS.OUT + 1;
+
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const MIN_TX_AMOUNT = BigInt(50000000);
 const DEFAULT_TX_FEE = BigInt(100000000);
@@ -228,7 +230,6 @@ export class ZkBobClient {
         // fetch current birthindex right away
         try {
           let curIndex = Number((await client.info(token.relayerUrl)).deltaIndex);
-          const OUTPLUSONE = CONSTANTS.OUT + 1;
           if (curIndex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE) && curIndex >= OUTPLUSONE) {
             curIndex -= OUTPLUSONE; // we should grab almost one transaction from the regular state
             console.log(`Retrieved account birthindex: ${curIndex}`);
@@ -1384,8 +1385,6 @@ export class ZkBobClient {
   // Wasm package holds only the mined transactions
   // Currently it's just a workaround
   private async updateStateOptimisticWorker(tokenAddress: string): Promise<boolean> {
-    const OUTPLUSONE = CONSTANTS.OUT + 1;
-
     const zpState = this.zpStates[tokenAddress];
     const token = this.tokens[tokenAddress];
 
@@ -1624,8 +1623,6 @@ export class ZkBobClient {
   // Return StateUpdate object
   // This method used for multi-tx
   public async getNewState(tokenAddress: string): Promise<StateUpdate> {
-    const OUTPLUSONE = CONSTANTS.OUT + 1;
-
     const token = this.tokens[tokenAddress];
     const zpState = this.zpStates[tokenAddress];
 
@@ -1686,7 +1683,6 @@ export class ZkBobClient {
   }
 
   public async logStateSync(startIndex: number, endIndex: number, decryptedMemos: DecryptedMemo[]) {
-    const OUTPLUSONE = CONSTANTS.OUT + 1;
     for (const decryptedMemo of decryptedMemos) {
       if (decryptedMemo.index > startIndex) {
         console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${decryptedMemo.index - OUTPLUSONE})`);
@@ -1729,7 +1725,6 @@ export class ZkBobClient {
     const zpState = this.zpStates[tokenAddress];
 
     const coldConfig = zpState.coldStorageConfig;
-    const OUTPLUSONE = CONSTANTS.OUT + 1;
 
     const startRange = fromIndex ?? 0;  // inclusively
     const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
