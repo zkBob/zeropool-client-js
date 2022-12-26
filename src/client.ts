@@ -24,6 +24,8 @@ import {
 import { MAX_UINT64 } from '@ethereumjs/util';
 //import { SyncStat, SyncStat } from '.';
 
+const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
+
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const MIN_TX_AMOUNT = BigInt(50000000);
 const DEFAULT_TX_FEE = BigInt(100000000);
@@ -126,15 +128,15 @@ export interface PoolLimits { // all values are in Gwei
     total: bigint;
     components: {
       singleOperation: bigint;
-      daylyForAddress: Limit;
-      daylyForAll: Limit;
+      dailyForAddress: Limit;
+      dailyForAll: Limit;
       poolLimit: Limit;
     };
   }
   withdraw: {
     total: bigint;
     components: {
-      daylyForAll: Limit;
+      dailyForAll: Limit;
     };
   }
   tier: number;
@@ -143,12 +145,12 @@ export interface PoolLimits { // all values are in Gwei
 export interface LimitsFetch { 
   deposit: {
     singleOperation: bigint;
-    daylyForAddress: Limit;
-    daylyForAll: Limit;
+    dailyForAddress: Limit;
+    dailyForAll: Limit;
     poolLimit: Limit;
   }
   withdraw: {
-    daylyForAll: Limit;
+    dailyForAll: Limit;
   }
   tier: number;
 }
@@ -186,10 +188,6 @@ export interface ClientConfig {
   networkName: string | undefined;
   // An endpoint to interact with the blockchain
   network: NetworkBackend;
-  // Account birthday:
-  //  no transactions associated with the account should exist lower that index
-  //  set -1 to use the latest index (create _NEW_ account)
-  birthindex: number | undefined;
 }
 
 export class ZkBobClient {
@@ -226,6 +224,24 @@ export class ZkBobClient {
 
     for (const [address, token] of Object.entries(config.tokens)) {
       let denominator: bigint
+      if (token.birthindex == -1) {
+        // fetch current birthindex right away
+        try {
+          let curIndex = Number((await client.info(token.relayerUrl)).deltaIndex);
+          if (curIndex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE) && curIndex >= OUTPLUSONE) {
+            curIndex -= OUTPLUSONE; // we should grab almost one transaction from the regular state
+            console.log(`Retrieved account birthindex: ${curIndex}`);
+            token.birthindex = curIndex;
+          } else {
+            console.log(`Birthindex is lower than threshold (${PARTIAL_TREE_USAGE_THRESHOLD} txs). It'll be ignored`);
+            token.birthindex = undefined;
+          }
+        } catch (err) {
+          console.warn(`Cannot retrieve actual birthindex (Error: ${err.message}). The full sync will be performed`);
+          token.birthindex = undefined;
+        }
+      }
+
       try {
         denominator = await config.network.getDenominator(token.poolAddress);
       } catch (err) {
@@ -1140,11 +1156,11 @@ export class ZkBobClient {
       return {
         deposit: {
           singleOperation: BigInt(poolLimits.depositCap),
-          daylyForAddress: {
+          dailyForAddress: {
             total: BigInt(poolLimits.dailyUserDepositCap),
             available: BigInt(poolLimits.dailyUserDepositCap) - BigInt(poolLimits.dailyUserDepositCapUsage),
           },
-          daylyForAll: {
+          dailyForAll: {
             total:      BigInt(poolLimits.dailyDepositCap),
             available:  BigInt(poolLimits.dailyDepositCap) - BigInt(poolLimits.dailyDepositCapUsage),
           },
@@ -1154,7 +1170,7 @@ export class ZkBobClient {
           },
         },
         withdraw: {
-          daylyForAll: {
+          dailyForAll: {
             total:      BigInt(poolLimits.dailyWithdrawalCap),
             available:  BigInt(poolLimits.dailyWithdrawalCap) - BigInt(poolLimits.dailyWithdrawalCapUsage),
           },
@@ -1168,11 +1184,11 @@ export class ZkBobClient {
       return {
         deposit: {
           singleOperation: BigInt(10000000000000),  // 10k tokens
-          daylyForAddress: {
+          dailyForAddress: {
             total: BigInt(10000000000000),  // 10k tokens
             available: BigInt(10000000000000),  // 10k tokens
           },
-          daylyForAll: {
+          dailyForAll: {
             total:      BigInt(100000000000000),  // 100k tokens
             available:  BigInt(100000000000000),  // 100k tokens
           },
@@ -1182,7 +1198,7 @@ export class ZkBobClient {
           },
         },
         withdraw: {
-          daylyForAll: {
+          dailyForAll: {
             total:      BigInt(100000000000000),  // 100k tokens
             available:  BigInt(100000000000000),  // 100k tokens
           },
@@ -1225,14 +1241,14 @@ export class ZkBobClient {
     // Calculate deposit limits
     const allDepositLimits = [
       currentLimits.deposit.singleOperation,
-      currentLimits.deposit.daylyForAddress.available,
-      currentLimits.deposit.daylyForAll.available,
+      currentLimits.deposit.dailyForAddress.available,
+      currentLimits.deposit.dailyForAll.available,
       currentLimits.deposit.poolLimit.available,
     ];
     const totalDepositLimit = bigIntMin(...allDepositLimits);
 
     // Calculate withdraw limits
-    const allWithdrawLimits = [ currentLimits.withdraw.daylyForAll.available ];
+    const allWithdrawLimits = [ currentLimits.withdraw.dailyForAll.available ];
     const totalWithdrawLimit = bigIntMin(...allWithdrawLimits);
 
     return {
@@ -1367,8 +1383,6 @@ export class ZkBobClient {
   // Wasm package holds only the mined transactions
   // Currently it's just a workaround
   private async updateStateOptimisticWorker(tokenAddress: string): Promise<boolean> {
-    const OUTPLUSONE = CONSTANTS.OUT + 1;
-
     const zpState = this.zpStates[tokenAddress];
     const token = this.tokens[tokenAddress];
 
@@ -1382,13 +1396,13 @@ export class ZkBobClient {
 
     if (optimisticIndex > startIndex) {
       // Use partial tree loading if possible
-      let birthindex = this.config.birthindex ?? 0;
-      if (birthindex < 0 || birthindex >= Number(stateInfo.deltaIndex)) {
+      let birthindex = token.birthindex ?? 0;
+      if (birthindex >= Number(stateInfo.deltaIndex)) {
         // we should grab almost one transaction from the regular state
         birthindex = Number(stateInfo.deltaIndex) - OUTPLUSONE;
       }
       let siblings: TreeNode[] | undefined;
-      if (startIndex == 0 && birthindex >= PARTIAL_TREE_USAGE_THRESHOLD) {
+      if (startIndex == 0 && birthindex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE)) {
         try {
           siblings = await this.siblings(token.relayerUrl, birthindex);
           console.log(`🍰[PartialSync] got ${siblings.length} sibling(s) for index ${birthindex}`);
@@ -1521,6 +1535,10 @@ export class ZkBobClient {
           } catch (err) {
             const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
             console.warn(`🔥[HotSync] cannot update state from index ${idx}${siblingsDescr}`);
+            if (siblings != undefined) {
+              // if we try to update state with siblings and got an error - do not use partial sync again
+              token.birthindex = undefined;
+            }
             throw new InternalError(`Unable to synchronize pool state`);
           }
 
@@ -1580,7 +1598,7 @@ export class ZkBobClient {
           if(this.rollbackAttempts > 0) {
             // If the first wipe has no effect
             // reset account birthday if presented
-            this.config.birthindex = undefined;
+            token.birthindex = undefined;
           }
 
           this.wipeAttempts++;
@@ -1603,8 +1621,6 @@ export class ZkBobClient {
   // Return StateUpdate object
   // This method used for multi-tx
   public async getNewState(tokenAddress: string): Promise<StateUpdate> {
-    const OUTPLUSONE = CONSTANTS.OUT + 1;
-
     const token = this.tokens[tokenAddress];
     const zpState = this.zpStates[tokenAddress];
 
@@ -1665,7 +1681,6 @@ export class ZkBobClient {
   }
 
   public async logStateSync(startIndex: number, endIndex: number, decryptedMemos: DecryptedMemo[]) {
-    const OUTPLUSONE = CONSTANTS.OUT + 1;
     for (const decryptedMemo of decryptedMemos) {
       if (decryptedMemo.index > startIndex) {
         console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${decryptedMemo.index - OUTPLUSONE})`);
@@ -1708,7 +1723,6 @@ export class ZkBobClient {
     const zpState = this.zpStates[tokenAddress];
 
     const coldConfig = zpState.coldStorageConfig;
-    const OUTPLUSONE = CONSTANTS.OUT + 1;
 
     const startRange = fromIndex ?? 0;  // inclusively
     const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
@@ -1878,13 +1892,13 @@ export class ZkBobClient {
     return {
       deposit: {
         singleOperation: BigInt(res.deposit.singleOperation),
-        daylyForAddress: {
-          total:     BigInt(res.deposit.daylyForAddress.total),
-          available: BigInt(res.deposit.daylyForAddress.available),
+        dailyForAddress: {
+          total:     BigInt(res.deposit.dailyForAddress.total),
+          available: BigInt(res.deposit.dailyForAddress.available),
         },
-        daylyForAll: {
-          total:      BigInt(res.deposit.daylyForAll.total),
-          available:  BigInt(res.deposit.daylyForAll.available),
+        dailyForAll: {
+          total:      BigInt(res.deposit.dailyForAll.total),
+          available:  BigInt(res.deposit.dailyForAll.available),
         },
         poolLimit: {
           total:      BigInt(res.deposit.poolLimit.total),
@@ -1892,9 +1906,9 @@ export class ZkBobClient {
         },
       },
       withdraw: {
-        daylyForAll: {
-          total:      BigInt(res.withdraw.daylyForAll.total),
-          available:  BigInt(res.withdraw.daylyForAll.available),
+        dailyForAll: {
+          total:      BigInt(res.withdraw.dailyForAll.total),
+          available:  BigInt(res.withdraw.dailyForAll.available),
         },
       },
       tier: res.tier === undefined ? 0 : Number(res.tier)
