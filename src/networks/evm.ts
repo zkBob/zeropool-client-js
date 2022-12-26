@@ -114,7 +114,6 @@ export class EvmNetwork implements NetworkBackend {
         ];
         this.contract = new this.web3.eth.Contract(abi) as unknown as Contract;
 
-        // just the Transfer() event definition is sufficient in this case
         const abiTokenJson: AbiItem[] = [{
                 anonymous: false,
                 inputs: [{
@@ -156,6 +155,20 @@ export class EvmNetwork implements NetworkBackend {
                 }],
                 stateMutability: 'view',
                 type: 'function'
+            }, {
+                constant: true,
+                inputs: [{
+                    name: '_owner',
+                    type: 'address'
+                }],
+                name: 'balanceOf',
+                outputs: [{
+                    name: 'balance',
+                    type: 'uint256'
+                }],
+                payable: false,
+                stateMutability: 'view',
+                type: 'function'
             }];
         this.token = new this.web3.eth.Contract(abiTokenJson) as unknown as Contract;
     }
@@ -168,9 +181,15 @@ export class EvmNetwork implements NetworkBackend {
         this.token.options.address = tokenAddress;
         return await this.token.methods.name().call();
     }
+    
     public async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
         this.token.options.address = tokenAddress;
         return Number(await this.token.methods.nonces(address).call());
+    }
+
+    public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {    // in wei
+        this.token.options.address = tokenAddress;
+        return BigInt(await this.token.methods.balanceOf(address).call());
     }
 
     public async getDenominator(contractAddress: string): Promise<bigint> {

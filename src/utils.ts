@@ -92,6 +92,10 @@ export function addHexPrefix(data: string): string {
   return data;
 }
 
+export function isValidEthAddr(address: string): boolean {
+  return address.match('^0x[a-fA-F0-9]{40}$') ? true : false;
+}
+
 export function ethAddrToBuf(address: string): Uint8Array {
   return hexToBuf(address, 20);
 }
@@ -272,12 +276,12 @@ export function toCompactSignature(signature: string): string {
     if (v == "1c") {
       return `${signature.slice(0, 64)}${(parseInt(signature[64], 16) | 8).toString(16)}${signature.slice(65, 128)}`;
     } else if (v != "1b") {
-      throw ("invalid signature: v should be 27 or 28");
+      throw new InternalError("invalid signature: v should be 27 or 28");
     }
 
     return signature.slice(0, 128);
   } else if (signature.length < 128) {
-    throw ("invalid signature: it should consist at least 64 bytes (128 chars)");
+    throw new InternalError("invalid signature: it should consist at least 64 bytes (128 chars)");
   }
 
   // it seems the signature already compact

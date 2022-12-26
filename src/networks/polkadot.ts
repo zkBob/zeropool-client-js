@@ -13,6 +13,10 @@ export class PolkadotNetwork implements NetworkBackend {
         return 0;
     }
 
+    async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {
+        return BigInt(0);
+    }
+
     async getDenominator(contractAddress: string): Promise<bigint> {
         return BigInt(1000); // FIXME
     }
