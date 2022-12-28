@@ -608,11 +608,6 @@ export class ZkBobClient {
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const txValid = await this.worker.verifyTxProof(Object.values(txData.public), txProof.proof);
-      if (!txValid) {
-        throw new TxProofError();
-      }
-
       // Checking the depositor's token balance before sending tx
       let balance;
       try {
@@ -760,11 +755,6 @@ export class ZkBobClient {
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const txValid = await this.worker.verifyTxProof(Object.values(oneTxData.public), txProof.proof);
-      if (!txValid) {
-        throw new TxProofError();
-      }
-
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Transfer};
 
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
@@ -852,11 +842,6 @@ export class ZkBobClient {
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const txValid = await this.worker.verifyTxProof(Object.values(oneTxData.public), txProof.proof);
-      if (!txValid) {
-        throw new TxProofError();
-      }
-
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Withdraw};
 
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
@@ -911,11 +896,6 @@ export class ZkBobClient {
     const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-
-    const txValid = await this.worker.verifyTxProof(Object.values(txData.public), txProof.proof);
-    if (!txValid) {
-      throw new TxProofError();
-    }
 
     // regular deposit through approve allowance: sign transaction nullifier
     const dataToSign = '0x' + BigInt(txData.public.nullifier).toString(16).padStart(64, '0');
@@ -992,11 +972,6 @@ export class ZkBobClient {
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-    const txValid = await this.worker.verifyTxProof(Object.values(txData.public), txProof.proof);
-    if (!txValid) {
-      throw new TxProofError();
-    }
-
     const tx = { txType: TxType.Transfer, memo: txData.memo, proof: txProof };
     const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
     this.startJobMonitoring(tokenAddress, jobId);
@@ -1020,12 +995,24 @@ export class ZkBobClient {
       try {
         const url = new URL('/proveTx', token.delegatedProverUrl);
         const headers = {'content-type': 'application/json;charset=UTF-8'};
-        return await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
+        const proof = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
+        const inputs = Object.values(pub);
+        const txValid = await this.worker.verifyTxProof(inputs, proof);
+        if (!txValid) {
+          throw new TxProofError();
+        }
+        return {inputs, proof};
       } catch (e) {
         console.error(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
       }
-    } 
-    return await this.worker.proveTx(pub, sec);
+    }
+
+    const txProof = await this.worker.proveTx(pub, sec);
+    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+    if (!txValid) {
+      throw new TxProofError();
+    }
+    return txProof;
   }
 
   // ------------------=========< Transaction configuration >=========-------------------
