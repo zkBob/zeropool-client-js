@@ -1,7 +1,7 @@
 import { Tokens } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature,
-          isRangesIntersected, hexToNode, bufToHex, isValidEthAddr, addHexPrefix
+          isRangesIntersected, hexToNode, bufToHex
         } from './utils';
 import { ZkBobState } from './state';
 import { TxType } from './tx';
@@ -21,8 +21,9 @@ import {
   InternalError, NetworkError, PoolJobError, RelayerError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
-import { MAX_UINT64 } from '@ethereumjs/util';
+import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
+import { isAddress } from 'web3-utils';
 //import { SyncStat, SyncStat } from '.';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
@@ -773,8 +774,12 @@ export class ZkBobClient {
     const token = this.tokens[tokenAddress];
     const state = this.zpStates[tokenAddress];
 
-    // validate withdrawal address
-    if (isValidEthAddr(address) == false || address == NULL_ADDRESS) {
+    // Validate withdrawal address:
+    //  - it should starts with '0x' prefix
+    //  - it should be 20-byte length
+    //  - if it contains checksum (EIP-55) it should be valid
+    //  - zero addresses are prohibited to withdraw
+    if (!isHexPrefixed(address) || !isAddress(address) || address.toLowerCase() == NULL_ADDRESS) {
       throw new TxInvalidArgumentError('Please provide a valid non-zero address');
     }
     const addressBin = ethAddrToBuf(address);

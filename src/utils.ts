@@ -92,10 +92,6 @@ export function addHexPrefix(data: string): string {
   return data;
 }
 
-export function isValidEthAddr(address: string): boolean {
-  return address.match('^0x[a-fA-F0-9]{40}$') ? true : false;
-}
-
 export function ethAddrToBuf(address: string): Uint8Array {
   return hexToBuf(address, 20);
 }
