@@ -188,6 +188,8 @@ export interface ClientConfig {
   networkName: string | undefined;
   // An endpoint to interact with the blockchain
   network: NetworkBackend;
+  // Support ID - unique random string to track user's activity for support purposes
+  supportId: string | undefined;
 }
 
 export class ZkBobClient {
@@ -1818,12 +1820,21 @@ export class ZkBobClient {
   // ------------------=========< Relayer interactions >=========-------------------
   // | Methods to interact with the relayer                                        |
   // -------------------------------------------------------------------------------
+
+  private defaultHeaders(supportId: boolean = true): HeadersInit {
+    if (supportId && this.config.supportId !== undefined && this.config.supportId.length > 0) {
+      return {'content-type': 'application/json;charset=UTF-8',
+              'zkbob-support-id': this.config.supportId};
+    }
+
+    return {'content-type': 'application/json;charset=UTF-8'};
+  }
   
   private async fetchTransactionsOptimistic(relayerUrl: string, offset: BigInt, limit: number = 100): Promise<string[]> {
     const url = new URL(`/transactions/v2`, relayerUrl);
     url.searchParams.set('limit', limit.toString());
     url.searchParams.set('offset', offset.toString());
-    const headers = {'content-type': 'application/json;charset=UTF-8'};
+    const headers = this.defaultHeaders();
 
     const txs = await this.fetchJson(url.toString(), {headers});
     if (!Array.isArray(txs)) {
@@ -1836,7 +1847,7 @@ export class ZkBobClient {
   // returns transaction job ID
   private async sendTransactions(relayerUrl: string, txs: TxToRelayer[]): Promise<string> {
     const url = new URL('/sendTransactions', relayerUrl);
-    const headers = {'content-type': 'application/json;charset=UTF-8'};
+    const headers = this.defaultHeaders();
 
     const res = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify(txs) });
     if (typeof res.jobId !== 'string') {
@@ -1848,7 +1859,7 @@ export class ZkBobClient {
   
   private async getJob(relayerUrl: string, id: string): Promise<JobInfo | null> {
     const url = new URL(`/job/${id}`, relayerUrl);
-    const headers = {'content-type': 'application/json;charset=UTF-8'};
+    const headers = this.defaultHeaders();
     const res = await this.fetchJson(url.toString(), {headers});
   
     if (isJobInfo(res)) {
@@ -1860,7 +1871,7 @@ export class ZkBobClient {
   
   private async info(relayerUrl: string): Promise<RelayerInfo> {
     const url = new URL('/info', relayerUrl);
-    const headers = {'content-type': 'application/json;charset=UTF-8'};
+    const headers = this.defaultHeaders(false);
     const res = await this.fetchJson(url.toString(), {headers});
 
     if (isRelayerInfo(res)) {
@@ -1873,7 +1884,7 @@ export class ZkBobClient {
   private async fee(relayerUrl: string): Promise<bigint> {
     try {
       const url = new URL('/fee', relayerUrl);
-      const headers = {'content-type': 'application/json;charset=UTF-8'};
+      const headers = this.defaultHeaders();
       const res = await this.fetchJson(url.toString(), {headers});
       return BigInt(res.fee);
     } catch {
@@ -1886,7 +1897,7 @@ export class ZkBobClient {
     if (address !== undefined) {
       url.searchParams.set('address', address);
     }
-    const headers = {'content-type': 'application/json;charset=UTF-8'};
+    const headers = this.defaultHeaders();
     const res = await this.fetchJson(url.toString(), {headers});
 
     return {
@@ -1918,7 +1929,7 @@ export class ZkBobClient {
   private async siblings(relayerUrl: string, index: number): Promise<TreeNode[]> {
     const url = new URL(`/siblings`, relayerUrl);
     url.searchParams.set('index', index.toString());
-    const headers = {'content-type': 'application/json;charset=UTF-8'};
+    const headers = this.defaultHeaders();
 
     const siblings = await this.fetchJson(url.toString(), {headers});
     if (!Array.isArray(siblings)) {
