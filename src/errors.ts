@@ -46,6 +46,12 @@ export class TxInvalidArgumentError extends BobError {
     }
 }
 
+export class SignatureError extends BobError {
+    constructor(message: string) {
+        super(message);
+    }
+}
+
 export class TxDepositDeadlineExpiredError extends BobError {
     public deadline: number;
     constructor(deadline: number) {

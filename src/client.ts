@@ -1,7 +1,7 @@
 import { Tokens } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature,
-          isRangesIntersected, hexToNode
+          isRangesIntersected, hexToNode, bufToHex
         } from './utils';
 import { ZkBobState } from './state';
 import { TxType } from './tx';
@@ -18,10 +18,12 @@ import {
 } from 'libzkbob-rs-wasm-web';
 
 import { 
-  InternalError, NetworkError, PoolJobError, RelayerError, RelayerJobError, TxDepositDeadlineExpiredError,
+  InternalError, NetworkError, PoolJobError, RelayerError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
-import { MAX_UINT64 } from '@ethereumjs/util';
+import { isHexPrefixed } from '@ethereumjs/util';
+import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
+import { isAddress } from 'web3-utils';
 //import { SyncStat, SyncStat } from '.';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
@@ -559,6 +561,19 @@ export class ZkBobClient {
         signature = toCompactSignature(signature);
       }
 
+      // Checking signature correct (and corresponded with declared address)
+      const claimedAddr = `0x${bufToHex(holder)}`;
+      let recoveredAddr;
+      try {
+        const dataToSign: any = await this.createPermittableDepositData(tokenAddress, '1', claimedAddr, token.poolAddress, value, BigInt(deadline), salt);
+        recoveredAddr = recoverTypedSignature({data: dataToSign, signature: `0x${signature}`, version: SignTypedDataVersion.V4});
+      } catch (err) {
+        throw new SignatureError(`Cannot recover address from the provided signature. Error: ${err.message}`);
+      }
+      if (recoveredAddr != claimedAddr) {
+        throw new SignatureError(`The address recovered from the permit signature ${recoveredAddr} doesn't match the declared one ${claimedAddr}`);
+      }
+
       // We should check deadline here because the user could introduce great delay
       if (Math.floor(Date.now() / 1000) > deadline - PERMIT_DEADLINE_THRESHOLD) {
         throw new TxDepositDeadlineExpiredError(deadline);
@@ -572,6 +587,17 @@ export class ZkBobClient {
       const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
       if (!txValid) {
         throw new TxProofError();
+      }
+
+      // Checking the depositor's token balance before sending tx
+      let balance;
+      try {
+        balance = (await this.config.network.getTokenBalance(tokenAddress, claimedAddr)) / state.denominator;
+      } catch (err) {
+        throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
+      }
+      if (balance < (amountGwei + feeGwei)) {
+        throw new TxInsufficientFundsError(amountGwei, balance);
       }
 
       const tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
@@ -748,6 +774,16 @@ export class ZkBobClient {
     const token = this.tokens[tokenAddress];
     const state = this.zpStates[tokenAddress];
 
+    // Validate withdrawal address:
+    //  - it should starts with '0x' prefix
+    //  - it should be 20-byte length
+    //  - if it contains checksum (EIP-55) it should be valid
+    //  - zero addresses are prohibited to withdraw
+    if (!isHexPrefixed(address) || !isAddress(address) || address.toLowerCase() == NULL_ADDRESS) {
+      throw new TxInvalidArgumentError('Please provide a valid non-zero address');
+    }
+    const addressBin = ethAddrToBuf(address);
+
     if (amountGwei < MIN_TX_AMOUNT) {
       throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
     }
@@ -764,8 +800,6 @@ export class ZkBobClient {
       const feeEst = await this.feeEstimate(tokenAddress, [amountGwei], TxType.Withdraw, false);
       throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
-
-    const addressBin = ethAddrToBuf(address);
 
     var jobsIds: string[] = [];
     var optimisticState: StateUpdate = {
@@ -881,6 +915,18 @@ export class ZkBobClient {
     if (this.config.network.isSignatureCompact()) {
       fullSignature = toCompactSignature(fullSignature);
     }
+
+    // Checking the depositor's token balance before sending tx
+    let balance;
+    try {
+      balance = (await this.config.network.getTokenBalance(tokenAddress, addrFromSig)) / state.denominator;
+    } catch (err) {
+      throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
+    }
+    if (balance < (amountGwei + feeGwei)) {
+      throw new TxInsufficientFundsError(amountGwei, balance);
+    }
+
 
     const tx = { txType: TxType.Deposit, memo: txData.memo, proof: txProof, depositSignature: fullSignature };
     const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
