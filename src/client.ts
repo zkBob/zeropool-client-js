@@ -12,6 +12,8 @@ import { EphemeralAddress } from './ephemeral';
 
 const LOG_STATE_HOTSYNC = false;
 
+const LIB_VERSION = require('../package.json').version;
+
 import { 
   Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
   ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, IndexedTx, TreeNode
@@ -1822,12 +1824,14 @@ export class ZkBobClient {
   // -------------------------------------------------------------------------------
 
   private defaultHeaders(supportId: boolean = true): HeadersInit {
-    if (supportId && this.config.supportId !== undefined && this.config.supportId.length > 0) {
+    if (supportId && this.config.supportId) {
       return {'content-type': 'application/json;charset=UTF-8',
+              'zkbob-libjs-version': LIB_VERSION,
               'zkbob-support-id': this.config.supportId};
     }
 
-    return {'content-type': 'application/json;charset=UTF-8'};
+    return {'content-type': 'application/json;charset=UTF-8',
+            'zkbob-libjs-version': LIB_VERSION};
   }
   
   private async fetchTransactionsOptimistic(relayerUrl: string, offset: BigInt, limit: number = 100): Promise<string[]> {
