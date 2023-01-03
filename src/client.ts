@@ -988,8 +988,8 @@ export class ZkBobClient {
     return jobId;
   }
 
-  private async proveTx(tokenAddres: string, pub: any, sec: any): Promise<any> {
-    const token = this.tokens[tokenAddres];
+  private async proveTx(tokenAddress: string, pub: any, sec: any): Promise<any> {
+    const token = this.tokens[tokenAddress];
     if (token.delegatedProverEnabled && token.delegatedProverUrl) {
       console.debug('Delegated Prover: proveTx');
       try {
