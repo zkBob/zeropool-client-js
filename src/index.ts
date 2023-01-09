@@ -10,9 +10,7 @@ export * from './errors'
 
 export enum InitState {
   Started = 1,
-  DownloadingParams,
   InitWorker,
-  InitWasm,
   Completed,
   Failed,
 }
@@ -66,10 +64,12 @@ export async function init(
 
   // Intercept all possible exceptions to process `Failed` status
   try {
-    let loaded = false;
+    if (statusCallback !== undefined) {
+      statusCallback({ state: InitState.InitWorker, download: lastProgress });
+    }
 
     worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
-    const initializer: Promise<void> = worker.initWasm({
+    await worker.initWasm({
       txParams: snarkParams.transferParamsUrl,
       treeParams: snarkParams.treeParamsUrl,
     }, txParamsHash, 
@@ -77,46 +77,6 @@ export async function init(
       transferVkUrl: snarkParams.transferVkUrl,
       treeVkUrl: snarkParams.treeVkUrl,
     });
-
-    
-    initializer.then(() => {
-      loaded = true
-    });
-
-    if (statusCallback !== undefined) {
-      // progress pseudo callback
-      let lastStage = 0;
-      while (loaded == false) {
-        const progress = await worker.getProgress();
-        const stage = await worker.getLoadingStage();
-        switch(stage) {
-          case 4: //LoadingStage.Download: // we cannot import LoadingStage in runtime
-            if (progress.total > 0 && progress.loaded != lastProgress.loaded) {
-              lastProgress = progress;
-              statusCallback({ state: InitState.DownloadingParams, download: lastProgress });
-            }
-            break;
-
-          case 5: //LoadingStage.LoadObjects: // we cannot import LoadingStage in runtime
-            if(lastStage != stage) {  // switch to this state just once
-              lastProgress = progress;
-              statusCallback({ state: InitState.InitWorker, download: lastProgress });
-            }
-            break;
-
-          default: break;
-        }
-        lastStage = stage;
-
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-
-      lastProgress = await worker.getProgress();
-      statusCallback({ state: InitState.InitWasm, download: lastProgress });
-    } else {
-      // we should wait worker init completed in case of callback absence
-      await initializer;
-    }
 
     if (statusCallback !== undefined) {
       statusCallback({ state: InitState.Completed, download: lastProgress });

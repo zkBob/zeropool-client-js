@@ -5,28 +5,12 @@ import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, Snar
 import { FileCache } from './file-cache';
 import { threads } from 'wasm-feature-detect';
 
-let txParams: any;
+let txParams: Promise<any>;
 let treeParams: any;
 let txParser: any;
 let zpAccounts: { [tokenAddress: string]: any } = {};
 let transferVk: any;
 let treeVk: any;
-
-// NOTE: Please fix enum constants in index.ts
-// in case of you change this enum
-export enum LoadingStage {
-  Unknown = 0,
-  Init = 1, // initWasm routine has been started
-  DatabaseRead, // parameters loaded from DB
-  CheckingHash, // TODO: verify hash of the stored parameters
-  Download, // parameters has been started loading
-  LoadObjects,  // load parameters in the memory
-  Completed,  // initialization completed
-}
-
-let loadingStage: LoadingStage = LoadingStage.Unknown;
-let loadedBytes: number = 0;
-let totalBytes: number = 0;
 
 let wasm: any;
 
@@ -36,7 +20,6 @@ const obj = {
     txParamsHash: string | undefined = undefined,  // skip hash checking when undefined
     vkUrls: {transferVkUrl: string, treeVkUrl: string},
   ) {
-    loadingStage = LoadingStage.Init;
     console.info('Initializing web worker...');
     
     // Safari doesn't support spawning Workers from inside other Workers yet.
@@ -54,60 +37,7 @@ const obj = {
       await wasm.default()
     }
 
-    const cache = await FileCache.init();
-
-    loadedBytes = 0;
-    totalBytes = 0;
-
-    loadingStage = LoadingStage.DatabaseRead;
-    console.time(`Load parameters from DB`);
-    let txParamsData = await cache.get(paramUrls.txParams);
-    console.timeEnd(`Load parameters from DB`);
-
-    // check parameters hash if needed
-    if (txParamsData && txParamsHash !== undefined) {
-      loadingStage = LoadingStage.CheckingHash;
-
-      let computedHash = await cache.getHash(paramUrls.txParams);
-      if (!computedHash) {
-        computedHash = await cache.saveHash(paramUrls.txParams, txParamsData);
-      }
-      
-      if (computedHash.toLowerCase() != txParamsHash.toLowerCase()) {
-        // forget saved params in case of hash inconsistence
-        console.warn(`Hash of cached tx params (${computedHash}) doesn't associated with provided (${txParamsHash}). Reload needed!`);
-        cache.remove(paramUrls.txParams);
-        txParamsData = null;
-      }
-    }
-
-    if (!txParamsData) {
-      loadingStage = LoadingStage.Download;
-      console.time(`Download params`);
-      txParamsData = await cache.cache(paramUrls.txParams, (loaded, total) => {
-        loadedBytes = loaded;
-        totalBytes = total;
-      });
-      console.timeEnd(`Download params`);
-
-      loadingStage = LoadingStage.LoadObjects;
-      await new Promise(resolve => setTimeout(resolve, 20)); // workaround to proper stage updating
-      console.time(`Creating Params object`);
-      txParams = wasm.Params.fromBinary(new Uint8Array(txParamsData!));
-      console.timeEnd(`Creating Params object`);
-
-    } else {
-      loadedBytes = txParamsData.byteLength;
-      totalBytes = txParamsData.byteLength;
-
-      console.log(`File ${paramUrls.txParams} is present in cache, no need to fetch`);
-
-      loadingStage = LoadingStage.LoadObjects;
-      await new Promise(resolve => setTimeout(resolve, 20)); // workaround to proper stage updating
-      console.time(`Creating Params object`);
-      txParams = wasm.Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false);
-      console.timeEnd(`Creating Params object`);
-    }
+    txParams = this.getTxParams(paramUrls.txParams, txParamsHash);
 
     txParser = wasm.TxParser._new()
 
@@ -117,22 +47,55 @@ const obj = {
     console.timeEnd(`VK initializing`);
 
     console.info('Web worker init complete.');
-
-    loadingStage = LoadingStage.Completed;
   },
 
-  getLoadingStage(): LoadingStage {
-    return loadingStage;
-  },
+  async getTxParams(txParamsUrl: string, txParamsHash: string | undefined): Promise<any> {
+    return new Promise(async resolve => {
+      const cache = await FileCache.init();
 
-  getProgress(): {loaded: number, total: number} {
-    return {loaded: loadedBytes, total: totalBytes};
+      console.time(`[Background] Load parameters from DB`);
+      let txParamsData = await cache.get(txParamsUrl);
+      console.timeEnd(`[Background] Load parameters from DB`);
+
+      // check parameters hash if needed
+      if (txParamsData && txParamsHash !== undefined) {
+        let computedHash = await cache.getHash(txParamsUrl);
+        if (!computedHash) {
+          computedHash = await cache.saveHash(txParamsUrl, txParamsData);
+        }
+        
+        if (computedHash.toLowerCase() != txParamsHash.toLowerCase()) {
+          // forget saved params in case of hash inconsistence
+          console.warn(`[Background] Hash of cached tx params (${computedHash}) doesn't associated with provided (${txParamsHash}).`);
+          cache.remove(txParamsUrl);
+          txParamsData = null;
+        }
+      }
+
+      let txParams;
+      if (!txParamsData) {
+        console.time(`[Background] Download params`);
+        txParamsData = await cache.cache(txParamsUrl);
+        console.timeEnd(`[Background] Download params`);
+
+        console.time(`[Background] Creating Params object`);
+        txParams = wasm.Params.fromBinary(new Uint8Array(txParamsData!));
+        console.timeEnd(`[Background] Creating Params object`);
+
+      } else {
+        console.log(`[Background] File ${txParamsUrl} is present in cache, no need to fetch`);
+        console.time(`[Background] Creating Params object`);
+        txParams = wasm.Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false);
+        console.timeEnd(`[Background] Creating Params object`);
+      }
+      resolve(txParams);
+    });
   },
 
   async proveTx(pub, sec) {
     return new Promise(async resolve => {
       console.debug('Web worker: proveTx');
-      const result = wasm.Proof.tx(txParams, pub, sec);
+      const result = wasm.Proof.tx(await txParams, pub, sec);
       resolve(result);
     });
   },
