@@ -44,7 +44,7 @@ export class FileCache {
   public async cache(path: string, loadingCallback: LoadingProgressCallback | undefined = undefined): Promise<ArrayBuffer> {
     const response = await fetch(path);
 
-    if (response.body) {
+    if (response.status == 200 && response.body) {
       const reader = response.body.getReader();  
       
       // Total file length

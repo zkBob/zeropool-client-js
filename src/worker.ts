@@ -60,8 +60,8 @@ const obj = {
         const cache = await FileCache.init();
 
         console.time(`Load parameters from DB`);
-        let txParamsData = await cache.get(transferParamsUrl);
-        console.timeEnd(`Load parameters from DB`);
+        let txParamsData = await cache.get(transferParamsUrl)
+          .finally(() => console.timeEnd(`Load parameters from DB`));
 
         // check parameters hash if needed
         if (txParamsData && transferParamsHash !== undefined) {
@@ -81,22 +81,27 @@ const obj = {
         let txParams;
         if (!txParamsData) {
           console.time(`Download params`);
-          txParamsData = await cache.cache(transferParamsUrl);
-          console.timeEnd(`Download params`);
+          txParamsData = await cache.cache(transferParamsUrl)
+            .finally(() => console.timeEnd(`Download params`));
 
-          console.time(`Creating Params object`);
-          txParams = wasm.Params.fromBinary(new Uint8Array(txParamsData!));
-          console.timeEnd(`Creating Params object`);
-
+          try {
+            console.time(`Creating Params object`);
+            txParams = wasm.Params.fromBinary(new Uint8Array(txParamsData!));
+          } finally {
+            console.timeEnd(`Creating Params object`);
+          }
         } else {
           console.log(`File ${transferParamsUrl} is present in cache, no need to fetch`);
-          console.time(`Creating Params object`);
-          txParams = wasm.Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false);
-          console.timeEnd(`Creating Params object`);
+          
+          try {
+            console.time(`Creating Params object`);
+            txParams = wasm.Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false);
+          } finally {
+            console.timeEnd(`Creating Params object`);
+          }
         }
         resolve(txParams);
       } catch (err) {
-        console.warn(`Failed to load params: ${err.message}`);
         reject(new Error(`Failed to load params: ${err.message}`));
       }
     });
