@@ -23,6 +23,12 @@ export interface Token {
   //  no transactions associated with the account should exist lower that index
   //  set -1 to use the latest index (creating _NEW_ account)
   birthindex: number | undefined;
-  delegatedProverEnabled: boolean;
+  proverMode: ProverMode;
   delegatedProverUrl: string | undefined;
+}
+
+export enum ProverMode {
+  Local = "Local",
+  Delegated = "Delegated",
+  DelegatedWithFallback = "DelegatedWithFallback"
 }

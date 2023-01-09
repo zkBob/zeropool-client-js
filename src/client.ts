@@ -1,4 +1,4 @@
-import { Tokens } from './config';
+import { ProverMode, Tokens } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature,
           isRangesIntersected, hexToNode, bufToHex
@@ -256,7 +256,7 @@ export class ZkBobClient {
       }
 
       try {
-        client.setDelegatedProverEnabled(address, token.delegatedProverEnabled);
+        client.setProverMode(address, token.proverMode);
       } catch (err) {
         console.error(err);
       }
@@ -415,17 +415,21 @@ export class ZkBobClient {
     return txHash;
   }
 
-  public setDelegatedProverEnabled(tokenAddress: string, enabled: boolean) {
+  public setProverMode(tokenAddress: string, mode: ProverMode) {
+    if (!Object.values(ProverMode).includes(mode)) {
+      throw new InternalError("Provided mode isn't correct. Possible modes: Local, Delegated, and DelegatedWithFallback");
+    }
+
     const token = this.tokens[tokenAddress];
-    if (enabled && !token.delegatedProverUrl) {
-      token.delegatedProverEnabled = false;
+    if ((mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) && !token.delegatedProverUrl) {
+      token.proverMode = ProverMode.Local;
       throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
     }
-    this.tokens[tokenAddress].delegatedProverEnabled = enabled;
+    token.proverMode = mode;
   }
 
-  public getDelegatedProverEnabled(tokenAddress: string): boolean {
-    return this.tokens[tokenAddress].delegatedProverEnabled;
+  public getProverMode(tokenAddress: string): ProverMode {
+    return this.tokens[tokenAddress].proverMode;
   }
 
   // Start monitoring job
@@ -990,7 +994,7 @@ export class ZkBobClient {
 
   private async proveTx(tokenAddress: string, pub: any, sec: any): Promise<any> {
     const token = this.tokens[tokenAddress];
-    if (token.delegatedProverEnabled && token.delegatedProverUrl) {
+    if ((token.proverMode == ProverMode.Delegated || token.proverMode == ProverMode.DelegatedWithFallback) && token.delegatedProverUrl) {
       console.debug('Delegated Prover: proveTx');
       try {
         const url = new URL('/proveTx', token.delegatedProverUrl);
@@ -1003,7 +1007,11 @@ export class ZkBobClient {
         }
         return {inputs, proof};
       } catch (e) {
-        console.error(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
+        if (token.proverMode == ProverMode.Delegated) {
+          throw new InternalError(`Failed to prove tx using delegated prover: ${e}`);
+        } else {
+          console.warn(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
+        }
       }
     }
 
