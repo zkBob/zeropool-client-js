@@ -275,6 +275,9 @@ export class ZkBobClient {
 
       try {
         client.setProverMode(address, token.proverMode);
+        if (client.getProverMode(address) != ProverMode.Delegated) {
+          client.worker.loadTxParams();
+        }
       } catch (err) {
         console.error(err);
       }
