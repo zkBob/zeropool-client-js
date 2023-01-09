@@ -159,6 +159,17 @@ export interface LimitsFetch {
   tier: number;
 }
 
+export interface RelayerVersion {
+  ref: string;
+  commitHash: string;
+}
+
+const isRelayerVersion = (obj: any): obj is RelayerVersion => {
+  return typeof obj === 'object' && obj !== null &&
+    obj.hasOwnProperty('ref') && typeof obj.ref === 'string' &&
+    obj.hasOwnProperty('commitHash') && typeof obj.commitHash === 'string';
+}
+
 // Used to collect state synchronization statistic
 // It could be helpful to monitor average sync time
 export interface SyncStat {
@@ -202,6 +213,7 @@ export class ZkBobClient {
   private tokens: Tokens;
   private config: ClientConfig;
   private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
+  private relayerVersions = new Map<string, RelayerVersion>(); // relayer version: URL -> version
   private updateStatePromise: Promise<boolean> | undefined;
   private syncStats: SyncStat[] = [];
   private skipColdStorage: boolean = false;
@@ -516,6 +528,18 @@ export class ZkBobClient {
     }
 
     return job;
+  }
+
+  public async getRelayerVersion(tokenAddress: string): Promise<RelayerVersion> {
+    const relayerUrl = this.tokens[tokenAddress].relayerUrl;
+    let version = this.relayerVersions.get(relayerUrl);
+    if (version === undefined) {
+      version = await this.version(relayerUrl);
+      
+      this.relayerVersions.set(relayerUrl, version);
+    }
+
+    return version;
   }
 
   // ------------------=========< Making Transactions >=========-------------------
@@ -1993,6 +2017,18 @@ export class ZkBobClient {
       }
       return node;
     });
+  }
+
+  private async version(relayerUrl: string): Promise<RelayerVersion> {
+    const url = new URL(`/version`, relayerUrl);
+    const headers = this.defaultHeaders(false);
+
+    const version = await this.fetchJson(url.toString(), {headers});
+    if (isRelayerVersion(version)) {
+      return version;
+    }
+
+    throw new RelayerError(200, `Incorrect response (expected RelayerVersion, got \'${version}\')`)
   }
 
   // Universal response parser
