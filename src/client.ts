@@ -998,7 +998,7 @@ export class ZkBobClient {
       console.debug('Delegated Prover: proveTx');
       try {
         const url = new URL('/proveTx', token.delegatedProverUrl);
-        const headers = {'content-type': 'application/json;charset=UTF-8'};
+        const headers = this.defaultHeaders();
         const proof = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
         const inputs = Object.values(pub);
         const txValid = await this.worker.verifyTxProof(inputs, proof);
