@@ -1,4 +1,4 @@
-import { Tokens } from './config';
+import { ProverMode, Tokens } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature,
           isRangesIntersected, hexToNode, bufToHex
@@ -254,9 +254,16 @@ export class ZkBobClient {
         console.error(`Cannot fetch denominator value from the relayer, will using default 10^9: ${err}`);
         denominator = DEFAULT_DENOMINATOR;
       }
+
+      try {
+        client.setProverMode(address, token.proverMode);
+      } catch (err) {
+        console.error(err);
+      }
+
       client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, address, client.worker, token.coldStorageConfigPath);
     }
-
+    
     return client;
   }
 
@@ -406,6 +413,23 @@ export class ZkBobClient {
     }
 
     return txHash;
+  }
+
+  public setProverMode(tokenAddress: string, mode: ProverMode) {
+    if (!Object.values(ProverMode).includes(mode)) {
+      throw new InternalError("Provided mode isn't correct. Possible modes: Local, Delegated, and DelegatedWithFallback");
+    }
+
+    const token = this.tokens[tokenAddress];
+    if ((mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) && !token.delegatedProverUrl) {
+      token.proverMode = ProverMode.Local;
+      throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
+    }
+    token.proverMode = mode;
+  }
+
+  public getProverMode(tokenAddress: string): ProverMode {
+    return this.tokens[tokenAddress].proverMode;
   }
 
   // Start monitoring job
@@ -584,14 +608,9 @@ export class ZkBobClient {
       }
 
       const startProofDate = Date.now();
-      const txProof = await this.worker.proveTx(txData.public, txData.secret);
+      const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-
-      const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
-      if (!txValid) {
-        throw new TxProofError();
-      }
 
       // Checking the depositor's token balance before sending tx
       let balance;
@@ -736,14 +755,9 @@ export class ZkBobClient {
       console.log(`Transaction created: delta_index = ${oneTxData.parsed_delta.index}, root = ${oneTxData.public.root}`);
 
       const startProofDate = Date.now();
-      const txProof: Proof = await this.worker.proveTx(oneTxData.public, oneTxData.secret);
+      const txProof: Proof = await this.proveTx(tokenAddress, oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-
-      const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
-      if (!txValid) {
-        throw new TxProofError();
-      }
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Transfer};
 
@@ -828,14 +842,9 @@ export class ZkBobClient {
       const oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
 
       const startProofDate = Date.now();
-      const txProof: Proof = await this.worker.proveTx(oneTxData.public, oneTxData.secret);
+      const txProof: Proof = await this.proveTx(tokenAddress, oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-
-      const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
-      if (!txValid) {
-        throw new TxProofError();
-      }
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Withdraw};
 
@@ -888,14 +897,9 @@ export class ZkBobClient {
     });
 
     const startProofDate = Date.now();
-    const txProof = await this.worker.proveTx(txData.public, txData.secret);
+    const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-
-    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
-    if (!txValid) {
-      throw new TxProofError();
-    }
 
     // regular deposit through approve allowance: sign transaction nullifier
     const dataToSign = '0x' + BigInt(txData.public.nullifier).toString(16).padStart(64, '0');
@@ -968,14 +972,9 @@ export class ZkBobClient {
     const txData = await state.createTransfer({ outputs: outGwei, fee: feeGwei.toString() });
 
     const startProofDate = Date.now();
-    const txProof = await this.worker.proveTx(txData.public, txData.secret);
+    const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-
-    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
-    if (!txValid) {
-      throw new TxProofError();
-    }
 
     const tx = { txType: TxType.Transfer, memo: txData.memo, proof: txProof };
     const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
@@ -991,6 +990,38 @@ export class ZkBobClient {
     state.history.keepQueuedTransactions(recs, jobId);
 
     return jobId;
+  }
+
+  private async proveTx(tokenAddress: string, pub: any, sec: any): Promise<any> {
+    const token = this.tokens[tokenAddress];
+    if ((token.proverMode == ProverMode.Delegated || token.proverMode == ProverMode.DelegatedWithFallback) && token.delegatedProverUrl) {
+      console.debug('Delegated Prover: proveTx');
+      try {
+        const url = new URL('/proveTx', token.delegatedProverUrl);
+        const headers = this.defaultHeaders();
+        const proof = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
+        const inputs = Object.values(pub);
+        const txValid = await this.worker.verifyTxProof(inputs, proof);
+        if (!txValid) {
+          throw new TxProofError();
+        }
+        return {inputs, proof};
+      } catch (e) {
+        if (token.proverMode == ProverMode.Delegated) {
+          console.error(`Failed to prove tx using delegated prover: ${e}`);
+          throw new TxProofError();
+        } else {
+          console.warn(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
+        }
+      }
+    }
+
+    const txProof = await this.worker.proveTx(pub, sec);
+    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+    if (!txValid) {
+      throw new TxProofError();
+    }
+    return txProof;
   }
 
   // ------------------=========< Transaction configuration >=========-------------------
