@@ -42,6 +42,7 @@ const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via 
 const DEFAULT_DENOMINATOR = BigInt(1000000000);
 const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
 const MIN_TX_COUNT_FOR_STAT = 10;
+const RELAYER_VERSION_REQUEST_THRESHOLD = 3600; // relayer's version expiration (in seconds)
 
 export interface RelayerInfo {
   root: string;
@@ -164,6 +165,11 @@ export interface RelayerVersion {
   commitHash: string;
 }
 
+interface RelayerVersionFetch {
+  version: RelayerVersion;
+  timestamp: number;  // when the version was fetched
+}
+
 const isRelayerVersion = (obj: any): obj is RelayerVersion => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('ref') && typeof obj.ref === 'string' &&
@@ -213,7 +219,7 @@ export class ZkBobClient {
   private tokens: Tokens;
   private config: ClientConfig;
   private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
-  private relayerVersions = new Map<string, RelayerVersion>(); // relayer version: URL -> version
+  private relayerVersions = new Map<string, RelayerVersionFetch>(); // relayer version: URL -> version
   private updateStatePromise: Promise<boolean> | undefined;
   private syncStats: SyncStat[] = [];
   private skipColdStorage: boolean = false;
@@ -532,14 +538,15 @@ export class ZkBobClient {
 
   public async getRelayerVersion(tokenAddress: string): Promise<RelayerVersion> {
     const relayerUrl = this.tokens[tokenAddress].relayerUrl;
-    let version = this.relayerVersions.get(relayerUrl);
-    if (version === undefined) {
-      version = await this.version(relayerUrl);
+    let cachedVer = this.relayerVersions.get(relayerUrl);
+    if (cachedVer === undefined || cachedVer.timestamp + RELAYER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
+      const version = await this.version(relayerUrl);
+      cachedVer = {version, timestamp: Date.now()};
       
-      this.relayerVersions.set(relayerUrl, version);
+      this.relayerVersions.set(relayerUrl, cachedVer);
     }
 
-    return version;
+    return cachedVer.version;
   }
 
   // ------------------=========< Making Transactions >=========-------------------
