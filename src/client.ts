@@ -254,9 +254,16 @@ export class ZkBobClient {
         console.error(`Cannot fetch denominator value from the relayer, will using default 10^9: ${err}`);
         denominator = DEFAULT_DENOMINATOR;
       }
+
+      try {
+        client.setDelegatedProverEnabled(address, token.delegatedProverEnabled);
+      } catch (err) {
+        console.error(err);
+      }
+
       client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, address, client.worker, token.coldStorageConfigPath);
     }
-
+    
     return client;
   }
 
@@ -409,6 +416,11 @@ export class ZkBobClient {
   }
 
   public setDelegatedProverEnabled(tokenAddress: string, enabled: boolean) {
+    const token = this.tokens[tokenAddress];
+    if (enabled && !token.delegatedProverUrl) {
+      token.delegatedProverEnabled = false;
+      throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
+    }
     this.tokens[tokenAddress].delegatedProverEnabled = enabled;
   }
 
@@ -1003,22 +1015,17 @@ export class ZkBobClient {
 
   private async proveTx(tokenAddres: string, pub: any, sec: any): Promise<any> {
     const token = this.tokens[tokenAddres];
-    if (token.delegatedProverEnabled) {
-      if (token.delegatedProverUrl) {
-        console.debug('Delegated Prover: proveTx');
-        try {
-          const url = new URL('/proveTx', token.delegatedProverUrl);
-          const headers = {'content-type': 'application/json;charset=UTF-8'};
-          return await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
-        } catch (e) {
-          throw new Error(`Failed to prove tx using delegated prover: ${e}`);
-        }
-      } else {
-        throw new Error("Delegated prover url not provided");
+    if (token.delegatedProverEnabled && token.delegatedProverUrl) {
+      console.debug('Delegated Prover: proveTx');
+      try {
+        const url = new URL('/proveTx', token.delegatedProverUrl);
+        const headers = {'content-type': 'application/json;charset=UTF-8'};
+        return await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
+      } catch (e) {
+        console.error(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
       }
-    } else {
-      return await this.worker.proveTx(pub, sec);
-    }
+    } 
+    return await this.worker.proveTx(pub, sec);
   }
 
   // ------------------=========< Transaction configuration >=========-------------------

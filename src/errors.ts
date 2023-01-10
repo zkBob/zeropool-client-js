@@ -2,7 +2,9 @@ export class BobError extends Error {
     constructor(message: string) {
         super(message);
         this.name = this.constructor.name;
-        Error.captureStackTrace(this);
+        if (Error.captureStackTrace !== undefined) {
+            Error.captureStackTrace(this);
+        }
     }
 }
 
