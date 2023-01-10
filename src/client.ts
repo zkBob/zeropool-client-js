@@ -408,6 +408,14 @@ export class ZkBobClient {
     return txHash;
   }
 
+  public setDelegatedProverEnabled(tokenAddress: string, enabled: boolean) {
+    this.tokens[tokenAddress].delegatedProverEnabled = enabled;
+  }
+
+  public getDelegatedProverEnabled(tokenAddress: string): boolean {
+    return this.tokens[tokenAddress].delegatedProverEnabled;
+  }
+
   // Start monitoring job
   // Return existing promise or start new one
   private async startJobMonitoring(tokenAddress: string, jobId: string): Promise<JobInfo> {
@@ -584,7 +592,7 @@ export class ZkBobClient {
       }
 
       const startProofDate = Date.now();
-      const txProof = await this.proveTx(token.delegatedProverUrl, txData.public, txData.secret);
+      const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -736,7 +744,7 @@ export class ZkBobClient {
       console.log(`Transaction created: delta_index = ${oneTxData.parsed_delta.index}, root = ${oneTxData.public.root}`);
 
       const startProofDate = Date.now();
-      const txProof: Proof = await this.proveTx(token.delegatedProverUrl, oneTxData.public, oneTxData.secret);
+      const txProof: Proof = await this.proveTx(tokenAddress, oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -828,7 +836,7 @@ export class ZkBobClient {
       const oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
 
       const startProofDate = Date.now();
-      const txProof: Proof = await this.proveTx(token.delegatedProverUrl, oneTxData.public, oneTxData.secret);
+      const txProof: Proof = await this.proveTx(tokenAddress, oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -888,7 +896,7 @@ export class ZkBobClient {
     });
 
     const startProofDate = Date.now();
-    const txProof = await this.proveTx(token.delegatedProverUrl, txData.public, txData.secret);
+    const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -968,7 +976,7 @@ export class ZkBobClient {
     const txData = await state.createTransfer({ outputs: outGwei, fee: feeGwei.toString() });
 
     const startProofDate = Date.now();
-    const txProof = await this.proveTx(token.delegatedProverUrl, txData.public, txData.secret);
+    const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -991,6 +999,26 @@ export class ZkBobClient {
     state.history.keepQueuedTransactions(recs, jobId);
 
     return jobId;
+  }
+
+  private async proveTx(tokenAddres: string, pub: any, sec: any): Promise<any> {
+    const token = this.tokens[tokenAddres];
+    if (token.delegatedProverEnabled) {
+      if (token.delegatedProverUrl) {
+        console.debug('Delegated Prover: proveTx');
+        try {
+          const url = new URL('/proveTx', token.delegatedProverUrl);
+          const headers = {'content-type': 'application/json;charset=UTF-8'};
+          return await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
+        } catch (e) {
+          throw new Error(`Failed to prove tx using delegated prover: ${e}`);
+        }
+      } else {
+        throw new Error("Delegated prover url not provided");
+      }
+    } else {
+      return await this.worker.proveTx(pub, sec);
+    }
   }
 
   // ------------------=========< Transaction configuration >=========-------------------
@@ -2039,18 +2067,6 @@ export class ZkBobClient {
     } 
 
     return responseBody;
-  }
-
-  // TODO: make it configurable
-  private async proveTx(delegatedProverUrl: string | undefined, pub: any, sec: any): Promise<any> {
-    if (delegatedProverUrl) {
-      console.debug('Delegated Prover: proveTx');
-      const url = new URL('/proveTx', delegatedProverUrl);
-      const headers = {'content-type': 'application/json;charset=UTF-8'};
-      return await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
-    } else {
-      return await this.worker.proveTx(pub, sec);
-    }
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------
