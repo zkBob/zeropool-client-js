@@ -23,4 +23,5 @@ export interface Token {
   //  no transactions associated with the account should exist lower that index
   //  set -1 to use the latest index (creating _NEW_ account)
   birthindex: number | undefined;
+  delegatedProverUrl: string | undefined;
 }

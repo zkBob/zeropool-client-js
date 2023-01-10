@@ -584,7 +584,7 @@ export class ZkBobClient {
       }
 
       const startProofDate = Date.now();
-      const txProof = await this.worker.proveTx(txData.public, txData.secret);
+      const txProof = await this.proveTx(token.delegatedProverUrl, txData.public, txData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -736,7 +736,7 @@ export class ZkBobClient {
       console.log(`Transaction created: delta_index = ${oneTxData.parsed_delta.index}, root = ${oneTxData.public.root}`);
 
       const startProofDate = Date.now();
-      const txProof: Proof = await this.worker.proveTx(oneTxData.public, oneTxData.secret);
+      const txProof: Proof = await this.proveTx(token.delegatedProverUrl, oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -828,7 +828,7 @@ export class ZkBobClient {
       const oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
 
       const startProofDate = Date.now();
-      const txProof: Proof = await this.worker.proveTx(oneTxData.public, oneTxData.secret);
+      const txProof: Proof = await this.proveTx(token.delegatedProverUrl, oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -888,7 +888,7 @@ export class ZkBobClient {
     });
 
     const startProofDate = Date.now();
-    const txProof = await this.worker.proveTx(txData.public, txData.secret);
+    const txProof = await this.proveTx(token.delegatedProverUrl, txData.public, txData.secret);
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -968,7 +968,7 @@ export class ZkBobClient {
     const txData = await state.createTransfer({ outputs: outGwei, fee: feeGwei.toString() });
 
     const startProofDate = Date.now();
-    const txProof = await this.worker.proveTx(txData.public, txData.secret);
+    const txProof = await this.proveTx(token.delegatedProverUrl, txData.public, txData.secret);
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -2039,6 +2039,17 @@ export class ZkBobClient {
     } 
 
     return responseBody;
+  }
+
+  // TODO: make it configurable
+  private async proveTx(delegatedProverUrl, pub, sec): Promise<any> {
+    if (delegatedProverUrl !== undefined) {
+      const url = new URL('/proveTx', delegatedProverUrl);
+      const headers = {'content-type': 'application/json;charset=UTF-8'};
+      return await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
+    } else {
+      return await this.worker.proveTx(pub, sec);
+    }
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------
