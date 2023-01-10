@@ -2042,8 +2042,9 @@ export class ZkBobClient {
   }
 
   // TODO: make it configurable
-  private async proveTx(delegatedProverUrl, pub, sec): Promise<any> {
-    if (delegatedProverUrl !== undefined) {
+  private async proveTx(delegatedProverUrl: string | undefined, pub: any, sec: any): Promise<any> {
+    if (delegatedProverUrl) {
+      console.debug('Delegated Prover: proveTx');
       const url = new URL('/proveTx', delegatedProverUrl);
       const headers = {'content-type': 'application/json;charset=UTF-8'};
       return await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
