@@ -1008,7 +1008,8 @@ export class ZkBobClient {
         return {inputs, proof};
       } catch (e) {
         if (token.proverMode == ProverMode.Delegated) {
-          throw new InternalError(`Failed to prove tx using delegated prover: ${e}`);
+          console.error(`Failed to prove tx using delegated prover: ${e}`);
+          throw new TxProofError();
         } else {
           console.warn(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
         }
