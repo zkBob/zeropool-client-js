@@ -608,7 +608,7 @@ export class ZkBobClient {
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+      const txValid = await this.worker.verifyTxProof(Object.values(txData.public), txProof.proof);
       if (!txValid) {
         throw new TxProofError();
       }
@@ -760,7 +760,7 @@ export class ZkBobClient {
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+      const txValid = await this.worker.verifyTxProof(Object.values(oneTxData.public), txProof.proof);
       if (!txValid) {
         throw new TxProofError();
       }
@@ -852,7 +852,7 @@ export class ZkBobClient {
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+      const txValid = await this.worker.verifyTxProof(Object.values(oneTxData.public), txProof.proof);
       if (!txValid) {
         throw new TxProofError();
       }
@@ -912,7 +912,7 @@ export class ZkBobClient {
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+    const txValid = await this.worker.verifyTxProof(Object.values(txData.public), txProof.proof);
     if (!txValid) {
       throw new TxProofError();
     }
@@ -992,7 +992,7 @@ export class ZkBobClient {
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+    const txValid = await this.worker.verifyTxProof(Object.values(txData.public), txProof.proof);
     if (!txValid) {
       throw new TxProofError();
     }
