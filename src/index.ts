@@ -42,6 +42,7 @@ export async function init(
   snarkParams: SnarkConfigParams,
   relayerURL: string | undefined = undefined, // we'll try to fetch parameters hash for verification
   statusCallback: InitLibCallback | undefined = undefined,
+  forcedMultithreading: boolean | undefined = undefined, // specify this parameter to override multithreading autoselection
 ): Promise<ZkBobLibState> {
   const fileCache = await FileCache.init();
 
@@ -76,7 +77,8 @@ export async function init(
     {
       transferVkUrl: snarkParams.transferVkUrl,
       treeVkUrl: snarkParams.treeVkUrl,
-    });
+    },
+    forcedMultithreading);
 
     
     initializer.then(() => {
