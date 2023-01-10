@@ -331,8 +331,12 @@ const obj = {
   },
 
   async verifyTxProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
-    return new Promise(async resolve => {
-      resolve(wasm.Proof.verify(transferVk!, inputs, proof));
+    return new Promise(async (resolve, reject) => {
+      try {
+        resolve(wasm.Proof.verify(transferVk!, inputs, proof));
+      } catch (e) {
+        reject(e)
+      }
     });
   },
 
