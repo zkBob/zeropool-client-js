@@ -1,6 +1,6 @@
 import { expose } from 'comlink';
 import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, TreeNode,
-          ITransferData, IDepositData, IWithdrawData, IDepositPermittableData, Params
+          ITransferData, IDepositData, IWithdrawData, IDepositPermittableData
         } from 'libzkbob-rs-wasm-web';
 import { threads } from 'wasm-feature-detect';
 import { SnarkParams } from './params';
