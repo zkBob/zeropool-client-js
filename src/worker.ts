@@ -35,13 +35,15 @@ const obj = {
     paramUrls: { txParams: string; treeParams: string },
     txParamsHash: string | undefined = undefined,  // skip hash checking when undefined
     vkUrls: {transferVkUrl: string, treeVkUrl: string},
+    forcedMultithreading: boolean | undefined = undefined,
   ) {
     loadingStage = LoadingStage.Init;
     console.info('Initializing web worker...');
     
     // Safari doesn't support spawning Workers from inside other Workers yet.
     const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-    const isMt = await threads() && !isSafari;
+    const isMtSupported = await threads() && !isSafari;
+    const isMt = forcedMultithreading ?? isMtSupported;  // forced MT param has a higher priority than supported one
     
     if (isMt) {
       console.log('Using multi-threaded version');
