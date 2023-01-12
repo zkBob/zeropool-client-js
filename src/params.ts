@@ -95,12 +95,10 @@ export class SnarkParams {
         }).then((params) => {
             this.params = params;
             this.loadingStatus = LoadingStatus.Completed;
-            this.loadingPromise = undefined;
             return params;
         }, (err) => {
             this.params = undefined;
             this.loadingStatus = LoadingStatus.Failed;
-            this.loadingPromise = undefined;
             throw err;
         })
     }
