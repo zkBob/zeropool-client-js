@@ -22,23 +22,16 @@ export class SnarkParams {
     }
 
     public async get(wasm: any): Promise<any> {
-        if (this.loadingStatus == LoadingStatus.Completed) {
+        if (this.isParamsReady()) {
             return this.params;
         }
-
-        if (this.needToLoad()) {
-            this.load(wasm);
-        }
-
+        
+        this.load(wasm);
         return await this.loadingPromise;
     }
 
-    public needToLoad(): boolean {
-        return this.loadingStatus == LoadingStatus.NotStarted || this.loadingStatus == LoadingStatus.Failed;
-    }
-
     public load(wasm: any) {
-        if (this.loadingStatus == LoadingStatus.InProgress) {
+        if (this.isParamsReady() || this.loadingStatus == LoadingStatus.InProgress) {
             return;
         }
 
@@ -101,6 +94,10 @@ export class SnarkParams {
             this.loadingStatus = LoadingStatus.Failed;
             throw err;
         })
+    }
+
+    private isParamsReady(): boolean {
+        return this.params !== undefined;
     }
 }
 

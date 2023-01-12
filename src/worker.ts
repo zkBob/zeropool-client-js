@@ -52,10 +52,6 @@ const obj = {
     txParams.load(wasm);
   },
 
-  async txParamsNeedToLoad(): Promise<boolean> {
-    return txParams.needToLoad();
-  },
-
   async proveTx(pub, sec) {
     console.debug('Web worker: proveTx');
     let params = await txParams.get(wasm);
