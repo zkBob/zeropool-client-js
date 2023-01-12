@@ -24,6 +24,12 @@ export enum HistoryRecordState {
   RejectedByPool,
 }
 
+export interface RevealedMemo {
+  index: number;
+  encChunks: { data: Uint8Array, index: number }[]; // chunk: encrypted account or note
+  ecdhKeys:  { key: Uint8Array, index: number }[];  // keys to decrypting chunks at the corresponding indexes
+}
+
 export interface DecryptedMemo {
   index: number;
   acc: Account | undefined;
@@ -119,7 +125,7 @@ export class HistoryRecord {
   }
 }
 
-export class HistoryRecordIdx {
+class HistoryRecordIdx {
   index: number;
   record: HistoryRecord;
 
@@ -132,16 +138,24 @@ export class HistoryRecordIdx {
   }
 }
 
-export class TxHashIdx {
-  index: number;
-  txHash: string;
+export class ComplianceHistoryRecord extends HistoryRecord {
+  // encrypted elements (chunk: encrypted account or note)
+  public encChunks: { data: Uint8Array, index: number }[];
+  // keys to decrypting chunks at the corresponding indexes
+  public ecdhKeys:  { key: Uint8Array, index: number }[];
+  // decrypted elements
+  public acc: Account | undefined;
+  public inNotes:  { note: Note, index: number }[];
+  public outNotes: { note: Note, index: number }[];
 
-  public static create(txHash: string, index: number): TxHashIdx {
-    const result = new TxHashIdx();
-    result.index = index;
-    result.txHash = txHash;
+  constructor(rec: HistoryRecord, memo: DecryptedMemo, calldata: Uint8Array) {
+    super(rec.type, rec.timestamp, rec.actions, rec.fee, rec.txHash, rec.state, rec.failureReason);
 
-    return result;
+    this.encChunks = [];
+    this.ecdhKeys = [];
+    this.acc = memo.acc;
+    this.inNotes = memo.inNotes;
+    this.outNotes = memo.outNotes;
   }
 }
 
@@ -151,6 +165,7 @@ const TX_FAILED_TABLE = 'TX_FAILED_STORE';
 const DECRYPTED_MEMO_TABLE = 'DECRYPTED_MEMO';
 const DECRYPTED_PENDING_MEMO_TABLE = 'DECRYPTED_PENDING_MEMO';
 const HISTORY_STATE_TABLE = 'HISTORY_STATE';
+const NATIVE_TX_TABLE = 'NATIVE_TX';
 
 // History storage holds the parsed history records corresponding to the current account
 // and transaction hashes (on the native chain) which are needed for the history retrieving
@@ -188,7 +203,7 @@ export class HistoryStorage {
   }
 
   static async init(db_id: string, rpcUrl: string, worker: any): Promise<HistoryStorage> {
-    const db = await openDB(`zeropool.${db_id}.history`, 3, {
+    const db = await openDB(`zeropool.${db_id}.history`, 4, {
       upgrade(db, oldVersion, newVersions) {
         if (oldVersion < 2) {
           db.createObjectStore(TX_TABLE);   // table holds parsed history transactions
@@ -198,6 +213,9 @@ export class HistoryStorage {
         }
         if (oldVersion < 3) {
           db.createObjectStore(TX_FAILED_TABLE, {autoIncrement: true});
+        }
+        if (oldVersion < 4) {
+          db.createObjectStore(NATIVE_TX_TABLE);
         }
       }
     });
@@ -473,6 +491,10 @@ export class HistoryStorage {
     await this.db.delete(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(index, true));
   }
 
+  public async getComplianceReport(fromIndex: number, toIndex: number): Promise<ComplianceHistoryRecord[]> {
+    return [];
+  }
+
   public async rollbackHistory(rollbackIndex: number): Promise<void> {
     if (this.syncHistoryPromise) {
       // wait while sync is finished (if started)
@@ -504,6 +526,7 @@ export class HistoryStorage {
     await this.db.delete(TX_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
     await this.db.delete(DECRYPTED_MEMO_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
     await this.db.delete(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
+    await this.db.delete(NATIVE_TX_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
 
     // update sync_index
     this.syncIndex = new_sync_index
@@ -526,6 +549,7 @@ export class HistoryStorage {
     await this.db.clear(DECRYPTED_MEMO_TABLE);
     await this.db.clear(DECRYPTED_PENDING_MEMO_TABLE);
     await this.db.clear(HISTORY_STATE_TABLE);
+    await this.db.clear(NATIVE_TX_TABLE);
 
     // Clean local cache
     this.syncIndex = -1;
@@ -626,103 +650,103 @@ export class HistoryStorage {
   private async convertToHistory(memo: DecryptedMemo, pending: boolean, getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<HistoryRecordIdx[]> {
     const txHash = memo.txHash;
     if (txHash) {
-      const txData = await this.web3.eth.getTransaction(txHash);
-      if (txData && txData.blockNumber && txData.input) {
-          const block = await this.web3.eth.getBlock(txData.blockNumber);
-          if (block) {
-              let ts: number = 0;
-              if (typeof block.timestamp === "number" ) {
-                  ts = block.timestamp;
-              } else if (typeof block.timestamp === "string" ) {
-                  ts = Number(block.timestamp);
-              }
+      const txData = await this.getNativeTx(memo.index, txHash);
+      if (txData) {
+        const block = await this.web3.eth.getBlock(txData.blockNumber);
+        if (block) {
+            let ts: number = 0;
+            if (typeof block.timestamp === "number" ) {
+                ts = block.timestamp;
+            } else if (typeof block.timestamp === "string" ) {
+                ts = Number(block.timestamp);
+            }
 
-              // Decode transaction data
-              try {
-                const tx = ShieldedTx.decode(txData.input);
-                const feeAmount = BigInt('0x' + tx.memo.substr(0, 16))
+            // Decode transaction data
+            try {
+              const tx = ShieldedTx.decode(txData.input);
+              const feeAmount = BigInt('0x' + tx.memo.substr(0, 16))
 
-                if (tx.selector.toLowerCase() == "af989083") {
-                    // All data is collected here. Let's analyze it
+              if (tx.selector.toLowerCase() == "af989083") {
+                  // All data is collected here. Let's analyze it
 
-                    const allRecords: HistoryRecordIdx[] = [];
-                    if (tx.txType == TxType.Deposit) {
-                      // here is a deposit transaction (approvable method)
-                      // source address are recovered from the signature
-                      if (tx.extra && tx.extra.length >= 128) {
-                        const fullSig = toCanonicalSignature(tx.extra.substr(0, 128));
-                        const nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
-                        const depositHolderAddr = await this.web3.eth.accounts.recover(nullifier, fullSig);
-
-                        const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
-                        allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                        
-                      } else {
-                        //incorrect signature
-                        throw new InternalError(`no signature for approvable deposit`);
-                      }
-
-                    } else if (tx.txType == TxType.BridgeDeposit) {
-                      // here is a deposit transaction (permittable token)
-                      // source address in the memo block (20 bytes, starts from 16 bytes offset)
-                      const depositHolderAddr = '0x' + tx.memo.substr(32, 40);  // TODO: Check it!
+                  const allRecords: HistoryRecordIdx[] = [];
+                  if (tx.txType == TxType.Deposit) {
+                    // here is a deposit transaction (approvable method)
+                    // source address are recovered from the signature
+                    if (tx.extra && tx.extra.length >= 128) {
+                      const fullSig = toCanonicalSignature(tx.extra.substr(0, 128));
+                      const nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
+                      const depositHolderAddr = await this.web3.eth.accounts.recover(nullifier, fullSig);
 
                       const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
                       allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                      
+                    } else {
+                      //incorrect signature
+                      throw new InternalError(`no signature for approvable deposit`);
+                    }
 
-                    } else if (tx.txType == TxType.Transfer) {
-                      // there are 2 cases: 
-                      if (memo.acc) {
-                        // 1. we initiated it => outcoming tx(s)
-                        const transfers = await Promise.all(memo.outNotes.map(async ({note, index}) => {
-                          const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
-                          return {to: destAddr, amount: BigInt(note.b)};
-                        }));;
+                  } else if (tx.txType == TxType.BridgeDeposit) {
+                    // here is a deposit transaction (permittable token)
+                    // source address in the memo block (20 bytes, starts from 16 bytes offset)
+                    const depositHolderAddr = '0x' + tx.memo.substr(32, 40);  // TODO: Check it!
 
-                        const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
-                        allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                      } else {
-                        // 2. somebody initiated it => incoming tx(s)
+                    const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
+                    allRecords.push(HistoryRecordIdx.create(rec, memo.index));
 
-                        const transfers = await Promise.all(memo.inNotes.map(async ({note, index}) => {
-                          const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
-                          return {to: destAddr, amount: BigInt(note.b)};
-                        }));
+                  } else if (tx.txType == TxType.Transfer) {
+                    // there are 2 cases: 
+                    if (memo.acc) {
+                      // 1. we initiated it => outcoming tx(s)
+                      const transfers = await Promise.all(memo.outNotes.map(async ({note, index}) => {
+                        const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                        return {to: destAddr, amount: BigInt(note.b)};
+                      }));;
 
-                        const rec = await HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
-                        allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                      }
-                    } else if (tx.txType == TxType.Withdraw) {
-                      // withdrawal transaction (destination address in the memoblock)
-                      const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
+                      const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
+                      allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                    } else {
+                      // 2. somebody initiated it => incoming tx(s)
 
-                      const rec = await HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
+                      const transfers = await Promise.all(memo.inNotes.map(async ({note, index}) => {
+                        const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                        return {to: destAddr, amount: BigInt(note.b)};
+                      }));
+
+                      const rec = await HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
                       allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                     }
+                  } else if (tx.txType == TxType.Withdraw) {
+                    // withdrawal transaction (destination address in the memoblock)
+                    const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
 
-                    // if we found txHash in the blockchain -> remove it from the saved tx array
-                    if (pending) {
-                      // if tx is in pending state - remove it only on success
-                      const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
-                      if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
-                        this.removePendingTxByTxHash(txHash);
-                      }
-                    } else {
+                    const rec = await HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
+                    allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                  }
+
+                  // if we found txHash in the blockchain -> remove it from the saved tx array
+                  if (pending) {
+                    // if tx is in pending state - remove it only on success
+                    const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
+                    if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
                       this.removePendingTxByTxHash(txHash);
                     }
+                  } else {
+                    this.removePendingTxByTxHash(txHash);
+                  }
 
-                    return allRecords;
+                  return allRecords;
 
-                } else {
-                  throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${tx.selector}`);
-                }
+              } else {
+                throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${tx.selector}`);
               }
-              catch (e) {
-                throw new InternalError(`Cannot decode calldata for tx ${txHash}: ${e}`);
-              }
-          }
+            }
+            catch (e) {
+              throw new InternalError(`Cannot decode calldata for tx ${txHash}: ${e}`);
+            }
+        }
 
-          throw new InternalError(`Unable to get timestamp for block ${txData.blockNumber}`);
+        throw new InternalError(`Unable to get timestamp for block ${txData.blockNumber}`);
       } else {
         // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
         const records = this.sentTxs.get(txHash);
@@ -741,6 +765,52 @@ export class HistoryStorage {
     }
 
     throw new InternalError(`Cannot find txHash for memo at index ${memo.index}`);
+  }
+
+  private async getNativeTx(index: number, txHash: string | undefined = undefined): Promise<any> {
+    const mask = (-1) << CONSTANTS.OUTLOG;
+    const txIndex = index & mask;
+
+    let calldata = await this.db.get(NATIVE_TX_TABLE, txIndex);
+    if (!calldata) {
+      // calldata for that index isn't presented in the DB => request it
+      if (txHash === undefined) {
+        // it's need to get txHash for that index first
+        const decryptedMemo = await this.getDecryptedMemo(txIndex, false);  // only mined txs
+        if (decryptedMemo && decryptedMemo.txHash) {
+          txHash = decryptedMemo.txHash;
+        } else {
+          console.warn(`[HistoryStorage]: unable to retrieve txHash for tx at index ${txIndex}: no saved decrypted memo`);
+
+          return null;
+        }
+      }
+
+      try {
+        const txData = await this.web3.eth.getTransaction(txHash);
+        if (txData && txData.blockNumber && txData.input) {
+          this.saveNativeTx(index, txData);
+
+          return txData;
+        } else {
+          console.warn(`[HistoryStorage]: cannot get native tx ${txHash} (tx still not mined?)`);
+
+          return null;
+        }
+      } catch (err) {
+        console.warn(`[HistoryStorage]: cannot get native tx ${txHash} (${err.message})`);
+
+        return null;
+      }
+      
+    }
+  }
+
+  private async saveNativeTx(index: number, txData: any): Promise<void> {
+    const mask = (-1) << CONSTANTS.OUTLOG;
+    const txIndex = index & mask;
+
+    await this.db.put(NATIVE_TX_TABLE, txData, txIndex);
   }
 
 }
