@@ -9,11 +9,11 @@ export enum LoadingStatus {
 }
 
 export class SnarkParams {
-    url: string;
-    expectedHash: string | undefined;
-    params: any | undefined;
-    loadingPromise: Promise<any> | undefined;
-    loadingStatus: LoadingStatus;
+    private url: string;
+    private expectedHash: string | undefined;
+    private params: any | undefined;
+    private loadingPromise: Promise<any> | undefined;
+    private loadingStatus: LoadingStatus;
 
     public constructor(url: string, expectedHash: string | undefined) {
         this.loadingStatus = LoadingStatus.NotStarted;
