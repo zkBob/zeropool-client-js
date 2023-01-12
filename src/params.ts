@@ -12,7 +12,7 @@ export class SnarkParams {
     url: string;
     expectedHash: string | undefined;
     params: any | undefined;
-    loadingPromise: Promise<any>;
+    loadingPromise: Promise<any> | undefined;
     loadingStatus: LoadingStatus;
 
     public constructor(url: string, expectedHash: string | undefined) {
@@ -26,14 +26,22 @@ export class SnarkParams {
             return this.params;
         }
 
-        if (this.loadingStatus == LoadingStatus.NotStarted || this.loadingStatus == LoadingStatus.Failed) {
+        if (this.needToLoad()) {
             this.load(wasm);
         }
 
         return await this.loadingPromise;
     }
 
+    public needToLoad(): boolean {
+        return this.loadingStatus == LoadingStatus.NotStarted || this.loadingStatus == LoadingStatus.Failed;
+    }
+
     public load(wasm: any) {
+        if (this.loadingStatus == LoadingStatus.InProgress) {
+            return;
+        }
+
         this.loadingStatus = LoadingStatus.InProgress;
         this.loadingPromise = new Promise(async (resolve, reject) => {
             try {
@@ -87,10 +95,12 @@ export class SnarkParams {
         }).then((params) => {
             this.params = params;
             this.loadingStatus = LoadingStatus.Completed;
+            this.loadingPromise = undefined;
             return params;
         }, (err) => {
             this.params = undefined;
             this.loadingStatus = LoadingStatus.Failed;
+            this.loadingPromise = undefined;
             throw err;
         })
     }

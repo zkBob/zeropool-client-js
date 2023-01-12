@@ -17,7 +17,6 @@ export enum InitState {
 
 export interface InitStatus {
   state: InitState;
-  download: {loaded: number, total: number};  // bytes
   error?: Error | undefined;
 }
 
@@ -43,10 +42,8 @@ export async function init(
 ): Promise<ZkBobLibState> {
   const fileCache = await FileCache.init();
 
-  let lastProgress = {loaded: -1, total: -1};
-
   if (statusCallback !== undefined) {
-    statusCallback({ state: InitState.Started, download: lastProgress });
+    statusCallback({ state: InitState.Started });
   }
 
   // Get tx parameters hash from the relayer
@@ -65,7 +62,7 @@ export async function init(
   // Intercept all possible exceptions to process `Failed` status
   try {
     if (statusCallback !== undefined) {
-      statusCallback({ state: InitState.InitWorker, download: lastProgress });
+      statusCallback({ state: InitState.InitWorker });
     }
 
     worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
@@ -79,12 +76,12 @@ export async function init(
     });
 
     if (statusCallback !== undefined) {
-      statusCallback({ state: InitState.Completed, download: lastProgress });
+      statusCallback({ state: InitState.Completed });
     }
   } catch(err) {
     console.error(`Cannot initialize client library: ${err.message}`);
     if (statusCallback !== undefined) {
-      statusCallback({ state: InitState.Failed, download: lastProgress, error: err });
+      statusCallback({ state: InitState.Failed, error: err });
     }
   }
 

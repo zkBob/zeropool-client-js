@@ -48,8 +48,12 @@ const obj = {
     console.info('Web worker init complete.');
   },
 
-  loadTxParams() {
+  async loadTxParams() {
     txParams.load(wasm);
+  },
+
+  async txParamsNeedToLoad(): Promise<boolean> {
+    return txParams.needToLoad();
   },
 
   async proveTx(pub, sec) {

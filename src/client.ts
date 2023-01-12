@@ -274,10 +274,7 @@ export class ZkBobClient {
       }
 
       try {
-        client.setProverMode(address, token.proverMode);
-        if (client.getProverMode(address) != ProverMode.Delegated) {
-          client.worker.loadTxParams();
-        }
+        await client.setProverMode(address, token.proverMode);
       } catch (err) {
         console.error(err);
       }
@@ -436,7 +433,7 @@ export class ZkBobClient {
     return txHash;
   }
 
-  public setProverMode(tokenAddress: string, mode: ProverMode) {
+  public async setProverMode(tokenAddress: string, mode: ProverMode) {
     if (!Object.values(ProverMode).includes(mode)) {
       throw new InternalError("Provided mode isn't correct. Possible modes: Local, Delegated, and DelegatedWithFallback");
     }
@@ -446,6 +443,11 @@ export class ZkBobClient {
       token.proverMode = ProverMode.Local;
       throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
     }
+
+    if (mode != ProverMode.Delegated && await this.worker.txParamsNeedToLoad()) {
+      this.worker.loadTxParams();
+    }
+
     token.proverMode = mode;
   }
 
