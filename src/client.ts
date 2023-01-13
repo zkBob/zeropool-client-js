@@ -43,6 +43,7 @@ const DEFAULT_DENOMINATOR = BigInt(1000000000);
 const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
 const MIN_TX_COUNT_FOR_STAT = 10;
 const RELAYER_VERSION_REQUEST_THRESHOLD = 3600; // relayer's version expiration (in seconds)
+const PROVER_VERSION_REQUEST_THRESHOLD = 3600; // prover's version expiration (in seconds)
 
 export interface RelayerInfo {
   root: string;
@@ -160,17 +161,17 @@ export interface LimitsFetch {
   tier: number;
 }
 
-export interface RelayerVersion {
+export interface ServiceVersion {
   ref: string;
   commitHash: string;
 }
 
-interface RelayerVersionFetch {
-  version: RelayerVersion;
+interface ServiceVersionFetch {
+  version: ServiceVersion;
   timestamp: number;  // when the version was fetched
 }
 
-const isRelayerVersion = (obj: any): obj is RelayerVersion => {
+const isServiceVersion = (obj: any): obj is ServiceVersion => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('ref') && typeof obj.ref === 'string' &&
     obj.hasOwnProperty('commitHash') && typeof obj.commitHash === 'string';
@@ -219,7 +220,8 @@ export class ZkBobClient {
   private tokens: Tokens;
   private config: ClientConfig;
   private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
-  private relayerVersions = new Map<string, RelayerVersionFetch>(); // relayer version: URL -> version
+  private relayerVersions = new Map<string, ServiceVersionFetch>(); // relayer version: URL -> version
+  private proverVersions = new Map<string, ServiceVersionFetch>(); // prover version: URL -> version
   private updateStatePromise: Promise<boolean> | undefined;
   private syncStats: SyncStat[] = [];
   private skipColdStorage: boolean = false;
@@ -433,15 +435,24 @@ export class ZkBobClient {
     return txHash;
   }
 
-  public setProverMode(tokenAddress: string, mode: ProverMode) {
+  public async setProverMode(tokenAddress: string, mode: ProverMode) {
     if (!Object.values(ProverMode).includes(mode)) {
       throw new InternalError("Provided mode isn't correct. Possible modes: Local, Delegated, and DelegatedWithFallback");
     }
 
     const token = this.tokens[tokenAddress];
-    if ((mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) && !token.delegatedProverUrl) {
-      token.proverMode = ProverMode.Local;
-      throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
+    if (mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) {
+      if (token.delegatedProverUrl) {
+        try {
+          await this.getProverVersion(tokenAddress, false);
+        } catch (e) {
+          token.proverMode = ProverMode.Local;
+          throw new InternalError(`Delegated prover can't be enabled because delegated prover isn't healthy`)
+        } 
+      } else {
+        token.proverMode = ProverMode.Local;
+        throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
+      }
     }
     token.proverMode = mode;
   }
@@ -560,7 +571,7 @@ export class ZkBobClient {
     return job;
   }
 
-  public async getRelayerVersion(tokenAddress: string): Promise<RelayerVersion> {
+  public async getRelayerVersion(tokenAddress: string): Promise<ServiceVersion> {
     const relayerUrl = this.tokens[tokenAddress].relayerUrl;
     let cachedVer = this.relayerVersions.get(relayerUrl);
     if (cachedVer === undefined || cachedVer.timestamp + RELAYER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
@@ -568,6 +579,26 @@ export class ZkBobClient {
       cachedVer = {version, timestamp: Date.now()};
       
       this.relayerVersions.set(relayerUrl, cachedVer);
+    }
+
+    return cachedVer.version;
+  }
+
+  public async getProverVersion(tokenAddress: string, cached: boolean = true): Promise<ServiceVersion> {
+    const proverUrl = this.tokens[tokenAddress].delegatedProverUrl;
+    if (!proverUrl) {
+      throw new InternalError("Cannot fetch prover version because delegated prover url wasn't provided");
+    }
+
+    let cachedVer: ServiceVersionFetch | undefined = undefined;
+    if (cached) {
+      cachedVer = this.proverVersions.get(proverUrl);
+    }
+
+    if (cachedVer === undefined || cachedVer.timestamp + PROVER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
+      const version = await this.version(proverUrl);
+      cachedVer = {version, timestamp: Date.now()};
+      this.proverVersions.set(proverUrl, cachedVer);
     }
 
     return cachedVer.version;
@@ -2057,16 +2088,16 @@ export class ZkBobClient {
     });
   }
 
-  private async version(relayerUrl: string): Promise<RelayerVersion> {
-    const url = new URL(`/version`, relayerUrl);
+  private async version(serviceUrl: string): Promise<ServiceVersion> {
+    const url = new URL(`/version`, serviceUrl);
     const headers = this.defaultHeaders(false);
 
     const version = await this.fetchJson(url.toString(), {headers});
-    if (isRelayerVersion(version)) {
+    if (isServiceVersion(version)) {
       return version;
     }
 
-    throw new RelayerError(200, `Incorrect response (expected RelayerVersion, got \'${version}\')`)
+    throw new RelayerError(200, `Incorrect response (expected ServiceVersion, got \'${version}\')`)
   }
 
   // Universal response parser
