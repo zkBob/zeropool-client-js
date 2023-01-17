@@ -859,34 +859,51 @@ export class ZkBobClient {
     }
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
-      if (onePart.outNotes.length != 1) {
+      
+      let oneTxData: any;
+      let txType: TxType;
+      if (onePart.outNotes.length == 0) {
+        const oneTx: ITransferData = {
+          outputs: [],
+          fee: onePart.fee.toString(),
+        };
+        oneTxData = await state.createTransferOptimistic(oneTx, optimisticState);
+        txType = TxType.Transfer;
+      } else if (onePart.outNotes.length == 1) {
+        const oneTx: IWithdrawData = {
+          amount: onePart.outNotes[0].amountGwei.toString(),
+          fee: onePart.fee.toString(),
+          to: addressBin,
+          native_amount: '0',
+          energy_amount: '0',
+        };
+        oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
+        txType = TxType.Withdraw;
+      } else {
         throw new Error('Invalid transaction configuration');
       }
-      const onePartAmount = onePart.outNotes[0].amountGwei;
-      const oneTx: IWithdrawData = {
-        amount: onePartAmount.toString(),
-        fee: onePart.fee.toString(),
-        to: addressBin,
-        native_amount: '0',
-        energy_amount: '0',
-      };
-      const oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
 
       const startProofDate = Date.now();
       const txProof: Proof = await this.proveTx(tokenAddress, oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Withdraw};
+      const transaction = {memo: oneTxData.memo, proof: txProof, txType};
 
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
       this.startJobMonitoring(tokenAddress, jobId);
       jobsIds.push(jobId);
 
       // Temporary save transaction part in the history module (to prevent history delays)
-      const ts = Math.floor(Date.now() / 1000);
-      const record = await HistoryRecord.withdraw(address, onePartAmount, onePart.fee, ts, '0', true);
-      state.history.keepQueuedTransactions([record], jobId);
+      if (txType == TxType.Transfer) {
+        const ts = Math.floor(Date.now() / 1000);
+        const record = await HistoryRecord.transferOut([], onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
+        state.history.keepQueuedTransactions([record], jobId);
+      } else {
+        const ts = Math.floor(Date.now() / 1000);
+        const record = await HistoryRecord.withdraw(address, onePart.outNotes[0].amountGwei, onePart.fee, ts, '0', true);
+        state.history.keepQueuedTransactions([record], jobId);
+      }
 
       if (index < (txParts.length - 1)) {
         console.log(`Waiting for the job ${jobId} joining the optimistic state`);
@@ -1179,57 +1196,58 @@ export class ZkBobClient {
     // no parts when no requests
     if (transfers.length == 0) return [];
 
-    let result: Array<TransferConfig> = [];
-    let txNotes: Array<TransferRequest> = [];
-    const accountBalance = await state.accountBalance();
-    const notesParts = await this.getGroupedNotes(tokenAddress);
+    let totalAmount: bigint = transfers.reduce(
+      (acc, cur) => acc + cur.amountGwei,
+      BigInt(0)
+    );
 
-    let requestIdx = 0;
-    let txIdx = 0;
-    let remainRequestAmount = transfers[requestIdx].amountGwei;
-    let oneTxPart = accountBalance;
-    do {
-      if (txIdx < notesParts.length) {
-        oneTxPart += notesParts[txIdx];
-      }
+    let parts: Array<TransferConfig> = [];
 
-      oneTxPart -= feeGwei; // available token amount for tx (account + notes)
-      // create output notes for the transaction
-      while(oneTxPart > 0 && requestIdx < transfers.length && txNotes.length < CONSTANTS.OUT) {
-        let noteAmount = oneTxPart;
-        if (oneTxPart > remainRequestAmount) {
-          noteAmount = remainRequestAmount;
-        }
-        
-        // add output note for the current transaction
-        txNotes.push({amountGwei: noteAmount, destination: transfers[requestIdx].destination});
+    let accountBalance: bigint = await state.accountBalance();
+    if (accountBalance >= totalAmount + feeGwei) {
+      parts.push({
+        outNotes: transfers, 
+        fee: feeGwei, 
+        accountLimit: BigInt(0)
+      });
 
-        oneTxPart -= noteAmount;
-        remainRequestAmount -= noteAmount;
-        if(remainRequestAmount == BigInt(0)) {
-          if (++requestIdx < transfers.length) {
-            remainRequestAmount = transfers[requestIdx].amountGwei;
-          }
-        }
-      }
-
-      if(oneTxPart < 0) {
-        // We cannot collect notes to cover tx fee. There are 2 cases:
-        // insufficient balance or unoperable notes configuration
-        break;
-      }
-
-      result.push({outNotes: txNotes, fee: feeGwei, accountLimit: BigInt(0)});
-      txNotes = [];
-      txIdx++;
-    } while((requestIdx < transfers.length || remainRequestAmount > 0) &&  // there are unprocessed request(s) ...
-            (txIdx < notesParts.length || oneTxPart > 0)) // and we have unspent notes or positive account balance
-
-    if ((remainRequestAmount > 0 || requestIdx < transfers.length - 1) && allowPartial == false) {
-      result = [];
+      console.log(parts);
+      return parts;
     }
     
-    return result;
+    let balanceIsSufficient = false;
+    const notes = await state.usableNotes();
+    for (let i = 0; i < notes.length; i += CONSTANTS.IN) {
+      const inNotes = notes.slice(i, i + CONSTANTS.IN);
+      const inNotesBalance: bigint = inNotes.reduce(
+        (acc, cur) => acc + BigInt(cur[1].b),
+        BigInt(0)
+      );
+
+      if ((accountBalance + inNotesBalance) >= (totalAmount + feeGwei)) {
+        parts.push({
+          outNotes: transfers, 
+          fee: feeGwei, 
+          accountLimit: BigInt(0)
+        });
+        balanceIsSufficient = true;
+        break;
+      } else {
+        parts.push({
+          outNotes: [],
+          fee: feeGwei,
+          accountLimit: BigInt(0)
+        });
+        accountBalance += BigInt(inNotesBalance) - BigInt(feeGwei);
+      }
+    }
+
+    if (!balanceIsSufficient && !allowPartial) {
+      parts = [];
+    }
+
+    console.log(parts);
+    return parts;
   }
 
   // calculate summ of notes grouped by CONSTANTS::IN
