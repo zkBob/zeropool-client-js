@@ -80,6 +80,24 @@ export class RelayerError extends BobError {
     }
 }
 
+export class DelegatedProverError extends BobError {
+    public code: number;
+    constructor(code: number, message: string) {
+        super(`Delegated prover response incorrect (code ${code}): ${message}`);
+        this.code = code;
+    }
+}
+
+export class ServiceError extends BobError {
+    public code: number;
+    public message: string;
+    constructor(code: number, message: string) {
+        super(`Service response incorrect (code ${code}): ${message}`);
+        this.code = code;
+        this.message = message
+    }
+}
+
 export class NetworkError extends BobError {
     constructor(cause?: Error, host?: string) {
         super(`Unable connect to the host ${host !== undefined ? host : ''} (${cause?.message})`);
