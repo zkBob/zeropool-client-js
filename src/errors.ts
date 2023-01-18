@@ -80,6 +80,7 @@ export class ServiceError extends BobError {
     constructor(service: ServiceType, code: number, message: string) {
         super(`${service} response incorrect (code ${code}): ${message}`);
         this.code = code;
+        this.service = service;
     }
 }
 
