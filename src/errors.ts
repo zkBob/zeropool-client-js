@@ -1,3 +1,5 @@
+import { ServiceType } from "./client";
+
 export class BobError extends Error {
     constructor(message: string) {
         super(message);
@@ -72,29 +74,12 @@ export class TxInsufficientFundsError extends BobError {
     }
 }
 
-export class RelayerError extends BobError {
-    public code: number;
-    constructor(code: number, message: string) {
-        super(`Relayer response incorrect (code ${code}): ${message}`);
-        this.code = code;
-    }
-}
-
-export class DelegatedProverError extends BobError {
-    public code: number;
-    constructor(code: number, message: string) {
-        super(`Delegated prover response incorrect (code ${code}): ${message}`);
-        this.code = code;
-    }
-}
-
 export class ServiceError extends BobError {
     public code: number;
-    public message: string;
-    constructor(code: number, message: string) {
-        super(`Service response incorrect (code ${code}): ${message}`);
+    public service: ServiceType;
+    constructor(service: ServiceType, code: number, message: string) {
+        super(`${service} response incorrect (code ${code}): ${message}`);
         this.code = code;
-        this.message = message
     }
 }
 

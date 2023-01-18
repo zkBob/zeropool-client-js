@@ -20,8 +20,7 @@ import {
 } from 'libzkbob-rs-wasm-web';
 
 import { 
-  DelegatedProverError,
-  InternalError, NetworkError, PoolJobError, RelayerError, RelayerJobError, ServiceError, SignatureError, TxDepositDeadlineExpiredError,
+  InternalError, NetworkError, PoolJobError, RelayerJobError, ServiceError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
 import { isHexPrefixed } from '@ethereumjs/util';
@@ -160,6 +159,11 @@ export interface LimitsFetch {
     dailyForAll: Limit;
   }
   tier: number;
+}
+
+export enum ServiceType {
+  Relayer = "Relayer",
+  DelegatedProver = "Delegated Prover"
 }
 
 export interface ServiceVersion {
@@ -577,7 +581,7 @@ export class ZkBobClient {
     const relayerUrl = this.tokens[tokenAddress].relayerUrl;
     let cachedVer = this.relayerVersions.get(relayerUrl);
     if (cachedVer === undefined || cachedVer.timestamp + RELAYER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
-      const version = await this.fetchRelayerVersion(relayerUrl);
+      const version = await this.fetchVersion(relayerUrl, ServiceType.Relayer);
       cachedVer = {version, timestamp: Date.now()};  
       this.relayerVersions.set(relayerUrl, cachedVer);
     }
@@ -597,7 +601,7 @@ export class ZkBobClient {
     }
 
     if (cachedVer === undefined || cachedVer.timestamp + PROVER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
-      const version = await this.fetchProverVersion(proverUrl);
+      const version = await this.fetchVersion(proverUrl, ServiceType.DelegatedProver);
       cachedVer = {version, timestamp: Date.now()};
       this.proverVersions.set(proverUrl, cachedVer);
     }
@@ -1062,7 +1066,11 @@ export class ZkBobClient {
       try {
         const url = new URL('/proveTx', token.delegatedProverUrl);
         const headers = this.defaultHeaders();
-        const proof = await this.fetchJsonFromProver(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
+        const proof = await this.fetchJson(
+          url.toString(), 
+          { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) },
+          ServiceType.DelegatedProver  
+        );
         const inputs = Object.values(pub);
         const txValid = await this.worker.verifyTxProof(inputs, proof);
         if (!txValid) {
@@ -1980,9 +1988,9 @@ export class ZkBobClient {
     url.searchParams.set('offset', offset.toString());
     const headers = this.defaultHeaders();
 
-    const txs = await this.fetchJsonFromRelayer(url.toString(), {headers});
+    const txs = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
     if (!Array.isArray(txs)) {
-      throw new RelayerError(200, `Response should be an array`);
+      throw new ServiceError(ServiceType.Relayer, 200, `Response should be an array`);
     }
   
     return txs;
@@ -1993,9 +2001,9 @@ export class ZkBobClient {
     const url = new URL('/sendTransactions', relayerUrl);
     const headers = this.defaultHeaders();
 
-    const res = await this.fetchJsonFromRelayer(url.toString(), { method: 'POST', headers, body: JSON.stringify(txs) });
+    const res = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify(txs) }, ServiceType.Relayer);
     if (typeof res.jobId !== 'string') {
-      throw new RelayerError(200, `Cannot get jobId for transaction (response: ${res})`);
+      throw new ServiceError(ServiceType.Relayer, 200, `Cannot get jobId for transaction (response: ${res})`);
     }
 
     return res.jobId;
@@ -2004,7 +2012,7 @@ export class ZkBobClient {
   private async getJob(relayerUrl: string, id: string): Promise<JobInfo | null> {
     const url = new URL(`/job/${id}`, relayerUrl);
     const headers = this.defaultHeaders();
-    const res = await this.fetchJsonFromRelayer(url.toString(), {headers});
+    const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
   
     if (isJobInfo(res)) {
       return res;
@@ -2016,20 +2024,20 @@ export class ZkBobClient {
   private async info(relayerUrl: string): Promise<RelayerInfo> {
     const url = new URL('/info', relayerUrl);
     const headers = this.defaultHeaders(false);
-    const res = await this.fetchJsonFromRelayer(url.toString(), {headers});
+    const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
 
     if (isRelayerInfo(res)) {
       return res;
     }
 
-    throw new RelayerError(200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
+    throw new ServiceError(ServiceType.Relayer, 200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
   }
   
   private async fee(relayerUrl: string): Promise<bigint> {
     try {
       const url = new URL('/fee', relayerUrl);
       const headers = this.defaultHeaders();
-      const res = await this.fetchJsonFromRelayer(url.toString(), {headers});
+      const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
       return BigInt(res.fee);
     } catch {
       return DEFAULT_TX_FEE;
@@ -2042,7 +2050,7 @@ export class ZkBobClient {
       url.searchParams.set('address', address);
     }
     const headers = this.defaultHeaders();
-    const res = await this.fetchJsonFromRelayer(url.toString(), {headers});
+    const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
 
     return {
       deposit: {
@@ -2075,68 +2083,34 @@ export class ZkBobClient {
     url.searchParams.set('index', index.toString());
     const headers = this.defaultHeaders();
 
-    const siblings = await this.fetchJsonFromRelayer(url.toString(), {headers});
+    const siblings = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
     if (!Array.isArray(siblings)) {
-      throw new RelayerError(200, `Response should be an array`);
+      throw new ServiceError(ServiceType.Relayer, 200, `Response should be an array`);
     }
   
     return siblings.map((aNode) => {
       let node = hexToNode(aNode)
       if (!node) {
-        throw new RelayerError(200, `Cannot convert \'${aNode}\' to a TreeNode`);
+        throw new ServiceError(ServiceType.Relayer, 200, `Cannot convert \'${aNode}\' to a TreeNode`);
       }
       return node;
     });
   }
 
-  private async fetchRelayerVersion(serviceUrl: string): Promise<ServiceVersion> {
+  private async fetchVersion(serviceUrl: string, service: ServiceType): Promise<ServiceVersion> {
     const url = new URL(`/version`, serviceUrl);
     const headers = this.defaultHeaders(false);
 
-    const version = await this.fetchJsonFromRelayer(url.toString(), {headers});
+    const version = await this.fetchJson(url.toString(), {headers}, service);
     if (isServiceVersion(version)) {
       return version;
     }
 
-    throw new RelayerError(200, `Incorrect response (expected ServiceVersion, got \'${version}\')`)
-  }
-
-  private async fetchProverVersion(serviceUrl: string): Promise<ServiceVersion> {
-    const url = new URL(`/version`, serviceUrl);
-    const headers = this.defaultHeaders(false);
-
-    const version = await this.fetchJsonFromProver(url.toString(), {headers});
-    if (isServiceVersion(version)) {
-      return version;
-    }
-
-    throw new DelegatedProverError(200, `Incorrect response (expected ServiceVersion, got \'${version}\')`)
-  }
-
-  private async fetchJsonFromRelayer(url: string, headers: RequestInit): Promise<any> {
-    try {
-      return await this.fetchJson(url, headers);
-    } catch (err) {
-      if (err instanceof ServiceError) {
-        throw new RelayerError(err.code, err.message);
-      }
-      throw err;
-    }
-  }
-
-  private async fetchJsonFromProver(url: string, headers: RequestInit): Promise<any> {
-    try {
-      return await this.fetchJson(url, headers);
-    } catch (err) {
-      if (err instanceof ServiceError) {
-        throw new DelegatedProverError(err.code, err.message);
-      }
-      throw err;
-    }
+    throw new ServiceError(service, 200, `Incorrect response (expected ServiceVersion, got \'${version}\')`)
   }
 
   // Universal response parser
-  private async fetchJson(url: string, headers: RequestInit): Promise<any> {
+  private async fetchJson(url: string, headers: RequestInit, service: ServiceType): Promise<any> {
     let response: Response;
     try {
       response = await fetch(url, headers);
@@ -2157,12 +2131,12 @@ export class ZkBobClient {
     // Unsuccess error code case (not in range 200-299)
     if (!response.ok) {
       if (responseBody === null) {
-        throw new ServiceError(response.status, 'no description provided');  
+        throw new ServiceError(service, response.status, 'no description provided');  
       }
 
       // process string error response
       if (typeof responseBody === 'string') {
-        throw new ServiceError(response.status, responseBody);
+        throw new ServiceError(service, response.status, responseBody);
       }
 
       // process 'errors' json response
@@ -2171,11 +2145,11 @@ export class ZkBobClient {
           return `[${oneError.path}]: ${oneError.message}`;
         }).join(', ');
 
-        throw new ServiceError(response.status, errorsText);
+        throw new ServiceError(service, response.status, errorsText);
       }
 
       // unknown error format
-      throw new ServiceError(response.status, contentType);
+      throw new ServiceError(service, response.status, contentType);
     } 
 
     return responseBody;
