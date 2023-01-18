@@ -1148,31 +1148,29 @@ export class ZkBobClient {
       await this.updateState(tokenAddress);
     }
 
-
     const txFee = await this.atomicTxFee(tokenAddress);
-    const accountBalance = await state.accountBalance();
     const notesParts = await this.getGroupedNotes(tokenAddress);
-
-    let summ = BigInt(0);
-    let oneTxPart = accountBalance;
-    let i = 0;
-    do {
-      if (i < notesParts.length) {
-        oneTxPart += notesParts[i];
+    
+    let accountBalance = await state.accountBalance();
+    if (notesParts.length == 0) {
+      if (accountBalance >= txFee) {
+        return accountBalance - BigInt(txFee);
+      } else {
+        return BigInt(0);
       }
+    }
 
-      if(oneTxPart < txFee) {
+    let maxAmount = BigInt(0);
+    for (const inNotesBalance of notesParts) {
+      accountBalance += BigInt(inNotesBalance) - BigInt(txFee);
+      if (accountBalance < 0) {
         break;
       }
-
-      summ += (oneTxPart - txFee);
-
-      oneTxPart = BigInt(0);
-      i++;
-    } while(i < notesParts.length);
-
-
-    return summ;
+      if (accountBalance > maxAmount) {
+        maxAmount = accountBalance;
+      }
+    }
+    return maxAmount;
   }
 
   // Calculate multitransfer configuration for specified token amount and fee per transaction
@@ -1210,39 +1208,33 @@ export class ZkBobClient {
         fee: feeGwei, 
         accountLimit: BigInt(0)
       });
-
-      console.log(parts);
       return parts;
     }
     
-    let balanceIsSufficient = false;
-    const notes = await state.usableNotes();
-    for (let i = 0; i < notes.length; i += CONSTANTS.IN) {
-      const inNotes = notes.slice(i, i + CONSTANTS.IN);
-      const inNotesBalance: bigint = inNotes.reduce(
-        (acc, cur) => acc + BigInt(cur[1].b),
-        BigInt(0)
-      );
-
-      if ((accountBalance + inNotesBalance) >= (totalAmount + feeGwei)) {
+    const notesParts = await this.getGroupedNotes(tokenAddress);
+    for (const inNotesBalance of notesParts) {
+      if (accountBalance + inNotesBalance >= totalAmount + feeGwei) {
         parts.push({
           outNotes: transfers, 
           fee: feeGwei, 
           accountLimit: BigInt(0)
         });
-        balanceIsSufficient = true;
-        break;
-      } else {
+        return parts;
+      } else if (accountBalance + inNotesBalance >= feeGwei) {
         parts.push({
           outNotes: [],
           fee: feeGwei,
           accountLimit: BigInt(0)
         });
         accountBalance += BigInt(inNotesBalance) - BigInt(feeGwei);
+      } else {
+        // We cannot collect notes to cover tx fee. There are 2 cases:
+        // insufficient balance or unoperable notes configuration
+        break;
       }
     }
 
-    if (!balanceIsSufficient && !allowPartial) {
+    if (!allowPartial) {
       parts = [];
     }
 
@@ -1256,22 +1248,13 @@ export class ZkBobClient {
     const usableNotes = await state.usableNotes();
 
     const notesParts: Array<bigint> = [];
-    let curPart = BigInt(0);
-    for (let i = 0; i < usableNotes.length; i++) {
-      const curNote = usableNotes[i][1];
-
-      if (i > 0 && i % CONSTANTS.IN == 0) {
-        notesParts.push(curPart);
-        curPart = BigInt(0);
-      }
-
-      curPart += BigInt(curNote.b);
-
-      if (i == usableNotes.length - 1) {
-        notesParts.push(curPart);
-      }
+    for (let i = 0; i < usableNotes.length; i += CONSTANTS.IN) {
+      const inNotesBalance: bigint = usableNotes.slice(i, i + CONSTANTS.IN).reduce(
+        (acc, cur) => acc + BigInt(cur[1].b),
+        BigInt(0)
+      );
+      notesParts.push(inNotesBalance);
     }
-
     return notesParts;
   }
 
