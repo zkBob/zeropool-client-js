@@ -139,6 +139,8 @@ class HistoryRecordIdx {
 }
 
 export class ComplianceHistoryRecord extends HistoryRecord {
+  // used to chaining accounts
+  public nullifier: Uint8Array;
   // encrypted elements (chunk: encrypted account or note)
   public encChunks: { data: Uint8Array, index: number }[];
   // keys to decrypting chunks at the corresponding indexes
@@ -148,9 +150,10 @@ export class ComplianceHistoryRecord extends HistoryRecord {
   public inNotes:  { note: Note, index: number }[];
   public outNotes: { note: Note, index: number }[];
 
-  constructor(rec: HistoryRecord, memo: DecryptedMemo, calldata: Uint8Array) {
+  constructor(rec: HistoryRecord, memo: DecryptedMemo, calldata: Uint8Array, worker: any) {
     super(rec.type, rec.timestamp, rec.actions, rec.fee, rec.txHash, rec.state, rec.failureReason);
 
+    this.nullifier = new Uint8Array();
     this.encChunks = [];
     this.ecdhKeys = [];
     this.acc = memo.acc;
@@ -491,8 +494,35 @@ export class HistoryStorage {
     await this.db.delete(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(index, true));
   }
 
-  public async getComplianceReport(fromIndex: number, toIndex: number): Promise<ComplianceHistoryRecord[]> {
-    return [];
+  // the history should be synced before invoking that method
+  // timestamps are milliseconds, low bound is inclusively
+  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null, worker: any): Promise<ComplianceHistoryRecord[]> {
+    let complienceRecords: ComplianceHistoryRecord[] = [];
+    this.currentHistory.forEach(async (value, key) => {
+      if (value.timestamp >= (fromTimestamp ?? 0) &&
+          value.timestamp < (toTimestamp ?? Number.MAX_VALUE) &&
+          value.state == HistoryRecordState.Mined
+      ) {
+        const calldata = await this.getNativeTx(key, value.txHash);
+        if (calldata && calldata.blockNumber && calldata.input) {
+          try {
+            const tx = ShieldedTx.decode(calldata.input);
+            if (tx.selector.toLowerCase() == "af989083") {
+                
+
+            } else {
+              throw new InternalError(`Cannot decode calldata for tx @ ${key}: incorrect selector ${tx.selector}`);
+            }
+          }
+          catch (e) {
+            throw new InternalError(`Cannot decode calldata for tx @ ${key}: ${e}`);
+          }
+        } else {
+          console.warn(`[HistoryStorage]: cannot get calldata for tx at index ${key}`);
+        }
+      }
+    });
+    return complienceRecords;
   }
 
   public async rollbackHistory(rollbackIndex: number): Promise<void> {
@@ -559,7 +589,7 @@ export class HistoryStorage {
     this.failedHistory = [];
   }
 
-  // ------- Private rouutines --------
+  // ------- Private routines --------
 
   private async syncHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<void> {
     const startTime = Date.now();
@@ -802,8 +832,9 @@ export class HistoryStorage {
 
         return null;
       }
-      
     }
+
+    return calldata;
   }
 
   private async saveNativeTx(index: number, txData: any): Promise<void> {
