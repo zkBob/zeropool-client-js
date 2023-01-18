@@ -85,6 +85,7 @@ export interface TransferRequest {
 // Supporting for multi-note transfers
 // Descripbes a transfer transaction configuration
 export interface TransferConfig {
+  inNotesBalance: bigint;
   outNotes: TransferRequest[];  // tx notes (without fee)
   fee: bigint;  // transaction fee, Gwei
   accountLimit: bigint;  // minimum account remainder after transaction
@@ -1197,10 +1198,12 @@ export class ZkBobClient {
     );
 
     let parts: Array<TransferConfig> = [];
+    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
 
     let accountBalance: bigint = await state.accountBalance();
-    if (accountBalance >= totalAmount + feeGwei) {
+    if (groupedNotesBalances.length == 0 && accountBalance >= totalAmount + feeGwei) {
       parts.push({
+        inNotesBalance: BigInt(0),
         outNotes: transfers, 
         fee: feeGwei, 
         accountLimit: BigInt(0)
@@ -1208,10 +1211,10 @@ export class ZkBobClient {
       return parts;
     }
     
-    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
     for (const inNotesBalance of groupedNotesBalances) {
       if (accountBalance + inNotesBalance >= totalAmount + feeGwei) {
         parts.push({
+          inNotesBalance,
           outNotes: transfers, 
           fee: feeGwei, 
           accountLimit: BigInt(0)
@@ -1219,6 +1222,7 @@ export class ZkBobClient {
         return parts;
       } else if (accountBalance + inNotesBalance >= feeGwei) {
         parts.push({
+          inNotesBalance,
           outNotes: [],
           fee: feeGwei,
           accountLimit: BigInt(0)
