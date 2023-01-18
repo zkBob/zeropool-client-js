@@ -1149,23 +1149,20 @@ export class ZkBobClient {
     }
 
     const txFee = await this.atomicTxFee(tokenAddress);
-    const notesParts = await this.getGroupedNotes(tokenAddress);
+    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
     
     let accountBalance = await state.accountBalance();
-    if (notesParts.length == 0) {
-      if (accountBalance >= txFee) {
-        return accountBalance - BigInt(txFee);
-      } else {
-        return BigInt(0);
-      }
+    if (groupedNotesBalances.length == 0) {
+      return accountBalance > txFee ? accountBalance - txFee : BigInt(0);
     }
 
     let maxAmount = BigInt(0);
-    for (const inNotesBalance of notesParts) {
-      accountBalance += BigInt(inNotesBalance) - BigInt(txFee);
-      if (accountBalance < 0) {
+    for (const inNotesBalance of groupedNotesBalances) {
+      if (accountBalance + inNotesBalance < txFee) {
         break;
       }
+
+      accountBalance += BigInt(inNotesBalance) - BigInt(txFee);
       if (accountBalance > maxAmount) {
         maxAmount = accountBalance;
       }
@@ -1211,8 +1208,8 @@ export class ZkBobClient {
       return parts;
     }
     
-    const notesParts = await this.getGroupedNotes(tokenAddress);
-    for (const inNotesBalance of notesParts) {
+    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
+    for (const inNotesBalance of groupedNotesBalances) {
       if (accountBalance + inNotesBalance >= totalAmount + feeGwei) {
         parts.push({
           outNotes: transfers, 
