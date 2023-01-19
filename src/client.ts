@@ -1163,7 +1163,7 @@ export class ZkBobClient {
         break;
       }
 
-      accountBalance += BigInt(inNotesBalance) - BigInt(txFee);
+      accountBalance += inNotesBalance - txFee;
       if (accountBalance > maxAmount) {
         maxAmount = accountBalance;
       }
@@ -1235,12 +1235,7 @@ export class ZkBobClient {
       }
     }
 
-    if (!allowPartial) {
-      parts = [];
-    }
-
-    console.log(parts);
-    return parts;
+    return allowPartial ? parts : [];
   }
 
   // calculate summ of notes grouped by CONSTANTS::IN
