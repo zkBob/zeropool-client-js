@@ -896,12 +896,11 @@ export class ZkBobClient {
       jobsIds.push(jobId);
 
       // Temporary save transaction part in the history module (to prevent history delays)
+      const ts = Math.floor(Date.now() / 1000);
       if (txType == TxType.Transfer) {
-        const ts = Math.floor(Date.now() / 1000);
         const record = await HistoryRecord.transferOut([], onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
         state.history.keepQueuedTransactions([record], jobId);
       } else {
-        const ts = Math.floor(Date.now() / 1000);
         const record = await HistoryRecord.withdraw(address, onePart.outNotes[0].amountGwei, onePart.fee, ts, '0', true);
         state.history.keepQueuedTransactions([record], jobId);
       }
