@@ -81,6 +81,12 @@ export interface TransferRequest {
   amountGwei: bigint;
 }
 
+// Multiple transfer requests with total amount
+export interface MultinoteTransferRequest {
+  totalAmount: bigint;
+  requests: TransferRequest[];
+}
+
 // Old TxAmount interface
 // Supporting for multi-note transfers
 // Descripbes a transfer transaction configuration
@@ -1191,50 +1197,77 @@ export class ZkBobClient {
     // no parts when no requests
     if (transfers.length == 0) return [];
 
-    let totalAmount: bigint = transfers.reduce(
-      (acc, cur) => acc + cur.amountGwei,
-      BigInt(0)
-    );
-
-    let parts: Array<TransferConfig> = [];
-    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
+    let aggregatedTransfers: MultinoteTransferRequest[] = [];
+    for (let i = 0; i < transfers.length; i += CONSTANTS.OUT) {
+      let requests = transfers.slice(i, i + CONSTANTS.OUT);
+      let totalAmount = requests.reduce(
+        (acc, cur) => acc + cur.amountGwei,
+        BigInt(0)
+      );
+      aggregatedTransfers.push({totalAmount, requests});
+    }
 
     let accountBalance: bigint = await state.accountBalance();
-    if (groupedNotesBalances.length == 0 && accountBalance >= totalAmount + feeGwei) {
-      parts.push({
-        inNotesBalance: BigInt(0),
-        outNotes: transfers, 
-        fee: feeGwei, 
-        accountLimit: BigInt(0)
-      });
-      return parts;
-    }
+    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
+
+    let aggregationParts: Array<TransferConfig> = [];
+    let txParts: Array<TransferConfig> = [];
     
-    for (const inNotesBalance of groupedNotesBalances) {
-      if (accountBalance + inNotesBalance >= totalAmount + feeGwei) {
-        parts.push({
-          inNotesBalance,
-          outNotes: transfers, 
-          fee: feeGwei, 
-          accountLimit: BigInt(0)
-        });
-        return parts;
-      } else if (accountBalance + inNotesBalance >= feeGwei) {
-        parts.push({
-          inNotesBalance,
-          outNotes: [],
-          fee: feeGwei,
-          accountLimit: BigInt(0)
-        });
-        accountBalance += BigInt(inNotesBalance) - BigInt(feeGwei);
-      } else {
-        // We cannot collect notes to cover tx fee. There are 2 cases:
+    let i = 0;
+    do {
+      txParts = this.getTransferConfigs(accountBalance, feeGwei, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
+      if (txParts.length == aggregatedTransfers.length) {
+        // We are able to perform all txs starting from this index
+        return aggregationParts.concat(txParts);
+      }
+
+      if (groupedNotesBalances.length == 0) {
+        // We can't aggregate notes if we doesn't have one
+        break;
+      }
+
+      let inNotesBalance = groupedNotesBalances[i];
+      if (accountBalance + inNotesBalance < feeGwei) {
+        // We cannot collect amount to cover tx fee. There are 2 cases:
         // insufficient balance or unoperable notes configuration
         break;
       }
-    }
 
-    return allowPartial ? parts : [];
+      aggregationParts.push({
+        inNotesBalance,
+        outNotes: [],
+        fee: feeGwei,
+        accountLimit: BigInt(0)
+      });
+      accountBalance += BigInt(inNotesBalance) - BigInt(feeGwei);
+      
+      i++;
+    } while (i < groupedNotesBalances.length)
+
+    return allowPartial ? aggregationParts.concat(txParts) : [];
+  }
+
+  // try to prepare transfer configs
+  private getTransferConfigs(balance: bigint, fee: bigint, groupedNotesBalances: Array<bigint>, transfers: MultinoteTransferRequest[]): Array<TransferConfig> {
+    let accountBalance = balance;
+    let parts: Array<TransferConfig> = [];
+    for (let i = 0; i < transfers.length; i++) {
+      let inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
+
+      if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
+        // We haven't enough funds to perform such tx
+        break;
+      }
+
+      parts.push({
+        inNotesBalance,
+        outNotes: transfers[i].requests, 
+        fee, 
+        accountLimit: BigInt(0)
+      });
+      accountBalance = (accountBalance + inNotesBalance) - (transfers[i].totalAmount + fee);
+    }
+    return parts;
   }
 
   // calculate summ of notes grouped by CONSTANTS::IN
