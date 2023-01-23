@@ -1199,8 +1199,8 @@ export class ZkBobClient {
 
     let aggregatedTransfers: MultinoteTransferRequest[] = [];
     for (let i = 0; i < transfers.length; i += CONSTANTS.OUT) {
-      let requests = transfers.slice(i, i + CONSTANTS.OUT);
-      let totalAmount = requests.reduce(
+      const requests = transfers.slice(i, i + CONSTANTS.OUT);
+      const totalAmount = requests.reduce(
         (acc, cur) => acc + cur.amountGwei,
         BigInt(0)
       );
@@ -1215,7 +1215,7 @@ export class ZkBobClient {
     
     let i = 0;
     do {
-      txParts = this.getTransferConfigs(accountBalance, feeGwei, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
+      txParts = this.tryToPrepareTransfers(accountBalance, feeGwei, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
       if (txParts.length == aggregatedTransfers.length) {
         // We are able to perform all txs starting from this index
         return aggregationParts.concat(txParts);
@@ -1226,7 +1226,7 @@ export class ZkBobClient {
         break;
       }
 
-      let inNotesBalance = groupedNotesBalances[i];
+      const inNotesBalance = groupedNotesBalances[i];
       if (accountBalance + inNotesBalance < feeGwei) {
         // We cannot collect amount to cover tx fee. There are 2 cases:
         // insufficient balance or unoperable notes configuration
@@ -1248,11 +1248,11 @@ export class ZkBobClient {
   }
 
   // try to prepare transfer configs
-  private getTransferConfigs(balance: bigint, fee: bigint, groupedNotesBalances: Array<bigint>, transfers: MultinoteTransferRequest[]): Array<TransferConfig> {
+  private tryToPrepareTransfers(balance: bigint, fee: bigint, groupedNotesBalances: Array<bigint>, transfers: MultinoteTransferRequest[]): Array<TransferConfig> {
     let accountBalance = balance;
     let parts: Array<TransferConfig> = [];
     for (let i = 0; i < transfers.length; i++) {
-      let inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
+      const inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
 
       if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
         // We haven't enough funds to perform such tx
