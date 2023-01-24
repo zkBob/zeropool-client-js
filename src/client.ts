@@ -281,7 +281,7 @@ export class ZkBobClient {
       }
 
       try {
-        client.setProverMode(address, token.proverMode);
+        await client.setProverMode(address, token.proverMode);
       } catch (err) {
         console.error(err);
       }
@@ -460,6 +460,11 @@ export class ZkBobClient {
         throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
       }
     }
+
+    if (mode != ProverMode.Delegated) {
+      this.worker.loadTxParams();
+    }
+
     token.proverMode = mode;
   }
 
