@@ -4,7 +4,7 @@ import { FileCache } from './file-cache';
 export { TreeNode } from 'libzkbob-rs-wasm-web';
 export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState, SyncStat, RelayerVersion } from './client';
 export { TxType } from './tx';
-export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
+export { HistoryRecord, HistoryTransactionType, HistoryRecordState, ComplianceHistoryRecord } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
 export * from './errors'
 

@@ -7,7 +7,7 @@ import { ZkBobState } from './state';
 import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
-import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
+import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
 
 const LOG_STATE_HOTSYNC = false;
@@ -373,6 +373,20 @@ export class ZkBobClient {
     }
 
     return await this.zpStates[tokenAddress].history.getAllHistory((addr) => this.isMyAddress(tokenAddress, addr));
+  }
+
+  // Generate compliance report
+  public async getComplianceReport(
+    tokenAddress: string,
+    fromTimestamp: number | null,
+    toTimestamp: number | null,
+    updateState: boolean = true,
+  ): Promise<ComplianceHistoryRecord[]> {
+    if (updateState) {
+      await this.updateState(tokenAddress);
+    }
+
+    return await this.zpStates[tokenAddress].history.getComplianceReport(fromTimestamp, toTimestamp, this.config.sk, this.worker);
   }
 
   // ------------------=========< Service Routines >=========-------------------

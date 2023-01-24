@@ -1,8 +1,8 @@
 import { openDB, IDBPDatabase } from 'idb';
 import Web3 from 'web3';
-import { Account, Note } from 'libzkbob-rs-wasm-web';
+import { Account, Note, TxMemoChunk, IndexedTx, ParseTxsResult } from 'libzkbob-rs-wasm-web';
 import { ShieldedTx, TxType } from './tx';
-import { toCanonicalSignature } from './utils';
+import { bigintToArrayLe, bufToHex, hexToBuf, toCanonicalSignature } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 
@@ -147,15 +147,15 @@ export class ComplianceHistoryRecord extends HistoryRecord {
   public ecdhKeys:  { key: Uint8Array, index: number }[];
   // decrypted elements
   public acc: Account | undefined;
-  public inNotes:  { note: Note, index: number }[];
-  public outNotes: { note: Note, index: number }[];
+  public inNotes:  { note: Note, index: number }[]; // incoming notes (TransferIn case)
+  public outNotes: { note: Note, index: number }[]; // outcoming notes (TransferOut case)
 
-  constructor(rec: HistoryRecord, memo: DecryptedMemo, calldata: Uint8Array, worker: any) {
+  constructor(rec: HistoryRecord, nullifier: Uint8Array, memo: DecryptedMemo, chunks: TxMemoChunk[]) {
     super(rec.type, rec.timestamp, rec.actions, rec.fee, rec.txHash, rec.state, rec.failureReason);
 
-    this.nullifier = new Uint8Array();
-    this.encChunks = [];
-    this.ecdhKeys = [];
+    this.nullifier = nullifier;
+    this.encChunks = chunks.map(aChunk => { return {data: aChunk.encrypted, index: aChunk.index} });
+    this.ecdhKeys = chunks.map(aChunk => { return {key: aChunk.key, index: aChunk.index} });
     this.acc = memo.acc;
     this.inNotes = memo.inNotes;
     this.outNotes = memo.outNotes;
@@ -496,29 +496,51 @@ export class HistoryStorage {
 
   // the history should be synced before invoking that method
   // timestamps are milliseconds, low bound is inclusively
-  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null, worker: any): Promise<ComplianceHistoryRecord[]> {
+  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null, sk: Uint8Array, worker: any): Promise<ComplianceHistoryRecord[]> {
     let complienceRecords: ComplianceHistoryRecord[] = [];
-    this.currentHistory.forEach(async (value, key) => {
+    this.currentHistory.forEach(async (value, treeIndex) => {
       if (value.timestamp >= (fromTimestamp ?? 0) &&
           value.timestamp < (toTimestamp ?? Number.MAX_VALUE) &&
           value.state == HistoryRecordState.Mined
       ) {
-        const calldata = await this.getNativeTx(key, value.txHash);
+        const calldata = await this.getNativeTx(treeIndex, value.txHash);
         if (calldata && calldata.blockNumber && calldata.input) {
           try {
             const tx = ShieldedTx.decode(calldata.input);
             if (tx.selector.toLowerCase() == "af989083") {
-                
 
+              const memoblock = hexToBuf(tx.ciphertext);
+              const nullifier = bigintToArrayLe(tx.nullifier);
+
+              let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
+              if (!decryptedMemo) {
+                // If the decrypted memo cannot be retrieved from the database => decrypt it again
+                const indexedTx: IndexedTx = {
+                  index: treeIndex,
+                  memo: tx.ciphertext,
+                  commitment: bufToHex(bigintToArrayLe(tx.outCommit)),
+                }
+                const res: ParseTxsResult = (await worker.parseTxs(sk, [indexedTx])).decryptedMemos;
+                if (res.decryptedMemos.length == 1) {
+                  decryptedMemo = res.decryptedMemos[0];
+                } else {
+                  throw new InternalError(`Cannot decrypt tx. Excepted 1 memo, got ${res.decryptedMemos.length}`);
+                }
+              }
+
+              const chunks = await worker.extractDecryptKeys(sk, treeIndex, memoblock);
+              
+              const aRec = new ComplianceHistoryRecord(value, nullifier, decryptedMemo, chunks);
+              complienceRecords.push(aRec);
             } else {
-              throw new InternalError(`Cannot decode calldata for tx @ ${key}: incorrect selector ${tx.selector}`);
+              throw new InternalError(`Cannot decode calldata for tx @ ${treeIndex}: incorrect selector ${tx.selector}`);
             }
           }
           catch (e) {
-            throw new InternalError(`Cannot decode calldata for tx @ ${key}: ${e}`);
+            throw new InternalError(`Cannot decode calldata for tx @ ${treeIndex}: ${e}`);
           }
         } else {
-          console.warn(`[HistoryStorage]: cannot get calldata for tx at index ${key}`);
+          console.warn(`[HistoryStorage]: cannot get calldata for tx at index ${treeIndex}`);
         }
       }
     });

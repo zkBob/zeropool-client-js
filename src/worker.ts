@@ -1,6 +1,6 @@
 import { expose } from 'comlink';
 import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, TreeNode,
-          ITransferData, IDepositData, IWithdrawData, IDepositPermittableData
+          ITransferData, IDepositData, IWithdrawData, IDepositPermittableData, TxMemoChunk,
         } from 'libzkbob-rs-wasm-web';
 import { FileCache } from './file-cache';
 import { threads } from 'wasm-feature-detect';
@@ -150,8 +150,17 @@ const obj = {
   async parseTxs(sk: Uint8Array, txs: IndexedTx[]): Promise<ParseTxsResult> {
     return new Promise(async resolve => {
       console.debug('Web worker: parseTxs');
-      const result = txParser.parseTxs(sk, txs)
-      sk.fill(0)
+      const result = txParser.parseTxs(sk, txs);
+      sk.fill(0);
+      resolve(result);
+    });
+  },
+
+  async extractDecryptKeys(sk: Uint8Array, index: number, memo: Uint8Array): Promise<TxMemoChunk[]> {
+    return new Promise(async resolve => {
+      console.debug('Web worker: extractDecryptKeys');
+      const result = txParser.extractDecryptKeys(sk, BigInt(index), memo);
+      sk.fill(0);
       resolve(result);
     });
   },
