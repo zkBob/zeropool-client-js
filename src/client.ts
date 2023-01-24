@@ -1156,13 +1156,9 @@ export class ZkBobClient {
 
     const txFee = await this.atomicTxFee(tokenAddress);
     const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
-    
     let accountBalance = await state.accountBalance();
-    if (groupedNotesBalances.length == 0) {
-      return accountBalance > txFee ? accountBalance - txFee : BigInt(0);
-    }
 
-    let maxAmount = BigInt(0);
+    let maxAmount = accountBalance > txFee ? accountBalance - txFee : BigInt(0);
     for (const inNotesBalance of groupedNotesBalances) {
       if (accountBalance + inNotesBalance < txFee) {
         break;
