@@ -139,6 +139,8 @@ class HistoryRecordIdx {
 }
 
 export class ComplianceHistoryRecord extends HistoryRecord {
+  // the first leaf (account) index
+  public index: number;
   // used to chaining accounts
   public nullifier: Uint8Array;
   // encrypted elements (chunk: encrypted account or note)
@@ -147,18 +149,18 @@ export class ComplianceHistoryRecord extends HistoryRecord {
   public ecdhKeys:  { key: Uint8Array, index: number }[];
   // decrypted elements
   public acc: Account | undefined;
-  public inNotes:  { note: Note, index: number }[]; // incoming notes (TransferIn case)
-  public outNotes: { note: Note, index: number }[]; // outcoming notes (TransferOut case)
+  // decrypted notes
+  public notes:  { note: Note, index: number }[]; // incoming notes (TransferIn case)
 
-  constructor(rec: HistoryRecord, nullifier: Uint8Array, memo: DecryptedMemo, chunks: TxMemoChunk[]) {
+  constructor(rec: HistoryRecord, index: number, nullifier: Uint8Array, memo: DecryptedMemo, chunks: TxMemoChunk[]) {
     super(rec.type, rec.timestamp, rec.actions, rec.fee, rec.txHash, rec.state, rec.failureReason);
 
+    this.index = index;
     this.nullifier = nullifier;
     this.encChunks = chunks.map(aChunk => { return {data: aChunk.encrypted, index: aChunk.index} });
     this.ecdhKeys = chunks.map(aChunk => { return {key: aChunk.key, index: aChunk.index} });
     this.acc = memo.acc;
-    this.inNotes = memo.inNotes;
-    this.outNotes = memo.outNotes;
+    this.notes = [...memo.inNotes, ...memo.outNotes];
   }
 }
 
@@ -498,7 +500,8 @@ export class HistoryStorage {
   // timestamps are milliseconds, low bound is inclusively
   public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null, sk: Uint8Array, worker: any): Promise<ComplianceHistoryRecord[]> {
     let complienceRecords: ComplianceHistoryRecord[] = [];
-    this.currentHistory.forEach(async (value, treeIndex) => {
+    
+    for (const [treeIndex, value] of  this.currentHistory.entries()) {
       if (value.timestamp >= (fromTimestamp ?? 0) &&
           value.timestamp < (toTimestamp ?? Number.MAX_VALUE) &&
           value.state == HistoryRecordState.Mined
@@ -530,7 +533,7 @@ export class HistoryStorage {
 
               const chunks = await worker.extractDecryptKeys(sk, treeIndex, memoblock);
               
-              const aRec = new ComplianceHistoryRecord(value, nullifier, decryptedMemo, chunks);
+              const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, decryptedMemo, chunks);
               complienceRecords.push(aRec);
             } else {
               throw new InternalError(`Cannot decode calldata for tx @ ${treeIndex}: incorrect selector ${tx.selector}`);
@@ -543,7 +546,8 @@ export class HistoryStorage {
           console.warn(`[HistoryStorage]: cannot get calldata for tx at index ${treeIndex}`);
         }
       }
-    });
+    };
+
     return complienceRecords;
   }
 

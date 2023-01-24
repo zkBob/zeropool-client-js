@@ -6,8 +6,9 @@ import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 
 // Sizes in bytes
-const MEMO_META_SIZE: number = 8; // fee (u64)
+const MEMO_META_DEFAULT_SIZE: number = 8; // fee (u64)
 const MEMO_META_WITHDRAW_SIZE: number = 8 + 8 + 20; // fee (u64) + amount + address (u160)
+const MEMO_META_PERMITDEPOSIT_SIZE: number = 8 + 8 + 20; // fee (u64) + amount + address (u160)
 
 export enum TxType {
   Deposit = '0000',
@@ -109,9 +110,11 @@ export class ShieldedTx {
   get ciphertext(): string {
     if (this.txType === TxType.Withdraw) {
       return this.memo.slice(MEMO_META_WITHDRAW_SIZE * 2);
+    } else if (this.txType === TxType.BridgeDeposit) {
+      return this.memo.slice(MEMO_META_PERMITDEPOSIT_SIZE * 2);
     }
 
-    return this.memo.slice(MEMO_META_SIZE * 2);
+    return this.memo.slice(MEMO_META_DEFAULT_SIZE * 2);
   }
 
   get hashes(): string[] {
