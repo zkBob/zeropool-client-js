@@ -15,6 +15,7 @@ export enum HistoryTransactionType {
   Withdrawal,
   // DEPRECATED. Please use TokensMoving.isLoopback property instead
   TransferLoopback,
+  AggregateNotes,
 }
 
 export enum HistoryRecordState {
@@ -111,6 +112,16 @@ export class HistoryRecord {
     const action: TokensMoving = {from: "", to, amount, isLoopback: true};
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
     return new HistoryRecord(HistoryTransactionType.TransferLoopback, ts, [action], fee, txHash, state);
+  }
+
+  public static async aggregateNotes(
+    fee: bigint,
+    ts: number,
+    txHash: string,
+    pending: boolean
+  ): Promise<HistoryRecord> {
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.AggregateNotes, ts, [], fee, txHash, state);
   }
 
   public toJson(): string {
@@ -679,8 +690,13 @@ export class HistoryStorage {
                           return {to: destAddr, amount: BigInt(note.b)};
                         }));;
 
-                        const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
-                        allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                        if (transfers.length == 0) {
+                          const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
+                          allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                        } else {
+                          const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
+                          allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                        }
                       } else {
                         // 2. somebody initiated it => incoming tx(s)
 

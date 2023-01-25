@@ -364,6 +364,10 @@ export class ZkBobClient {
             pendingDelta -= oneRecord.fee;
             break;
           }
+          case HistoryTransactionType.AggregateNotes: {
+            pendingDelta -= oneRecord.fee;
+            break;
+          }
 
           default: break;
         }
@@ -805,10 +809,14 @@ export class ZkBobClient {
 
       // Temporary save transaction parts in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-
       const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
-      const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
-      state.history.keepQueuedTransactions([record], jobId);
+      if (transfers.length == 0) {
+        const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
+        state.history.keepQueuedTransactions([record], jobId);
+      } else {
+        const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
+        state.history.keepQueuedTransactions([record], jobId);
+      }
 
       if (index < (txParts.length - 1)) {
         console.log(`Waiting for the job ${jobId} joining the optimistic state`);
@@ -904,7 +912,7 @@ export class ZkBobClient {
       // Temporary save transaction part in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
       if (txType == TxType.Transfer) {
-        const record = await HistoryRecord.transferOut([], onePart.fee, ts, '0', true, async () => false);
+        const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
         state.history.keepQueuedTransactions([record], jobId);
       } else {
         const record = await HistoryRecord.withdraw(address, onePart.outNotes[0].amountGwei, onePart.fee, ts, '0', true);
