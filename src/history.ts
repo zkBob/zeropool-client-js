@@ -1,6 +1,6 @@
 import { openDB, IDBPDatabase } from 'idb';
 import Web3 from 'web3';
-import { Account, Note, TxMemoChunk, IndexedTx, ParseTxsResult } from 'libzkbob-rs-wasm-web';
+import { Account, Note, TxMemoChunk, IndexedTx, ParseTxsResult, TxInput } from 'libzkbob-rs-wasm-web';
 import { ShieldedTx, TxType } from './tx';
 import { bigintToArrayLe, bufToHex, hexToBuf, toCanonicalSignature } from './utils';
 import { CONSTANTS } from './constants';
@@ -151,8 +151,13 @@ export class ComplianceHistoryRecord extends HistoryRecord {
   public acc: Account | undefined;
   // decrypted notes
   public notes:  { note: Note, index: number }[]; // incoming notes (TransferIn case)
+  // transaction inputs (undefined for incoming txs)
+  public inputs?: {
+    account: {index: number, account: Account},
+    notes: {index: number, note: Note}[],
+  };
 
-  constructor(rec: HistoryRecord, index: number, nullifier: Uint8Array, memo: DecryptedMemo, chunks: TxMemoChunk[]) {
+  constructor(rec: HistoryRecord, index: number, nullifier: Uint8Array, memo: DecryptedMemo, chunks: TxMemoChunk[], inputs?: TxInput) {
     super(rec.type, rec.timestamp, rec.actions, rec.fee, rec.txHash, rec.state, rec.failureReason);
 
     this.index = index;
@@ -161,6 +166,7 @@ export class ComplianceHistoryRecord extends HistoryRecord {
     this.ecdhKeys = chunks.map(aChunk => { return {key: aChunk.key, index: aChunk.index} });
     this.acc = memo.acc;
     this.notes = [...memo.inNotes, ...memo.outNotes];
+    this.inputs = inputs;
   }
 }
 
@@ -498,7 +504,7 @@ export class HistoryStorage {
 
   // the history should be synced before invoking that method
   // timestamps are milliseconds, low bound is inclusively
-  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null, sk: Uint8Array, worker: any): Promise<ComplianceHistoryRecord[]> {
+  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null, sk: Uint8Array, tokenAddress: string, worker: any): Promise<ComplianceHistoryRecord[]> {
     let complienceRecords: ComplianceHistoryRecord[] = [];
     
     for (const [treeIndex, value] of  this.currentHistory.entries()) {
@@ -532,8 +538,13 @@ export class HistoryStorage {
               }
 
               const chunks = await worker.extractDecryptKeys(sk, treeIndex, memoblock);
+              let inputs: TxInput | undefined;
+              if (value.type != HistoryTransactionType.TransferIn) {
+                // tx is user-initiated
+                inputs = await worker.getTxInputs(tokenAddress, treeIndex);
+              }
               
-              const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, decryptedMemo, chunks);
+              const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, decryptedMemo, chunks, inputs);
               complienceRecords.push(aRec);
             } else {
               throw new InternalError(`Cannot decode calldata for tx @ ${treeIndex}: incorrect selector ${tx.selector}`);

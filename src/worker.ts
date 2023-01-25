@@ -1,6 +1,6 @@
 import { expose } from 'comlink';
 import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, TreeNode,
-          ITransferData, IDepositData, IWithdrawData, IDepositPermittableData, TxMemoChunk,
+          ITransferData, IDepositData, IWithdrawData, IDepositPermittableData, TxMemoChunk, TxInput,
         } from 'libzkbob-rs-wasm-web';
 import { FileCache } from './file-cache';
 import { threads } from 'wasm-feature-detect';
@@ -200,6 +200,13 @@ const obj = {
   async usableNotes(address: string): Promise<any[]> {
     return new Promise(async resolve => {
       resolve(zpAccounts[address].getUsableNotes());
+    });
+  },
+
+  async getTxInputs(address: string, index: number): Promise<TxInput> {
+    return new Promise(async resolve => {
+      console.debug('Web worker: getTxInputs');
+      resolve(zpAccounts[address].getTxInputs(BigInt(index)));
     });
   },
 

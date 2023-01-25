@@ -386,7 +386,7 @@ export class ZkBobClient {
       await this.updateState(tokenAddress);
     }
 
-    return await this.zpStates[tokenAddress].history.getComplianceReport(fromTimestamp, toTimestamp, this.config.sk, this.worker);
+    return await this.zpStates[tokenAddress].history.getComplianceReport(fromTimestamp, toTimestamp, this.config.sk, tokenAddress, this.worker);
   }
 
   // ------------------=========< Service Routines >=========-------------------
