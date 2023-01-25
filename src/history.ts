@@ -13,8 +13,6 @@ export enum HistoryTransactionType {
   TransferIn,
   TransferOut,
   Withdrawal,
-  // DEPRECATED. Please use TokensMoving.isLoopback property instead
-  TransferLoopback,
   AggregateNotes,
 }
 
@@ -105,13 +103,6 @@ export class HistoryRecord {
     const action: TokensMoving = {from: "", to, amount, isLoopback: false};
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
     return new HistoryRecord(HistoryTransactionType.Withdrawal, ts, [action], fee, txHash, state);
-  }
-
-  // DEPRECATED method. Loopback is a TokenMoving property now
-  public static transferLoopback(to: string, amount: bigint, fee: bigint, ts: number, txHash: string, pending: boolean): HistoryRecord {
-    const action: TokensMoving = {from: "", to, amount, isLoopback: true};
-    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
-    return new HistoryRecord(HistoryTransactionType.TransferLoopback, ts, [action], fee, txHash, state);
   }
 
   public static async aggregateNotes(
