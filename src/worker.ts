@@ -1,6 +1,7 @@
 import { expose } from 'comlink';
 import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, TreeNode,
           ITransferData, IDepositData, IWithdrawData, IDepositPermittableData, TxMemoChunk, TxInput,
+          Account, Note,
         } from 'libzkbob-rs-wasm-web';
 import { FileCache } from './file-cache';
 import { threads } from 'wasm-feature-detect';
@@ -157,12 +158,21 @@ const obj = {
   },
 
   async extractDecryptKeys(sk: Uint8Array, index: number, memo: Uint8Array): Promise<TxMemoChunk[]> {
-    return new Promise(async resolve => {
-      console.debug('Web worker: extractDecryptKeys');
-      const result = txParser.extractDecryptKeys(sk, BigInt(index), memo);
-      sk.fill(0);
-      resolve(result);
-    });
+    const result = txParser.extractDecryptKeys(sk, BigInt(index), memo);
+    sk.fill(0);
+    return result;
+  },
+
+  async getTxInputs(address: string, index: number): Promise<TxInput> {
+    return zpAccounts[address].getTxInputs(BigInt(index));
+  },
+
+  async decryptAccount(symkey: Uint8Array, encrypted: Uint8Array): Promise<Account> {
+    return txParser.symcipherDecryptAcc(symkey, encrypted);
+  },
+
+  async decryptNote(symkey: Uint8Array, encrypted: Uint8Array): Promise<Note> {
+    return txParser.symcipherDecryptNote(symkey, encrypted);
   },
 
   async createAccount(address: string, sk: Uint8Array, networkName: string, userId: string): Promise<void> {
@@ -200,13 +210,6 @@ const obj = {
   async usableNotes(address: string): Promise<any[]> {
     return new Promise(async resolve => {
       resolve(zpAccounts[address].getUsableNotes());
-    });
-  },
-
-  async getTxInputs(address: string, index: number): Promise<TxInput> {
-    return new Promise(async resolve => {
-      console.debug('Web worker: getTxInputs');
-      resolve(zpAccounts[address].getTxInputs(BigInt(index)));
     });
   },
 

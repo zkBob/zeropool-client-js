@@ -148,7 +148,7 @@ export class ComplianceHistoryRecord extends HistoryRecord {
   // keys to decrypting chunks at the corresponding indexes
   public ecdhKeys:  { key: Uint8Array, index: number }[];
   // decrypted elements
-  public acc: Account | undefined;
+  public acc?: Account;
   // decrypted notes
   public notes:  { note: Note, index: number }[]; // incoming notes (TransferIn case)
   // transaction inputs (undefined for incoming txs)
@@ -508,8 +508,9 @@ export class HistoryStorage {
     let complienceRecords: ComplianceHistoryRecord[] = [];
     
     for (const [treeIndex, value] of  this.currentHistory.entries()) {
-      if (value.timestamp >= (fromTimestamp ?? 0) &&
-          value.timestamp < (toTimestamp ?? Number.MAX_VALUE) &&
+      const recTs = value.timestamp * 1000;
+      if (recTs >= (fromTimestamp ?? 0) &&
+          recTs < (toTimestamp ?? Number.MAX_VALUE) &&
           value.state == HistoryRecordState.Mined
       ) {
         const calldata = await this.getNativeTx(treeIndex, value.txHash);
@@ -537,12 +538,41 @@ export class HistoryStorage {
                 }
               }
 
-              const chunks = await worker.extractDecryptKeys(sk, treeIndex, memoblock);
+              const chunks: TxMemoChunk[] = await worker.extractDecryptKeys(sk, treeIndex, memoblock);
               let inputs: TxInput | undefined;
               if (value.type != HistoryTransactionType.TransferIn) {
                 // tx is user-initiated
                 inputs = await worker.getTxInputs(tokenAddress, treeIndex);
               }
+
+              // TEST-ONLY
+              /*for (const aChunk of chunks) {
+                if(aChunk.index == treeIndex) {
+                  // account
+                  const restoredAcc = await worker.decryptAccount(aChunk.key, aChunk.encrypted);
+                  if (JSON.stringify(restoredAcc) != JSON.stringify(decryptedMemo?.acc)) {
+                    throw new InternalError(`Cannot restore source account @${aChunk.index} from the compliance report!`);
+                  }
+                } else if (decryptedMemo) {
+                  // notes
+                  const restoredNote = await worker.decryptNote(aChunk.key, aChunk.encrypted);
+                  let srcNote: Note | undefined;
+                  for (const aNote of decryptedMemo.outNotes) {
+                    if (aNote.index == aChunk.index) { srcNote = aNote.note; break; }
+                  }
+                  if (!srcNote) {
+                    for (const aNote of decryptedMemo.inNotes) {
+                      if (aNote.index == aChunk.index) { srcNote = aNote.note; break; }
+                    } 
+                  }
+
+                  if (!srcNote) {
+                    throw new InternalError(`Cannot find associated note @${aChunk.index} to check decryption!`);
+                  } else if ( JSON.stringify(restoredNote) != JSON.stringify(srcNote)) {
+                    throw new InternalError(`Cannot restore source note @${aChunk.index} from the compliance report!`);
+                  }
+                }
+              };*/
               
               const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, decryptedMemo, chunks, inputs);
               complienceRecords.push(aRec);

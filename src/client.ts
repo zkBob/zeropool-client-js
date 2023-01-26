@@ -383,7 +383,7 @@ export class ZkBobClient {
     updateState: boolean = true,
   ): Promise<ComplianceHistoryRecord[]> {
     if (updateState) {
-      await this.updateState(tokenAddress);
+      await this.getAllHistory(tokenAddress);
     }
 
     return await this.zpStates[tokenAddress].history.getComplianceReport(fromTimestamp, toTimestamp, this.config.sk, tokenAddress, this.worker);
