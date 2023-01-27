@@ -143,6 +143,7 @@ export class ComplianceHistoryRecord extends HistoryRecord {
   public index: number;
   // used to chaining accounts
   public nullifier: Uint8Array;
+  //public nextNullifier: Uint8Array;
   // encrypted elements (chunk: encrypted account or note)
   public encChunks: { data: Uint8Array, index: number }[];
   // keys to decrypting chunks at the corresponding indexes
@@ -165,7 +166,16 @@ export class ComplianceHistoryRecord extends HistoryRecord {
     this.encChunks = chunks.map(aChunk => { return {data: aChunk.encrypted, index: aChunk.index} });
     this.ecdhKeys = chunks.map(aChunk => { return {key: aChunk.key, index: aChunk.index} });
     this.acc = memo.acc;
-    this.notes = [...memo.inNotes, ...memo.outNotes];
+    this.notes = [...memo.inNotes,
+                  ...memo.outNotes.filter(aNote => 
+                      // in case of loopback transfer the associated notes
+                      // can persist in the both arrays (IN/OUT)
+                      // so we should to avoid notes duplications
+                      memo.inNotes.find(anotherNote => 
+                        aNote.index == anotherNote.index
+                      ) === undefined
+                    )
+                  ];
     this.inputs = inputs;
   }
 }
