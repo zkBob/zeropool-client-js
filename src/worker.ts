@@ -157,14 +157,14 @@ const obj = {
     });
   },
 
-  async extractDecryptKeys(sk: Uint8Array, index: number, memo: Uint8Array): Promise<TxMemoChunk[]> {
-    const result = txParser.extractDecryptKeys(sk, BigInt(index), memo);
+  async extractDecryptKeys(sk: Uint8Array, index: bigint, memo: Uint8Array): Promise<TxMemoChunk[]> {
+    const result = txParser.extractDecryptKeys(sk, index, memo);
     sk.fill(0);
     return result;
   },
 
-  async getTxInputs(address: string, index: number): Promise<TxInput> {
-    return zpAccounts[address].getTxInputs(BigInt(index));
+  async getTxInputs(address: string, index: bigint): Promise<TxInput> {
+    return zpAccounts[address].getTxInputs(index);
   },
 
   async decryptAccount(symkey: Uint8Array, encrypted: Uint8Array): Promise<Account> {
@@ -173,6 +173,10 @@ const obj = {
 
   async decryptNote(symkey: Uint8Array, encrypted: Uint8Array): Promise<Note> {
     return txParser.symcipherDecryptNote(symkey, encrypted);
+  },
+
+  async calcNullifier(address: string, account: Account, index: bigint): Promise<String> {
+    return zpAccounts[address].calculateNullifier(account, index);
   },
 
   async createAccount(address: string, sk: Uint8Array, networkName: string, userId: string): Promise<void> {

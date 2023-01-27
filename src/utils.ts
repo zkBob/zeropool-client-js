@@ -100,10 +100,6 @@ export function ethAddrToBuf(address: string): Uint8Array {
 // extend (leading zero-bytes) or trim (trailing bytes)
 // output buffer to the bytesCnt bytes (only when bytesCnt > 0)
 export function hexToBuf(hex: string, bytesCnt: number = 0): Uint8Array {
-  if (hex.length % 2 !== 0) {
-    throw new InternalError('Invalid hex string');
-  }
-
   if (hex.startsWith('0x')) {
     hex = hex.slice(2);
   }
@@ -111,6 +107,10 @@ export function hexToBuf(hex: string, bytesCnt: number = 0): Uint8Array {
   if (bytesCnt > 0) {
     const digitsNum = bytesCnt * 2;
     hex = hex.slice(-digitsNum).padStart(digitsNum, '0');
+  }
+
+  if (hex.length % 2 !== 0) {
+    throw new InternalError('Invalid hex string');
   }
 
   const buffer = new Uint8Array(hex.length / 2);

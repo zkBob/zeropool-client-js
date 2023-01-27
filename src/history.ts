@@ -2,7 +2,7 @@ import { openDB, IDBPDatabase } from 'idb';
 import Web3 from 'web3';
 import { Account, Note, TxMemoChunk, IndexedTx, ParseTxsResult, TxInput } from 'libzkbob-rs-wasm-web';
 import { ShieldedTx, TxType } from './tx';
-import { bigintToArrayLe, bufToHex, hexToBuf, toCanonicalSignature } from './utils';
+import { bigintToArrayLe, bufToHex, HexStringWriter, hexToBuf, toCanonicalSignature } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 
@@ -142,8 +142,9 @@ export class ComplianceHistoryRecord extends HistoryRecord {
   // the first leaf (account) index
   public index: number;
   // used to chaining accounts
-  public nullifier: Uint8Array;
-  //public nextNullifier: Uint8Array;
+  // nullifiers are undefined for incoming transfers
+  public nullifier?: Uint8Array; // for the input account
+  public nextNullifier?: Uint8Array; // for the output account (will be used in the next tx)
   // encrypted elements (chunk: encrypted account or note)
   public encChunks: { data: Uint8Array, index: number }[];
   // keys to decrypting chunks at the corresponding indexes
@@ -158,11 +159,20 @@ export class ComplianceHistoryRecord extends HistoryRecord {
     notes: {index: number, note: Note}[],
   };
 
-  constructor(rec: HistoryRecord, index: number, nullifier: Uint8Array, memo: DecryptedMemo, chunks: TxMemoChunk[], inputs?: TxInput) {
+  constructor(
+    rec: HistoryRecord,
+    index: number,
+    nullifier: Uint8Array | undefined,  // undefined for incoming transfers
+    nextNullifier: Uint8Array | undefined, // undefined for incoming transfers
+    memo: DecryptedMemo,
+    chunks: TxMemoChunk[],
+    inputs: TxInput | undefined, // undefined for incoming transfers
+  ) {
     super(rec.type, rec.timestamp, rec.actions, rec.fee, rec.txHash, rec.state, rec.failureReason);
 
     this.index = index;
     this.nullifier = nullifier;
+    this.nextNullifier = nextNullifier;
     this.encChunks = chunks.map(aChunk => { return {data: aChunk.encrypted, index: aChunk.index} });
     this.ecdhKeys = chunks.map(aChunk => { return {key: aChunk.key, index: aChunk.index} });
     this.acc = memo.acc;
@@ -530,7 +540,6 @@ export class HistoryStorage {
             if (tx.selector.toLowerCase() == "af989083") {
 
               const memoblock = hexToBuf(tx.ciphertext);
-              const nullifier = bigintToArrayLe(tx.nullifier);
 
               let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
               if (!decryptedMemo) {
@@ -548,15 +557,28 @@ export class HistoryStorage {
                 }
               }
 
-              const chunks: TxMemoChunk[] = await worker.extractDecryptKeys(sk, treeIndex, memoblock);
+              const chunks: TxMemoChunk[] = await worker.extractDecryptKeys(sk, BigInt(treeIndex), memoblock);
+
+              let nullifier: Uint8Array | undefined;
               let inputs: TxInput | undefined;
+              let nextNullifier: Uint8Array | undefined;
               if (value.type != HistoryTransactionType.TransferIn) {
                 // tx is user-initiated
-                inputs = await worker.getTxInputs(tokenAddress, treeIndex);
+                nullifier = bigintToArrayLe(tx.nullifier);
+                inputs = await worker.getTxInputs(tokenAddress, BigInt(treeIndex));
+                if (decryptedMemo && decryptedMemo.acc) {
+                  const strNullifier = await worker.calcNullifier(tokenAddress, decryptedMemo.acc, BigInt(decryptedMemo.index));
+                  const writer = new HexStringWriter();
+                  writer.writeBigInt(BigInt(strNullifier), 32, true);
+                  nextNullifier = hexToBuf(writer.toString());
+                } else {
+                  throw new InternalError(`Account was not decrypted @${treeIndex}`);
+                }
               }
 
-              // TEST-ONLY
-              /*for (const aChunk of chunks) {
+              // TEST-ONLY: I'll remove it before merging
+              // Currently you could check key extracting correctness with that code
+              for (const aChunk of chunks) {
                 if(aChunk.index == treeIndex) {
                   // account
                   const restoredAcc = await worker.decryptAccount(aChunk.key, aChunk.encrypted);
@@ -582,16 +604,16 @@ export class HistoryStorage {
                     throw new InternalError(`Cannot restore source note @${aChunk.index} from the compliance report!`);
                   }
                 }
-              };*/
+              };
               
-              const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, decryptedMemo, chunks, inputs);
+              const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, nextNullifier, decryptedMemo, chunks, inputs);
               complienceRecords.push(aRec);
             } else {
               throw new InternalError(`Cannot decode calldata for tx @ ${treeIndex}: incorrect selector ${tx.selector}`);
             }
           }
           catch (e) {
-            throw new InternalError(`Cannot decode calldata for tx @ ${treeIndex}: ${e}`);
+            throw new InternalError(`Cannot generate compliance report for tx @ ${treeIndex}: ${e}`);
           }
         } else {
           console.warn(`[HistoryStorage]: cannot get calldata for tx at index ${treeIndex}`);
