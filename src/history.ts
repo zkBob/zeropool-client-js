@@ -156,6 +156,7 @@ export class ComplianceHistoryRecord extends HistoryRecord {
   // transaction inputs (undefined for incoming txs)
   public inputs?: {
     account: {index: number, account: Account},
+    intermediateNullifier: string,
     notes: {index: number, note: Note}[],
   };
 
@@ -173,8 +174,8 @@ export class ComplianceHistoryRecord extends HistoryRecord {
     this.index = index;
     this.nullifier = nullifier;
     this.nextNullifier = nextNullifier;
-    this.encChunks = chunks.map(aChunk => { return {data: aChunk.encrypted, index: aChunk.index} });
-    this.ecdhKeys = chunks.map(aChunk => { return {key: aChunk.key, index: aChunk.index} });
+    this.encChunks = chunks.map(aChunk => { return {data: new Uint8Array(aChunk.encrypted), index: aChunk.index} });
+    this.ecdhKeys = chunks.map(aChunk => { return {key: new Uint8Array(aChunk.key), index: aChunk.index} });
     this.acc = memo.acc;
     this.notes = [...memo.inNotes,
                   ...memo.outNotes.filter(aNote => 

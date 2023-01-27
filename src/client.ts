@@ -26,6 +26,7 @@ import {
 import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
 import { isAddress } from 'web3-utils';
+import { hash } from 'tweetnacl';
 //import { SyncStat, SyncStat } from '.';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
@@ -223,6 +224,7 @@ export class ZkBobClient {
   private updateStatePromise: Promise<boolean> | undefined;
   private syncStats: SyncStat[] = [];
   private skipColdStorage: boolean = false;
+  private userId: string;
 
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
@@ -238,6 +240,7 @@ export class ZkBobClient {
     client.worker = config.worker;
     client.tokens = config.tokens;
     client.config = config;
+    client.userId = bufToHex(hash(config.sk));
 
     client.relayerFee = undefined;
 
@@ -393,6 +396,12 @@ export class ZkBobClient {
   // | Methods for creating and sending transactions in different modes        |
   // ---------------------------------------------------------------------------
 
+  // Unique account ID needed to user identify
+  // Currently it's spending key hash (SHA-256)
+  public getAccountId(): string {
+    return this.userId;
+  }
+  
   // Generate shielded address to receive funds
   public async generateAddress(tokenAddress: string): Promise<string> {
     const state = this.zpStates[tokenAddress];
