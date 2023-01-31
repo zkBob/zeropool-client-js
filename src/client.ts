@@ -82,10 +82,17 @@ export interface TransferRequest {
   amountGwei: bigint;
 }
 
+// Multiple transfer requests with total amount
+export interface MultinoteTransferRequest {
+  totalAmount: bigint;
+  requests: TransferRequest[];
+}
+
 // Old TxAmount interface
 // Supporting for multi-note transfers
 // Descripbes a transfer transaction configuration
 export interface TransferConfig {
+  inNotesBalance: bigint;
   outNotes: TransferRequest[];  // tx notes (without fee)
   fee: bigint;  // transaction fee, Gwei
   accountLimit: bigint;  // minimum account remainder after transaction
@@ -361,6 +368,10 @@ export class ZkBobClient {
           case HistoryTransactionType.Withdrawal:
           case HistoryTransactionType.TransferOut: {
             pendingDelta = oneRecord.actions.map(({ amount }) => amount).reduce((acc, cur) => acc - cur, pendingDelta);
+            pendingDelta -= oneRecord.fee;
+            break;
+          }
+          case HistoryTransactionType.AggregateNotes: {
             pendingDelta -= oneRecord.fee;
             break;
           }
@@ -839,10 +850,14 @@ export class ZkBobClient {
 
       // Temporary save transaction parts in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-
       const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
-      const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
-      state.history.keepQueuedTransactions([record], jobId);
+      if (transfers.length == 0) {
+        const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
+        state.history.keepQueuedTransactions([record], jobId);
+      } else {
+        const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
+        state.history.keepQueuedTransactions([record], jobId);
+      }
 
       if (index < (txParts.length - 1)) {
         console.log(`Waiting for the job ${jobId} joining the optimistic state`);
@@ -900,25 +915,36 @@ export class ZkBobClient {
     }
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
-      if (onePart.outNotes.length != 1) {
+      
+      let oneTxData: any;
+      let txType: TxType;
+      if (onePart.outNotes.length == 0) {
+        const oneTx: ITransferData = {
+          outputs: [],
+          fee: onePart.fee.toString(),
+        };
+        oneTxData = await state.createTransferOptimistic(oneTx, optimisticState);
+        txType = TxType.Transfer;
+      } else if (onePart.outNotes.length == 1) {
+        const oneTx: IWithdrawData = {
+          amount: onePart.outNotes[0].amountGwei.toString(),
+          fee: onePart.fee.toString(),
+          to: addressBin,
+          native_amount: '0',
+          energy_amount: '0',
+        };
+        oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
+        txType = TxType.Withdraw;
+      } else {
         throw new Error('Invalid transaction configuration');
       }
-      const onePartAmount = onePart.outNotes[0].amountGwei;
-      const oneTx: IWithdrawData = {
-        amount: onePartAmount.toString(),
-        fee: onePart.fee.toString(),
-        to: addressBin,
-        native_amount: '0',
-        energy_amount: '0',
-      };
-      const oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
 
       const startProofDate = Date.now();
       const txProof: Proof = await this.proveTx(tokenAddress, oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Withdraw};
+      const transaction = {memo: oneTxData.memo, proof: txProof, txType};
 
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
       this.startJobMonitoring(tokenAddress, jobId);
@@ -926,8 +952,13 @@ export class ZkBobClient {
 
       // Temporary save transaction part in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      const record = await HistoryRecord.withdraw(address, onePartAmount, onePart.fee, ts, '0', true);
-      state.history.keepQueuedTransactions([record], jobId);
+      if (txType == TxType.Transfer) {
+        const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
+        state.history.keepQueuedTransactions([record], jobId);
+      } else {
+        const record = await HistoryRecord.withdraw(address, onePart.outNotes[0].amountGwei, onePart.fee, ts, '0', true);
+        state.history.keepQueuedTransactions([record], jobId);
+      }
 
       if (index < (txParts.length - 1)) {
         console.log(`Waiting for the job ${jobId} joining the optimistic state`);
@@ -1176,31 +1207,22 @@ export class ZkBobClient {
       await this.updateState(tokenAddress);
     }
 
-
     const txFee = await this.atomicTxFee(tokenAddress);
-    const accountBalance = await state.accountBalance();
-    const notesParts = await this.getGroupedNotes(tokenAddress);
+    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
+    let accountBalance = await state.accountBalance();
 
-    let summ = BigInt(0);
-    let oneTxPart = accountBalance;
-    let i = 0;
-    do {
-      if (i < notesParts.length) {
-        oneTxPart += notesParts[i];
-      }
-
-      if(oneTxPart < txFee) {
+    let maxAmount = accountBalance > txFee ? accountBalance - txFee : BigInt(0);
+    for (const inNotesBalance of groupedNotesBalances) {
+      if (accountBalance + inNotesBalance < txFee) {
         break;
       }
 
-      summ += (oneTxPart - txFee);
-
-      oneTxPart = BigInt(0);
-      i++;
-    } while(i < notesParts.length);
-
-
-    return summ;
+      accountBalance += inNotesBalance - txFee;
+      if (accountBalance > maxAmount) {
+        maxAmount = accountBalance;
+      }
+    }
+    return maxAmount;
   }
 
   // Calculate multitransfer configuration for specified token amount and fee per transaction
@@ -1224,57 +1246,77 @@ export class ZkBobClient {
     // no parts when no requests
     if (transfers.length == 0) return [];
 
-    let result: Array<TransferConfig> = [];
-    let txNotes: Array<TransferRequest> = [];
-    const accountBalance = await state.accountBalance();
-    const notesParts = await this.getGroupedNotes(tokenAddress);
+    let aggregatedTransfers: MultinoteTransferRequest[] = [];
+    for (let i = 0; i < transfers.length; i += CONSTANTS.OUT) {
+      const requests = transfers.slice(i, i + CONSTANTS.OUT);
+      const totalAmount = requests.reduce(
+        (acc, cur) => acc + cur.amountGwei,
+        BigInt(0)
+      );
+      aggregatedTransfers.push({totalAmount, requests});
+    }
 
-    let requestIdx = 0;
-    let txIdx = 0;
-    let remainRequestAmount = transfers[requestIdx].amountGwei;
-    let oneTxPart = accountBalance;
+    let accountBalance: bigint = await state.accountBalance();
+    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
+
+    let aggregationParts: Array<TransferConfig> = [];
+    let txParts: Array<TransferConfig> = [];
+    
+    let i = 0;
     do {
-      if (txIdx < notesParts.length) {
-        oneTxPart += notesParts[txIdx];
+      txParts = this.tryToPrepareTransfers(accountBalance, feeGwei, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
+      if (txParts.length == aggregatedTransfers.length) {
+        // We are able to perform all txs starting from this index
+        return aggregationParts.concat(txParts);
       }
 
-      oneTxPart -= feeGwei; // available token amount for tx (account + notes)
-      // create output notes for the transaction
-      while(oneTxPart > 0 && requestIdx < transfers.length && txNotes.length < CONSTANTS.OUT) {
-        let noteAmount = oneTxPart;
-        if (oneTxPart > remainRequestAmount) {
-          noteAmount = remainRequestAmount;
-        }
-        
-        // add output note for the current transaction
-        txNotes.push({amountGwei: noteAmount, destination: transfers[requestIdx].destination});
-
-        oneTxPart -= noteAmount;
-        remainRequestAmount -= noteAmount;
-        if(remainRequestAmount == BigInt(0)) {
-          if (++requestIdx < transfers.length) {
-            remainRequestAmount = transfers[requestIdx].amountGwei;
-          }
-        }
+      if (groupedNotesBalances.length == 0) {
+        // We can't aggregate notes if we doesn't have one
+        break;
       }
 
-      if(oneTxPart < 0) {
-        // We cannot collect notes to cover tx fee. There are 2 cases:
+      const inNotesBalance = groupedNotesBalances[i];
+      if (accountBalance + inNotesBalance < feeGwei) {
+        // We cannot collect amount to cover tx fee. There are 2 cases:
         // insufficient balance or unoperable notes configuration
         break;
       }
 
-      result.push({outNotes: txNotes, fee: feeGwei, accountLimit: BigInt(0)});
-      txNotes = [];
-      txIdx++;
-    } while((requestIdx < transfers.length || remainRequestAmount > 0) &&  // there are unprocessed request(s) ...
-            (txIdx < notesParts.length || oneTxPart > 0)) // and we have unspent notes or positive account balance
+      aggregationParts.push({
+        inNotesBalance,
+        outNotes: [],
+        fee: feeGwei,
+        accountLimit: BigInt(0)
+      });
+      accountBalance += BigInt(inNotesBalance) - BigInt(feeGwei);
+      
+      i++;
+    } while (i < groupedNotesBalances.length)
 
-    if ((remainRequestAmount > 0 || requestIdx < transfers.length - 1) && allowPartial == false) {
-      result = [];
+    return allowPartial ? aggregationParts.concat(txParts) : [];
+  }
+
+  // try to prepare transfer configs
+  private tryToPrepareTransfers(balance: bigint, fee: bigint, groupedNotesBalances: Array<bigint>, transfers: MultinoteTransferRequest[]): Array<TransferConfig> {
+    let accountBalance = balance;
+    let parts: Array<TransferConfig> = [];
+    for (let i = 0; i < transfers.length; i++) {
+      const inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
+
+      if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
+        // We haven't enough funds to perform such tx
+        break;
+      }
+
+      parts.push({
+        inNotesBalance,
+        outNotes: transfers[i].requests, 
+        fee, 
+        accountLimit: BigInt(0)
+      });
+      accountBalance = (accountBalance + inNotesBalance) - (transfers[i].totalAmount + fee);
     }
-    
-    return result;
+    return parts;
   }
 
   // calculate summ of notes grouped by CONSTANTS::IN
@@ -1283,22 +1325,13 @@ export class ZkBobClient {
     const usableNotes = await state.usableNotes();
 
     const notesParts: Array<bigint> = [];
-    let curPart = BigInt(0);
-    for (let i = 0; i < usableNotes.length; i++) {
-      const curNote = usableNotes[i][1];
-
-      if (i > 0 && i % CONSTANTS.IN == 0) {
-        notesParts.push(curPart);
-        curPart = BigInt(0);
-      }
-
-      curPart += BigInt(curNote.b);
-
-      if (i == usableNotes.length - 1) {
-        notesParts.push(curPart);
-      }
+    for (let i = 0; i < usableNotes.length; i += CONSTANTS.IN) {
+      const inNotesBalance: bigint = usableNotes.slice(i, i + CONSTANTS.IN).reduce(
+        (acc, cur) => acc + BigInt(cur[1].b),
+        BigInt(0)
+      );
+      notesParts.push(inNotesBalance);
     }
-
     return notesParts;
   }
 
