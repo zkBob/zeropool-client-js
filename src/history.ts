@@ -312,7 +312,6 @@ export class HistoryStorage {
 
     await this.syncHistoryPromise;
 
-    const startTimer = Date.now();
     return Array.from(this.currentHistory.values())
             .concat(this.failedHistory)
             .sort((rec1, rec2) => 0 - (rec1.timestamp > rec2.timestamp ? -1 : 1));
@@ -626,7 +625,6 @@ export class HistoryStorage {
           return records;
         });
         historyPromises.push(hist);
-        //processedIndexes.push(oneMemo.index);
       }
 
       // process pending memos
@@ -716,15 +714,14 @@ export class HistoryStorage {
     const txHash = memo.txHash;
     if (txHash) {
       let txData;
-      try {
+      try { // TODO: will be moved to the separated RPC requester
         txData = await this.web3.eth.getTransaction(txHash);
       } catch (err) {
         txData = null;
       }
       if (txData && txData.blockNumber && txData.input) {
-          //const block = await this.web3.eth.getBlock(txData.blockNumber);
           let block;
-          try {
+          try { // TODO: will be moved to the separated RPC requester
             block = await this.web3.eth.getBlock(txData.blockNumber);
           } catch (err) {
             block = null;
