@@ -7,6 +7,7 @@ import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 
 const LOG_HISTORY_SYNC = false;
+const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
 
 export enum HistoryTransactionType {
   Deposit = 1,
@@ -160,6 +161,7 @@ const HISTORY_STATE_TABLE = 'HISTORY_STATE';
 export class HistoryStorage {
   private db: IDBPDatabase;
   private syncIndex = -1;
+  private syncAttempts = 0;
   private worker: any;
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
@@ -237,7 +239,7 @@ export class HistoryStorage {
     while (cursor) {
       const curRecord = cursor.value;
       if (curRecord.actions === undefined) {
-        console.log(`Old history record was found! Clean deprecated records...`);
+        console.log(`[HistoryStorage] old history record was found! Clean deprecated records...`);
         await this.db.clear(TX_TABLE);
         await this.db.clear(HISTORY_STATE_TABLE);
         this.syncIndex = -1;
@@ -284,7 +286,26 @@ export class HistoryStorage {
 
   public async getAllHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<HistoryRecord[]> {
     if (this.syncHistoryPromise == undefined) {
-      this.syncHistoryPromise = this.syncHistory(getIsLoopback).finally( () => {
+      this.syncHistoryPromise = new Promise<void>(async (resolve) => {
+        this.syncAttempts = 0;
+        let result = false;
+        do {
+          if (this.syncAttempts++ > 0) {
+            console.warn(`[HistoryStorage] history retry attempt #${this.syncAttempts} (${this.unparsedMemo.size} memo were not converted yet)`);
+          }
+          result = await this.syncHistory(getIsLoopback);
+          if (result) {
+            break;
+          }
+        } while(this.syncAttempts < MAX_SYNC_ATTEMPTS);
+
+        if (!result) {
+          console.warn(`[HistoryStorage] cannot fully sync history after ${this.syncAttempts} attempts (${this.unparsedMemo.size} memo were not converted yet)`);
+        }
+        resolve();
+      }).catch(() => {
+        console.error(`[HistoryStorage]: ERROROROOROROR!!!`);
+      }).finally(() => {
         this.syncHistoryPromise = undefined;
       });
     }
@@ -292,12 +313,9 @@ export class HistoryStorage {
     await this.syncHistoryPromise;
 
     const startTimer = Date.now();
-    const res = Array.from(this.currentHistory.values())
+    return Array.from(this.currentHistory.values())
             .concat(this.failedHistory)
             .sort((rec1, rec2) => 0 - (rec1.timestamp > rec2.timestamp ? -1 : 1));
-    console.log(`[HistoryStorage]: sorting time ${Date.now() - startTimer} ms`);
-
-    return res;
   }
 
   // remember just sent transactions to restore history record immediately
@@ -547,6 +565,13 @@ export class HistoryStorage {
     } else {
       this.db.put(HISTORY_STATE_TABLE, this.syncIndex, 'sync_index');
     }
+
+    // remove failed indexes if needed
+    let failSyncRecords: number[] = await this.db.get(HISTORY_STATE_TABLE, 'fail_indexes');
+    if (failSyncRecords) {
+      failSyncRecords = failSyncRecords.filter(idx => idx < rollbackIndex);
+      await this.db.put(HISTORY_STATE_TABLE, failSyncRecords, 'fail_indexes');
+    }
   }
 
   public async cleanHistory(): Promise<void> {
@@ -572,11 +597,16 @@ export class HistoryStorage {
 
   // ------- Private rouutines --------
 
-  private async syncHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<void> {
+  // Returns true if there is all unparsed memo were converted to the HistoryRecords
+  // If one or more transactions were postponed due to recoverable error - return false
+  // Pending transactions are not influence on the return value (in case of error it will re-fetched in the next time)
+  // The method can be throw an error in case of unrecoverable error
+
+  private async syncHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<boolean> {
     const startTime = Date.now();
 
     if (this.unparsedMemo.size > 0 || this.unparsedPendingMemo.size > 0) {
-      console.log(`Starting memo synchronizing from the index ${this.syncIndex + 1} (${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unprocessed memos)`);
+      console.log(`[HistoryStorage] starting memo synchronizing from the index ${this.syncIndex + 1} (${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unprocessed memos)`);
 
       const historyPromises: Promise<HistoryRecordIdx[]>[] = [];
       
@@ -627,7 +657,7 @@ export class HistoryStorage {
       for (const oneSet of historyRedords) {
         for (const oneRec of oneSet) {
           if (LOG_HISTORY_SYNC) {
-            console.log(`History record @${oneRec.index} has been created`);
+            console.log(`[HistoryStorage] history record @${oneRec.index} has been created`);
           }
 
           this.currentHistory.set(oneRec.index, oneRec.record);
@@ -637,12 +667,6 @@ export class HistoryStorage {
             this.put(oneRec.index, oneRec.record);
             
             newSyncIndex = oneRec.index;
-            
-            /*if (oneRec.index < minUnprocessedIndex) {
-              // prevent updating sync index greater or equal than first unprocessed memo
-              // (we must have no unprocessed records before sync index)
-              newSyncIndex = oneRec.index;
-            }*/
           }
         }
       }
@@ -663,18 +687,19 @@ export class HistoryStorage {
 
       const timeMs = Date.now() - startTime;
       const remainsStr = unprocessedIndexes.length > 0 ? ` (${unprocessedIndexes.length} memos remain unprecessed)` : '';
-      console.log(`History has been synced up to index ${this.syncIndex}${remainsStr} in ${timeMs} msec. Records: ${[...this.currentHistory.keys()].length}`);
+      console.log(`[HistoryStorage] history has been synced up to index ${this.syncIndex}${remainsStr} in ${timeMs} msec (records: ${[...this.currentHistory.keys()].length})`);
     } else {
-      // No any records (new or pending)
-      // delete all pending history records
+      // No any records (new or pending) => delete all pending history records
       for (const [index, record] of this.currentHistory.entries()) {
         if (record.state == HistoryRecordState.Pending) {
           this.currentHistory.delete(index);
         }
       }
 
-      console.log(`Memo sync is not required: already up-to-date (on index ${this.syncIndex + 1})`);
+      console.log(`[HistoryStorage] memo sync is not required: already up-to-date (on index ${this.syncIndex + 1})`);
     }
+
+    return this.unparsedMemo.size == 0;
   }
 
   private async put(index: number, data: HistoryRecord): Promise<HistoryRecord> {
@@ -692,10 +717,20 @@ export class HistoryStorage {
     if (txHash) {
       // TODO: temporary random tx requests failuring
       // Do not forget to remove (Math.random() <= ...) that!
-      const txData = (Math.random() <= 0.8) ? await this.web3.eth.getTransaction(txHash) : null;
+      let txData;
+      try {
+        txData = (Math.random() <= 0.8) ? await this.web3.eth.getTransaction(txHash) : null;
+      } catch (err) {
+        txData = null;
+      }
       if (txData && txData.blockNumber && txData.input) {
           //const block = await this.web3.eth.getBlock(txData.blockNumber);
-          const block = (Math.random() <= 0.95) ? await this.web3.eth.getBlock(txData.blockNumber) : null;
+          let block;
+          try {
+            block = (Math.random() <= 0.95) ? await this.web3.eth.getBlock(txData.blockNumber) : null;
+          } catch (err) {
+            block = null;
+          }
           if (block && block.timestamp) {
               let ts: number = 0;
               if (typeof block.timestamp === "number" ) {
@@ -796,7 +831,7 @@ export class HistoryStorage {
           }
 
           // we shouldn't panic here: will retry in the next time
-          console.warn(`Unable to fetch block ${txData.blockNumber} for tx @${memo.index}`);
+          console.warn(`[HistoryStorage] unable to fetch block ${txData.blockNumber} for tx @${memo.index}`);
       } else {
         // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
         const records = this.sentTxs.get(txHash);
