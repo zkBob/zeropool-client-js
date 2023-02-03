@@ -715,11 +715,9 @@ export class HistoryStorage {
   private async convertToHistory(memo: DecryptedMemo, pending: boolean, getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<HistoryRecordIdx[]> {
     const txHash = memo.txHash;
     if (txHash) {
-      // TODO: temporary random tx requests failuring
-      // Do not forget to remove (Math.random() <= ...) that!
       let txData;
       try {
-        txData = (Math.random() <= 0.8) ? await this.web3.eth.getTransaction(txHash) : null;
+        txData = await this.web3.eth.getTransaction(txHash);
       } catch (err) {
         txData = null;
       }
@@ -727,7 +725,7 @@ export class HistoryStorage {
           //const block = await this.web3.eth.getBlock(txData.blockNumber);
           let block;
           try {
-            block = (Math.random() <= 0.95) ? await this.web3.eth.getBlock(txData.blockNumber) : null;
+            block = await this.web3.eth.getBlock(txData.blockNumber);
           } catch (err) {
             block = null;
           }
