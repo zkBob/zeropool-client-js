@@ -522,7 +522,7 @@ export class ZkBobClient {
     let lastTxHash = '';
     let lastJobState = '';
     while (true) {
-      const jobInfo = await this.getJob(token.relayerUrl, jobId);
+      const jobInfo = await this.getJob(token.relayerUrl, jobId).catch(() => null);
 
       if (jobInfo === null) {
         throw new RelayerJobError(Number(jobId), 'not found');
