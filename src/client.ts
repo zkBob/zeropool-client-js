@@ -1925,12 +1925,8 @@ export class ZkBobClient {
     const token = this.tokens[tokenAddress];
     const zpState = this.zpStates[tokenAddress];
 
-    const coldConfig = zpState.coldStorageConfig;
-
     const startRange = fromIndex ?? 0;  // inclusively
     const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
-    const actualRangeStart = Math.max(startRange, Number(coldConfig.index_from));
-    const actualRangeEnd = Math.min(endRange, Number(coldConfig.next_index));
 
     const syncResult: PartialSyncResult = {
       txCount: 0,
@@ -1940,74 +1936,80 @@ export class ZkBobClient {
       totalTime: 0,
     };
 
-    if (this.skipColdStorage == false &&
-        (startRange % OUTPLUSONE) == 0 && 
-        (endRange % OUTPLUSONE) == 0 &&
-        isRangesIntersected(startRange, endRange, Number(coldConfig.index_from), Number(coldConfig.next_index)) &&
-        ((actualRangeEnd - actualRangeStart) / OUTPLUSONE) >= COLD_STORAGE_USAGE_THRESHOLD
-    ) {
-      const startTime = Date.now();
+    const coldConfig = zpState.coldStorageConfig;
+    if (coldConfig) {
+      const actualRangeStart = Math.max(startRange, Number(coldConfig.index_from));
+      const actualRangeEnd = Math.min(endRange, Number(coldConfig.next_index));
 
-      // try get txs from the cold storage
-      try {
-        console.log(`🧊[ColdSync] loading txs up to index ${zpState.coldStorageConfig.next_index}...`);
-        const coldStorageBaseAddr = token.coldStorageConfigPath.substring(0, token.coldStorageConfigPath.lastIndexOf('/'));
-        const promises = zpState.coldStorageConfig.bulks
-          .filter(aBulk => {
-            return isRangesIntersected(actualRangeStart, actualRangeEnd, Number(aBulk.index_from), Number(aBulk.next_index))
-          })
-          .map(async (bulkInfo) => {
-            let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
-            if (response.ok) {
-              let aBulk = await response.arrayBuffer();
-              if (aBulk.byteLength == bulkInfo.bytes) {
-                console.log(`🧊[ColdSync] got bulk ${bulkInfo.filename} with ${bulkInfo.tx_count} txs (${bulkInfo.bytes} bytes)`);
+      if (this.skipColdStorage == false &&
+          (startRange % OUTPLUSONE) == 0 && 
+          (endRange % OUTPLUSONE) == 0 &&
+          isRangesIntersected(startRange, endRange, Number(coldConfig.index_from), Number(coldConfig.next_index)) &&
+          ((actualRangeEnd - actualRangeStart) / OUTPLUSONE) >= COLD_STORAGE_USAGE_THRESHOLD
+      ) {
+        const startTime = Date.now();
 
-                return new Uint8Array(aBulk);
+        // try get txs from the cold storage
+        try {
+          console.log(`🧊[ColdSync] loading txs up to index ${zpState.coldStorageConfig.next_index}...`);
+          const coldStorageBaseAddr = token.coldStorageConfigPath.substring(0, token.coldStorageConfigPath.lastIndexOf('/'));
+          const promises = zpState.coldStorageConfig.bulks
+            .filter(aBulk => {
+              return isRangesIntersected(actualRangeStart, actualRangeEnd, Number(aBulk.index_from), Number(aBulk.next_index))
+            })
+            .map(async (bulkInfo) => {
+              let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
+              if (response.ok) {
+                let aBulk = await response.arrayBuffer();
+                if (aBulk.byteLength == bulkInfo.bytes) {
+                  console.log(`🧊[ColdSync] got bulk ${bulkInfo.filename} with ${bulkInfo.tx_count} txs (${bulkInfo.bytes} bytes)`);
+
+                  return new Uint8Array(aBulk);
+                }
+
+                //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: got ${aBulk.byteLength} bytes, expected ${bulkInfo.bytes} bytes`);
+                //return new Uint8Array();
+                throw new InternalError(`Cold storage corrupted (invalid file size: ${aBulk.byteLength})`)
+              } else {
+                //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: response code ${response.status} (${response.statusText})`);
+                //return new Uint8Array();
+                throw new InternalError(`Couldn't load cold storage (invalid response code: ${response.status})`)
               }
+            });
+          
+          let bulksData = (await Promise.all(promises)).filter(data => data.length > 0);
+          
 
-              //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: got ${aBulk.byteLength} bytes, expected ${bulkInfo.bytes} bytes`);
-              //return new Uint8Array();
-              throw new InternalError(`Cold storage corrupted (invalid file size: ${aBulk.byteLength})`)
-            } else {
-              //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: response code ${response.status} (${response.statusText})`);
-              //return new Uint8Array();
-              throw new InternalError(`Couldn't load cold storage (invalid response code: ${response.status})`)
-            }
+          let result: ParseTxsColdStorageResult = await zpState.updateStateColdStorage(bulksData, BigInt(actualRangeStart), BigInt(actualRangeEnd));
+          result.decryptedMemos.forEach((aMemo) => {
+            zpState.history.saveDecryptedMemo(aMemo, false);
           });
-        
-        let bulksData = (await Promise.all(promises)).filter(data => data.length > 0);
-        
-
-        let result: ParseTxsColdStorageResult = await zpState.updateStateColdStorage(bulksData, BigInt(actualRangeStart), BigInt(actualRangeEnd));
-        result.decryptedMemos.forEach((aMemo) => {
-          zpState.history.saveDecryptedMemo(aMemo, false);
-        });
 
 
-        syncResult.txCount = result.txCnt;
-        syncResult.decryptedLeafs = result.decryptedLeafsCnt;
-        syncResult.firstIndex = actualRangeStart;
-        syncResult.nextIndex = actualRangeEnd;
-        syncResult.totalTime = Date.now() - startTime;
-        
-        const isStateCorrect = await this.verifyState(tokenAddress);
-        if (!isStateCorrect) {
-          console.warn(`🧊[ColdSync] Merkle tree root at index ${await zpState.getNextIndex()} mistmatch! Wiping the state...`);
-          await zpState.clean();  // rollback to 0
-          this.skipColdStorage = true;  // prevent cold storage usage
+          syncResult.txCount = result.txCnt;
+          syncResult.decryptedLeafs = result.decryptedLeafsCnt;
+          syncResult.firstIndex = actualRangeStart;
+          syncResult.nextIndex = actualRangeEnd;
+          syncResult.totalTime = Date.now() - startTime;
+          
+          const isStateCorrect = await this.verifyState(tokenAddress);
+          if (!isStateCorrect) {
+            console.warn(`🧊[ColdSync] Merkle tree root at index ${await zpState.getNextIndex()} mistmatch! Wiping the state...`);
+            await zpState.clean();  // rollback to 0
+            this.skipColdStorage = true;  // prevent cold storage usage
 
-          syncResult.txCount = 0;
-          syncResult.decryptedLeafs = 0;
-          syncResult.firstIndex = 0;
-          syncResult.nextIndex = 0;
-        } else {
-          console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
-          console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
+            syncResult.txCount = 0;
+            syncResult.decryptedLeafs = 0;
+            syncResult.firstIndex = 0;
+            syncResult.nextIndex = 0;
+          } else {
+            console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
+            console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
+          }
+          
+        } catch (err) {
+          console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
         }
-        
-      } catch (err) {
-        console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
       }
     }
 
