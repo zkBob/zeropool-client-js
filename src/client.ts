@@ -261,7 +261,6 @@ export class ZkBobClient {
     }
 
     for (const [address, token] of Object.entries(config.tokens)) {
-      let denominator: bigint
       if (token.birthindex == -1) {
         // fetch current birthindex right away
         try {
@@ -280,11 +279,20 @@ export class ZkBobClient {
         }
       }
 
+      let denominator: bigint
       try {
         denominator = await config.network.getDenominator(token.poolAddress);
       } catch (err) {
         console.error(`Cannot fetch denominator value from the relayer, will using default 10^9: ${err}`);
         denominator = DEFAULT_DENOMINATOR;
+      }
+
+      let poolId: number;
+      try {
+        poolId = await config.network.getPoolId(token.poolAddress);
+      } catch (err) {
+        console.error(`Cannot fetch pool ID, will using default (0): ${err}`);
+        poolId = 0;
       }
 
       try {
@@ -293,7 +301,7 @@ export class ZkBobClient {
         console.error(err);
       }
 
-      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, address, client.worker, token.coldStorageConfigPath);
+      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, poolId, address, client.worker, token.coldStorageConfigPath);
     }
     
     return client;
@@ -623,6 +631,11 @@ export class ZkBobClient {
     }
 
     return cachedVer.version;
+  }
+
+  // Each zkBob pool should have his unique identifier
+  public getPoolId(tokenAddress: string): number {
+    return this.zpStates[tokenAddress].poolId;
   }
 
   // ------------------=========< Making Transactions >=========-------------------

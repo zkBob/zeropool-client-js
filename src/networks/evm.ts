@@ -20,15 +20,24 @@ export class EvmNetwork implements NetworkBackend {
                 constant: true,
                 inputs: [],
                 name: 'denominator',
-                outputs: [
-                    {
-                        name: '',
-                        type: 'uint256',
-                    }
-                ],
+                outputs: [{
+                    name: '',
+                    type: 'uint256',
+                }],
                 stateMutability: 'pure',
                 type: 'function',
-            }, 
+            },
+            {
+                inputs: [],
+                name: 'pool_id',
+                outputs: [{
+                    internalType: 'uint256',
+                    name: '',
+                    type: 'uint256',
+                }],
+                stateMutability: 'view',
+                type: 'function',
+            },
             {
                 inputs:[],
                 name: 'pool_index',
@@ -195,6 +204,11 @@ export class EvmNetwork implements NetworkBackend {
     public async getDenominator(contractAddress: string): Promise<bigint> {
         this.contract.options.address = contractAddress;
         return BigInt(await this.contract.methods.denominator().call());
+    }
+
+    public async getPoolId(contractAddress: string): Promise<number> {
+        this.contract.options.address = contractAddress;
+        return Number(await this.contract.methods.pool_id().call());
     }
 
     isSignatureCompact(): boolean {

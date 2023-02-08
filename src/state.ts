@@ -9,6 +9,7 @@ import { InternalError } from './errors';
 
 export class ZkBobState {
   public denominator: bigint;
+  public poolId: number;
   public history: HistoryStorage;
   public ephemeralPool: EphemeralPool;
   public tokenAddress: string;
@@ -24,15 +25,17 @@ export class ZkBobState {
     networkName: string,
     rpcUrl: string,
     denominator: bigint,
+    poolId: number,
     tokenAddress: string,
     worker: any,
     bulkConfigPath: string | undefined = undefined,
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
     zpState.denominator = denominator;
+    zpState.poolId = poolId;
     
     const userId = bufToHex(hash(sk));
-    await worker.createAccount(tokenAddress, sk, networkName, userId);
+    await worker.createAccount(tokenAddress, sk, networkName, poolId, userId);
     zpState.tokenAddress = tokenAddress;
     zpState.worker = worker;
     zpState.history = await HistoryStorage.init(`zp.${networkName}.${userId}`, rpcUrl, worker);

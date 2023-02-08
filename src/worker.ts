@@ -72,11 +72,11 @@ const obj = {
     return result;
   },
 
-  async createAccount(address: string, sk: Uint8Array, networkName: string, userId: string): Promise<void> {
+  async createAccount(address: string, sk: Uint8Array, networkName: string, poolId: number, userId: string): Promise<void> {
     console.debug('Web worker: createAccount');
     try {
       const state = await wasm.UserState.init(`zp.${networkName}.${userId}`);
-      const acc = new wasm.UserAccount(sk, state);
+      const acc = new wasm.UserAccount(sk, BigInt(poolId), state);
       zpAccounts[address] = acc;
     } catch (e) {
       console.error(e);
