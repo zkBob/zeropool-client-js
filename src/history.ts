@@ -46,6 +46,10 @@ export interface TokensMoving {
   isLoopback: boolean,
 }
 
+enum PoolSelector {
+  Transact = "af989083",
+}
+
 
 export class HistoryRecord {
   constructor(
@@ -527,7 +531,7 @@ export class HistoryStorage {
 
   // the history should be synced before invoking that method
   // timestamps are milliseconds, low bound is inclusively
-  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null, sk: Uint8Array, tokenAddress: string, worker: any): Promise<ComplianceHistoryRecord[]> {
+  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null, sk: Uint8Array, tokenAddress: string): Promise<ComplianceHistoryRecord[]> {
     let complienceRecords: ComplianceHistoryRecord[] = [];
     
     for (const [treeIndex, value] of  this.currentHistory.entries()) {
@@ -540,7 +544,7 @@ export class HistoryStorage {
         if (calldata && calldata.blockNumber && calldata.input) {
           try {
             const tx = ShieldedTx.decode(calldata.input);
-            if (tx.selector.toLowerCase() == "af989083") {
+            if (tx.selector.toLowerCase() == PoolSelector.Transact) {
 
               const memoblock = hexToBuf(tx.ciphertext);
 
@@ -552,7 +556,7 @@ export class HistoryStorage {
                   memo: tx.ciphertext,
                   commitment: bufToHex(bigintToArrayLe(tx.outCommit)),
                 }
-                const res: ParseTxsResult = (await worker.parseTxs(sk, [indexedTx])).decryptedMemos;
+                const res: ParseTxsResult = (await this.worker.parseTxs(sk, [indexedTx])).decryptedMemos;
                 if (res.decryptedMemos.length == 1) {
                   decryptedMemo = res.decryptedMemos[0];
                 } else {
@@ -560,7 +564,7 @@ export class HistoryStorage {
                 }
               }
 
-              const chunks: TxMemoChunk[] = await worker.extractDecryptKeys(sk, BigInt(treeIndex), memoblock);
+              const chunks: TxMemoChunk[] = await this.worker.extractDecryptKeys(sk, BigInt(treeIndex), memoblock);
 
               let nullifier: Uint8Array | undefined;
               let inputs: TxInput | undefined;
@@ -568,9 +572,9 @@ export class HistoryStorage {
               if (value.type != HistoryTransactionType.TransferIn) {
                 // tx is user-initiated
                 nullifier = bigintToArrayLe(tx.nullifier);
-                inputs = await worker.getTxInputs(tokenAddress, BigInt(treeIndex));
+                inputs = await this.worker.getTxInputs(tokenAddress, BigInt(treeIndex));
                 if (decryptedMemo && decryptedMemo.acc) {
-                  const strNullifier = await worker.calcNullifier(tokenAddress, decryptedMemo.acc, BigInt(decryptedMemo.index));
+                  const strNullifier = await this.worker.calcNullifier(tokenAddress, decryptedMemo.acc, BigInt(decryptedMemo.index));
                   const writer = new HexStringWriter();
                   writer.writeBigInt(BigInt(strNullifier), 32, true);
                   nextNullifier = hexToBuf(writer.toString());
@@ -584,13 +588,13 @@ export class HistoryStorage {
               for (const aChunk of chunks) {
                 if(aChunk.index == treeIndex) {
                   // account
-                  const restoredAcc = await worker.decryptAccount(aChunk.key, aChunk.encrypted);
+                  const restoredAcc = await this.worker.decryptAccount(aChunk.key, aChunk.encrypted);
                   if (JSON.stringify(restoredAcc) != JSON.stringify(decryptedMemo?.acc)) {
                     throw new InternalError(`Cannot restore source account @${aChunk.index} from the compliance report!`);
                   }
                 } else if (decryptedMemo) {
                   // notes
-                  const restoredNote = await worker.decryptNote(aChunk.key, aChunk.encrypted);
+                  const restoredNote = await this.worker.decryptNote(aChunk.key, aChunk.encrypted);
                   let srcNote: Note | undefined;
                   for (const aNote of decryptedMemo.outNotes) {
                     if (aNote.index == aChunk.index) { srcNote = aNote.note; break; }

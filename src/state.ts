@@ -31,11 +31,11 @@ export class ZkBobState {
     const zpState = new ZkBobState();
     zpState.denominator = denominator;
     
-    const userId = bufToHex(hash(sk));
-    await worker.createAccount(tokenAddress, sk, networkName, userId);
+    const accountId = bufToHex(hash(sk));
+    await worker.createAccount(tokenAddress, sk, networkName, accountId);
     zpState.tokenAddress = tokenAddress;
     zpState.worker = worker;
-    zpState.history = await HistoryStorage.init(`zp.${networkName}.${userId}`, rpcUrl, worker);
+    zpState.history = await HistoryStorage.init(`zp.${networkName}.${accountId}`, rpcUrl, worker);
 
     let network = networkName as NetworkType;
     zpState.ephemeralPool = await EphemeralPool.init(sk, tokenAddress, network, rpcUrl, denominator);

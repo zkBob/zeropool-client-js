@@ -238,7 +238,7 @@ export class ZkBobClient {
   private updateStatePromise: Promise<boolean> | undefined;
   private syncStats: SyncStat[] = [];
   private skipColdStorage: boolean = false;
-  private userId: string;
+  private accountId: string;
 
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
@@ -254,7 +254,7 @@ export class ZkBobClient {
     client.worker = config.worker;
     client.tokens = config.tokens;
     client.config = config;
-    client.userId = bufToHex(hash(config.sk));
+    client.accountId = bufToHex(hash(config.sk));
 
     client.relayerFee = undefined;
 
@@ -407,7 +407,7 @@ export class ZkBobClient {
       await this.getAllHistory(tokenAddress);
     }
 
-    return await this.zpStates[tokenAddress].history.getComplianceReport(fromTimestamp, toTimestamp, this.config.sk, tokenAddress, this.worker);
+    return await this.zpStates[tokenAddress].history.getComplianceReport(fromTimestamp, toTimestamp, this.config.sk, tokenAddress);
   }
 
   // ------------------=========< Service Routines >=========-------------------
@@ -417,7 +417,7 @@ export class ZkBobClient {
   // Unique account ID needed to user identify
   // Currently it's spending key hash (SHA-256)
   public getAccountId(): string {
-    return this.userId;
+    return this.accountId;
   }
   
   // Generate shielded address to receive funds

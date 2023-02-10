@@ -95,10 +95,10 @@ const obj = {
     return zpAccounts[address].calculateNullifier(account, index);
   },
 
-  async createAccount(address: string, sk: Uint8Array, networkName: string, userId: string): Promise<void> {
+  async createAccount(address: string, sk: Uint8Array, networkName: string, accountId: string): Promise<void> {
     console.debug('Web worker: createAccount');
     try {
-      const state = await wasm.UserState.init(`zp.${networkName}.${userId}`);
+      const state = await wasm.UserState.init(`zp.${networkName}.${accountId}`);
       const acc = new wasm.UserAccount(sk, state);
       zpAccounts[address] = acc;
     } catch (e) {
