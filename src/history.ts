@@ -256,7 +256,7 @@ export class HistoryStorage {
     // (memos which are placed below syncIndex but wasn't converted to the HistoryRecord for any reason)
     const failSyncRecords: number[] = await this.db.get(HISTORY_STATE_TABLE, 'fail_indexes');
     if (failSyncRecords) {
-      await failSyncRecords.forEach(async (idx) => {
+      await Promise.all(failSyncRecords.map(async (idx) => {
         const lostMemo: DecryptedMemo = await this.db.get(DECRYPTED_MEMO_TABLE, idx);
         if (lostMemo) {
           this.unparsedMemo.set(idx, lostMemo);
@@ -264,7 +264,7 @@ export class HistoryStorage {
         } else {
           console.warn(`[HistoryStorage] memo @${idx} was marked as lost but no source memo was found`);
         }
-      });
+      }));
     } else {
       // It's seems we faced with that array for the first time
       // Let's check all history for the leaked records
@@ -303,8 +303,8 @@ export class HistoryStorage {
           console.warn(`[HistoryStorage] cannot fully sync history after ${this.syncAttempts} attempts (${this.unparsedMemo.size} memo were not converted yet)`);
         }
         resolve();
-      }).catch(() => {
-        console.error(`[HistoryStorage]: ERROROROOROROR!!!`);
+      }).catch((err) => {
+        console.error(`[HistoryStorage]: unexpected error occured during history sync: ${err.message}`);
       }).finally(() => {
         this.syncHistoryPromise = undefined;
       });
@@ -647,10 +647,6 @@ export class HistoryStorage {
         }
       }
 
-      // Index of the first unprocessed memo (due to errors)
-      // The value will equal +Inf if there are no such memos
-      const minUnprocessedIndex = Math.min(...unprocessedIndexes);
-
       let newSyncIndex = this.syncIndex;
       for (const oneSet of historyRedords) {
         for (const oneRec of oneSet) {
@@ -713,19 +709,9 @@ export class HistoryStorage {
   private async convertToHistory(memo: DecryptedMemo, pending: boolean, getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<HistoryRecordIdx[]> {
     const txHash = memo.txHash;
     if (txHash) {
-      let txData;
-      try { // TODO: will be moved to the separated RPC requester
-        txData = await this.web3.eth.getTransaction(txHash);
-      } catch (err) {
-        txData = null;
-      }
+      const txData = await this.web3.eth.getTransaction(txHash).catch(() => null);
       if (txData && txData.blockNumber && txData.input) {
-          let block;
-          try { // TODO: will be moved to the separated RPC requester
-            block = await this.web3.eth.getBlock(txData.blockNumber);
-          } catch (err) {
-            block = null;
-          }
+          let block = await this.web3.eth.getBlock(txData.blockNumber).catch(() => null);
           if (block && block.timestamp) {
               let ts: number = 0;
               if (typeof block.timestamp === "number" ) {
