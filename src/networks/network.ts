@@ -6,6 +6,7 @@ export interface NetworkBackend {
     getDenominator(contractAddress: string): Promise<bigint>;
     getPoolId(contractAddress: string): Promise<number>;
     poolLimits(contractAddress: string, address: string | undefined): Promise<any>;
+    getDirectDepositFee(contractAddress: string): Promise<bigint>;
     poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}>;
     getTxRevertReason(txHash: string): Promise<string | null>
     isSignatureCompact(): boolean;

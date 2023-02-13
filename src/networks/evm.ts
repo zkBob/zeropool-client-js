@@ -119,7 +119,18 @@ export class EvmNetwork implements NetworkBackend {
                 }],
                 stateMutability: 'view',
                 type: 'function',
-            }
+            },
+            {
+                inputs: [],
+                name: 'directDepositFee',
+                outputs: [{
+                    internalType: 'uint64',
+                    name: '',
+                    type: 'uint64'
+                }],
+                stateMutability: 'view',
+                type: 'function'
+              },
         ];
         this.contract = new this.web3.eth.Contract(abi) as unknown as Contract;
 
@@ -231,6 +242,12 @@ export class EvmNetwork implements NetworkBackend {
         }
         
         return await this.contract.methods.getLimitsFor(addr).call();
+    }
+
+    public async getDirectDepositFee(contractAddress: string): Promise<bigint> {
+        this.contract.options.address = contractAddress;
+        
+        return BigInt(await this.contract.methods.directDepositFee().call());
     }
 
     public async poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {

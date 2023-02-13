@@ -28,9 +28,9 @@
     "libzkbob-rs-wasm-web": "file:../libzkbob-rs/libzkbob-rs-wasm/web-debug",
     "libzkbob-rs-wasm-web-mt": "file:../libzkbob-rs/libzkbob-rs-wasm/web-mt-debug",
     "regenerator-runtime": "^0.13.9",
+    "wasm-feature-detect": "^1.2.11",
     "web3": "1.8.0",
-    "web3-utils": "1.8.0",
-    "wasm-feature-detect": "^1.2.11"
+    "web3-utils": "1.8.0"
   },
   "devDependencies": {
     "@types/ethereum-protocol": "^1.0.1",

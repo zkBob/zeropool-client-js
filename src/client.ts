@@ -1208,6 +1208,11 @@ export class ZkBobClient {
     return this.relayerFee;
   }
 
+  public async directDepositFee(tokenAddress: string): Promise<bigint> {
+    const token = this.tokens[tokenAddress];
+    return await this.config.network.getDirectDepositFee(token.poolAddress);
+  }
+
   public async minTxAmount(): Promise<bigint> {
     return MIN_TX_AMOUNT;
   }
