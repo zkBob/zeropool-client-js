@@ -1101,7 +1101,9 @@ export class ZkBobClient {
       console.debug('Delegated Prover: proveTx');
       try {
         const url = new URL('/proveTx', token.delegatedProverUrl);
-        const headers = this.defaultHeaders();
+        let headers = this.defaultHeaders();
+        headers["zkbob-nullifier"] = pub.nullifier;
+
         const proof = await this.fetchJson(
           url.toString(), 
           { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) },
@@ -2009,7 +2011,7 @@ export class ZkBobClient {
   // | Methods to interact with the relayer                                        |
   // -------------------------------------------------------------------------------
 
-  private defaultHeaders(supportId: boolean = true): HeadersInit {
+  private defaultHeaders(supportId: boolean = true): Record<string, string> {
     if (supportId && this.config.supportId) {
       return {'content-type': 'application/json;charset=UTF-8',
               'zkbob-libjs-version': LIB_VERSION,
