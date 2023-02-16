@@ -20,7 +20,7 @@ import {
 } from 'libzkbob-rs-wasm-web';
 
 import { 
-  InternalError, NetworkError, PoolJobError, RelayerError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
+  InternalError, NetworkError, PoolJobError, RelayerJobError, ServiceError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
 import { isHexPrefixed } from '@ethereumjs/util';
@@ -43,6 +43,7 @@ const DEFAULT_DENOMINATOR = BigInt(1000000000);
 const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
 const MIN_TX_COUNT_FOR_STAT = 10;
 const RELAYER_VERSION_REQUEST_THRESHOLD = 3600; // relayer's version expiration (in seconds)
+const PROVER_VERSION_REQUEST_THRESHOLD = 3600; // prover's version expiration (in seconds)
 
 export interface RelayerInfo {
   root: string;
@@ -81,10 +82,17 @@ export interface TransferRequest {
   amountGwei: bigint;
 }
 
+// Multiple transfer requests with total amount
+export interface MultinoteTransferRequest {
+  totalAmount: bigint;
+  requests: TransferRequest[];
+}
+
 // Old TxAmount interface
 // Supporting for multi-note transfers
 // Descripbes a transfer transaction configuration
 export interface TransferConfig {
+  inNotesBalance: bigint;
   outNotes: TransferRequest[];  // tx notes (without fee)
   fee: bigint;  // transaction fee, Gwei
   accountLimit: bigint;  // minimum account remainder after transaction
@@ -160,17 +168,22 @@ export interface LimitsFetch {
   tier: number;
 }
 
-export interface RelayerVersion {
+export enum ServiceType {
+  Relayer = "Relayer",
+  DelegatedProver = "Delegated Prover"
+}
+
+export interface ServiceVersion {
   ref: string;
   commitHash: string;
 }
 
-interface RelayerVersionFetch {
-  version: RelayerVersion;
+interface ServiceVersionFetch {
+  version: ServiceVersion;
   timestamp: number;  // when the version was fetched
 }
 
-const isRelayerVersion = (obj: any): obj is RelayerVersion => {
+const isServiceVersion = (obj: any): obj is ServiceVersion => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('ref') && typeof obj.ref === 'string' &&
     obj.hasOwnProperty('commitHash') && typeof obj.commitHash === 'string';
@@ -219,7 +232,8 @@ export class ZkBobClient {
   private tokens: Tokens;
   private config: ClientConfig;
   private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
-  private relayerVersions = new Map<string, RelayerVersionFetch>(); // relayer version: URL -> version
+  private relayerVersions = new Map<string, ServiceVersionFetch>(); // relayer version: URL -> version
+  private proverVersions = new Map<string, ServiceVersionFetch>(); // prover version: URL -> version
   private updateStatePromise: Promise<boolean> | undefined;
   private syncStats: SyncStat[] = [];
   private skipColdStorage: boolean = false;
@@ -274,7 +288,7 @@ export class ZkBobClient {
       }
 
       try {
-        client.setProverMode(address, token.proverMode);
+        await client.setProverMode(address, token.proverMode);
       } catch (err) {
         console.error(err);
       }
@@ -357,6 +371,10 @@ export class ZkBobClient {
             pendingDelta -= oneRecord.fee;
             break;
           }
+          case HistoryTransactionType.AggregateNotes: {
+            pendingDelta -= oneRecord.fee;
+            break;
+          }
 
           default: break;
         }
@@ -433,16 +451,31 @@ export class ZkBobClient {
     return txHash;
   }
 
-  public setProverMode(tokenAddress: string, mode: ProverMode) {
+  public async setProverMode(tokenAddress: string, mode: ProverMode) {
     if (!Object.values(ProverMode).includes(mode)) {
       throw new InternalError("Provided mode isn't correct. Possible modes: Local, Delegated, and DelegatedWithFallback");
     }
 
     const token = this.tokens[tokenAddress];
-    if ((mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) && !token.delegatedProverUrl) {
-      token.proverMode = ProverMode.Local;
-      throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
+    if (mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) {
+      if (token.delegatedProverUrl) {
+        try {
+          await this.getProverVersion(tokenAddress, false);
+        } catch (err) {
+          console.error(`Cannot fetch delegated prover version: ${err}`);
+          token.proverMode = ProverMode.Local;
+          throw new InternalError(`Delegated prover can't be enabled because delegated prover isn't healthy`)
+        } 
+      } else {
+        token.proverMode = ProverMode.Local;
+        throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
+      }
     }
+
+    if (mode != ProverMode.Delegated) {
+      this.worker.loadTxParams();
+    }
+
     token.proverMode = mode;
   }
 
@@ -560,14 +593,33 @@ export class ZkBobClient {
     return job;
   }
 
-  public async getRelayerVersion(tokenAddress: string): Promise<RelayerVersion> {
+  public async getRelayerVersion(tokenAddress: string): Promise<ServiceVersion> {
     const relayerUrl = this.tokens[tokenAddress].relayerUrl;
     let cachedVer = this.relayerVersions.get(relayerUrl);
     if (cachedVer === undefined || cachedVer.timestamp + RELAYER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
-      const version = await this.version(relayerUrl);
-      cachedVer = {version, timestamp: Date.now()};
-      
+      const version = await this.fetchVersion(relayerUrl, ServiceType.Relayer);
+      cachedVer = {version, timestamp: Date.now()};  
       this.relayerVersions.set(relayerUrl, cachedVer);
+    }
+
+    return cachedVer.version;
+  }
+
+  public async getProverVersion(tokenAddress: string, cached: boolean = true): Promise<ServiceVersion> {
+    const proverUrl = this.tokens[tokenAddress].delegatedProverUrl;
+    if (!proverUrl) {
+      throw new InternalError("Cannot fetch prover version because delegated prover url wasn't provided");
+    }
+
+    let cachedVer: ServiceVersionFetch | undefined = undefined;
+    if (cached) {
+      cachedVer = this.proverVersions.get(proverUrl);
+    }
+
+    if (cachedVer === undefined || cachedVer.timestamp + PROVER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
+      const version = await this.fetchVersion(proverUrl, ServiceType.DelegatedProver);
+      cachedVer = {version, timestamp: Date.now()};
+      this.proverVersions.set(proverUrl, cachedVer);
     }
 
     return cachedVer.version;
@@ -798,10 +850,14 @@ export class ZkBobClient {
 
       // Temporary save transaction parts in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-
       const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
-      const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
-      state.history.keepQueuedTransactions([record], jobId);
+      if (transfers.length == 0) {
+        const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
+        state.history.keepQueuedTransactions([record], jobId);
+      } else {
+        const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
+        state.history.keepQueuedTransactions([record], jobId);
+      }
 
       if (index < (txParts.length - 1)) {
         console.log(`Waiting for the job ${jobId} joining the optimistic state`);
@@ -859,25 +915,36 @@ export class ZkBobClient {
     }
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
-      if (onePart.outNotes.length != 1) {
+      
+      let oneTxData: any;
+      let txType: TxType;
+      if (onePart.outNotes.length == 0) {
+        const oneTx: ITransferData = {
+          outputs: [],
+          fee: onePart.fee.toString(),
+        };
+        oneTxData = await state.createTransferOptimistic(oneTx, optimisticState);
+        txType = TxType.Transfer;
+      } else if (onePart.outNotes.length == 1) {
+        const oneTx: IWithdrawData = {
+          amount: onePart.outNotes[0].amountGwei.toString(),
+          fee: onePart.fee.toString(),
+          to: addressBin,
+          native_amount: '0',
+          energy_amount: '0',
+        };
+        oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
+        txType = TxType.Withdraw;
+      } else {
         throw new Error('Invalid transaction configuration');
       }
-      const onePartAmount = onePart.outNotes[0].amountGwei;
-      const oneTx: IWithdrawData = {
-        amount: onePartAmount.toString(),
-        fee: onePart.fee.toString(),
-        to: addressBin,
-        native_amount: '0',
-        energy_amount: '0',
-      };
-      const oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
 
       const startProofDate = Date.now();
       const txProof: Proof = await this.proveTx(tokenAddress, oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Withdraw};
+      const transaction = {memo: oneTxData.memo, proof: txProof, txType};
 
       const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
       this.startJobMonitoring(tokenAddress, jobId);
@@ -885,8 +952,13 @@ export class ZkBobClient {
 
       // Temporary save transaction part in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      const record = await HistoryRecord.withdraw(address, onePartAmount, onePart.fee, ts, '0', true);
-      state.history.keepQueuedTransactions([record], jobId);
+      if (txType == TxType.Transfer) {
+        const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
+        state.history.keepQueuedTransactions([record], jobId);
+      } else {
+        const record = await HistoryRecord.withdraw(address, onePart.outNotes[0].amountGwei, onePart.fee, ts, '0', true);
+        state.history.keepQueuedTransactions([record], jobId);
+      }
 
       if (index < (txParts.length - 1)) {
         console.log(`Waiting for the job ${jobId} joining the optimistic state`);
@@ -1029,8 +1101,14 @@ export class ZkBobClient {
       console.debug('Delegated Prover: proveTx');
       try {
         const url = new URL('/proveTx', token.delegatedProverUrl);
-        const headers = this.defaultHeaders();
-        const proof = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) });
+        let headers = this.defaultHeaders();
+        headers["zkbob-nullifier"] = pub.nullifier;
+
+        const proof = await this.fetchJson(
+          url.toString(), 
+          { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) },
+          ServiceType.DelegatedProver  
+        );
         const inputs = Object.values(pub);
         const txValid = await this.worker.verifyTxProof(inputs, proof);
         if (!txValid) {
@@ -1131,31 +1209,22 @@ export class ZkBobClient {
       await this.updateState(tokenAddress);
     }
 
-
     const txFee = await this.atomicTxFee(tokenAddress);
-    const accountBalance = await state.accountBalance();
-    const notesParts = await this.getGroupedNotes(tokenAddress);
+    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
+    let accountBalance = await state.accountBalance();
 
-    let summ = BigInt(0);
-    let oneTxPart = accountBalance;
-    let i = 0;
-    do {
-      if (i < notesParts.length) {
-        oneTxPart += notesParts[i];
-      }
-
-      if(oneTxPart < txFee) {
+    let maxAmount = accountBalance > txFee ? accountBalance - txFee : BigInt(0);
+    for (const inNotesBalance of groupedNotesBalances) {
+      if (accountBalance + inNotesBalance < txFee) {
         break;
       }
 
-      summ += (oneTxPart - txFee);
-
-      oneTxPart = BigInt(0);
-      i++;
-    } while(i < notesParts.length);
-
-
-    return summ;
+      accountBalance += inNotesBalance - txFee;
+      if (accountBalance > maxAmount) {
+        maxAmount = accountBalance;
+      }
+    }
+    return maxAmount;
   }
 
   // Calculate multitransfer configuration for specified token amount and fee per transaction
@@ -1179,57 +1248,77 @@ export class ZkBobClient {
     // no parts when no requests
     if (transfers.length == 0) return [];
 
-    let result: Array<TransferConfig> = [];
-    let txNotes: Array<TransferRequest> = [];
-    const accountBalance = await state.accountBalance();
-    const notesParts = await this.getGroupedNotes(tokenAddress);
+    let aggregatedTransfers: MultinoteTransferRequest[] = [];
+    for (let i = 0; i < transfers.length; i += CONSTANTS.OUT) {
+      const requests = transfers.slice(i, i + CONSTANTS.OUT);
+      const totalAmount = requests.reduce(
+        (acc, cur) => acc + cur.amountGwei,
+        BigInt(0)
+      );
+      aggregatedTransfers.push({totalAmount, requests});
+    }
 
-    let requestIdx = 0;
-    let txIdx = 0;
-    let remainRequestAmount = transfers[requestIdx].amountGwei;
-    let oneTxPart = accountBalance;
+    let accountBalance: bigint = await state.accountBalance();
+    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
+
+    let aggregationParts: Array<TransferConfig> = [];
+    let txParts: Array<TransferConfig> = [];
+    
+    let i = 0;
     do {
-      if (txIdx < notesParts.length) {
-        oneTxPart += notesParts[txIdx];
+      txParts = this.tryToPrepareTransfers(accountBalance, feeGwei, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
+      if (txParts.length == aggregatedTransfers.length) {
+        // We are able to perform all txs starting from this index
+        return aggregationParts.concat(txParts);
       }
 
-      oneTxPart -= feeGwei; // available token amount for tx (account + notes)
-      // create output notes for the transaction
-      while(oneTxPart > 0 && requestIdx < transfers.length && txNotes.length < CONSTANTS.OUT) {
-        let noteAmount = oneTxPart;
-        if (oneTxPart > remainRequestAmount) {
-          noteAmount = remainRequestAmount;
-        }
-        
-        // add output note for the current transaction
-        txNotes.push({amountGwei: noteAmount, destination: transfers[requestIdx].destination});
-
-        oneTxPart -= noteAmount;
-        remainRequestAmount -= noteAmount;
-        if(remainRequestAmount == BigInt(0)) {
-          if (++requestIdx < transfers.length) {
-            remainRequestAmount = transfers[requestIdx].amountGwei;
-          }
-        }
+      if (groupedNotesBalances.length == 0) {
+        // We can't aggregate notes if we doesn't have one
+        break;
       }
 
-      if(oneTxPart < 0) {
-        // We cannot collect notes to cover tx fee. There are 2 cases:
+      const inNotesBalance = groupedNotesBalances[i];
+      if (accountBalance + inNotesBalance < feeGwei) {
+        // We cannot collect amount to cover tx fee. There are 2 cases:
         // insufficient balance or unoperable notes configuration
         break;
       }
 
-      result.push({outNotes: txNotes, fee: feeGwei, accountLimit: BigInt(0)});
-      txNotes = [];
-      txIdx++;
-    } while((requestIdx < transfers.length || remainRequestAmount > 0) &&  // there are unprocessed request(s) ...
-            (txIdx < notesParts.length || oneTxPart > 0)) // and we have unspent notes or positive account balance
+      aggregationParts.push({
+        inNotesBalance,
+        outNotes: [],
+        fee: feeGwei,
+        accountLimit: BigInt(0)
+      });
+      accountBalance += BigInt(inNotesBalance) - BigInt(feeGwei);
+      
+      i++;
+    } while (i < groupedNotesBalances.length)
 
-    if ((remainRequestAmount > 0 || requestIdx < transfers.length - 1) && allowPartial == false) {
-      result = [];
+    return allowPartial ? aggregationParts.concat(txParts) : [];
+  }
+
+  // try to prepare transfer configs
+  private tryToPrepareTransfers(balance: bigint, fee: bigint, groupedNotesBalances: Array<bigint>, transfers: MultinoteTransferRequest[]): Array<TransferConfig> {
+    let accountBalance = balance;
+    let parts: Array<TransferConfig> = [];
+    for (let i = 0; i < transfers.length; i++) {
+      const inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
+
+      if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
+        // We haven't enough funds to perform such tx
+        break;
+      }
+
+      parts.push({
+        inNotesBalance,
+        outNotes: transfers[i].requests, 
+        fee, 
+        accountLimit: BigInt(0)
+      });
+      accountBalance = (accountBalance + inNotesBalance) - (transfers[i].totalAmount + fee);
     }
-    
-    return result;
+    return parts;
   }
 
   // calculate summ of notes grouped by CONSTANTS::IN
@@ -1238,22 +1327,13 @@ export class ZkBobClient {
     const usableNotes = await state.usableNotes();
 
     const notesParts: Array<bigint> = [];
-    let curPart = BigInt(0);
-    for (let i = 0; i < usableNotes.length; i++) {
-      const curNote = usableNotes[i][1];
-
-      if (i > 0 && i % CONSTANTS.IN == 0) {
-        notesParts.push(curPart);
-        curPart = BigInt(0);
-      }
-
-      curPart += BigInt(curNote.b);
-
-      if (i == usableNotes.length - 1) {
-        notesParts.push(curPart);
-      }
+    for (let i = 0; i < usableNotes.length; i += CONSTANTS.IN) {
+      const inNotesBalance: bigint = usableNotes.slice(i, i + CONSTANTS.IN).reduce(
+        (acc, cur) => acc + BigInt(cur[1].b),
+        BigInt(0)
+      );
+      notesParts.push(inNotesBalance);
     }
-
     return notesParts;
   }
 
@@ -1931,7 +2011,7 @@ export class ZkBobClient {
   // | Methods to interact with the relayer                                        |
   // -------------------------------------------------------------------------------
 
-  private defaultHeaders(supportId: boolean = true): HeadersInit {
+  private defaultHeaders(supportId: boolean = true): Record<string, string> {
     if (supportId && this.config.supportId) {
       return {'content-type': 'application/json;charset=UTF-8',
               'zkbob-libjs-version': LIB_VERSION,
@@ -1948,9 +2028,9 @@ export class ZkBobClient {
     url.searchParams.set('offset', offset.toString());
     const headers = this.defaultHeaders();
 
-    const txs = await this.fetchJson(url.toString(), {headers});
+    const txs = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
     if (!Array.isArray(txs)) {
-      throw new RelayerError(200, `Response should be an array`);
+      throw new ServiceError(ServiceType.Relayer, 200, `Response should be an array`);
     }
   
     return txs;
@@ -1961,9 +2041,9 @@ export class ZkBobClient {
     const url = new URL('/sendTransactions', relayerUrl);
     const headers = this.defaultHeaders();
 
-    const res = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify(txs) });
+    const res = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify(txs) }, ServiceType.Relayer);
     if (typeof res.jobId !== 'string') {
-      throw new RelayerError(200, `Cannot get jobId for transaction (response: ${res})`);
+      throw new ServiceError(ServiceType.Relayer, 200, `Cannot get jobId for transaction (response: ${res})`);
     }
 
     return res.jobId;
@@ -1972,7 +2052,7 @@ export class ZkBobClient {
   private async getJob(relayerUrl: string, id: string): Promise<JobInfo | null> {
     const url = new URL(`/job/${id}`, relayerUrl);
     const headers = this.defaultHeaders();
-    const res = await this.fetchJson(url.toString(), {headers});
+    const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
   
     if (isJobInfo(res)) {
       return res;
@@ -1984,20 +2064,20 @@ export class ZkBobClient {
   private async info(relayerUrl: string): Promise<RelayerInfo> {
     const url = new URL('/info', relayerUrl);
     const headers = this.defaultHeaders(false);
-    const res = await this.fetchJson(url.toString(), {headers});
+    const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
 
     if (isRelayerInfo(res)) {
       return res;
     }
 
-    throw new RelayerError(200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
+    throw new ServiceError(ServiceType.Relayer, 200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
   }
   
   private async fee(relayerUrl: string): Promise<bigint> {
     try {
       const url = new URL('/fee', relayerUrl);
       const headers = this.defaultHeaders();
-      const res = await this.fetchJson(url.toString(), {headers});
+      const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
       return BigInt(res.fee);
     } catch {
       return DEFAULT_TX_FEE;
@@ -2010,7 +2090,7 @@ export class ZkBobClient {
       url.searchParams.set('address', address);
     }
     const headers = this.defaultHeaders();
-    const res = await this.fetchJson(url.toString(), {headers});
+    const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
 
     return {
       deposit: {
@@ -2043,34 +2123,34 @@ export class ZkBobClient {
     url.searchParams.set('index', index.toString());
     const headers = this.defaultHeaders();
 
-    const siblings = await this.fetchJson(url.toString(), {headers});
+    const siblings = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
     if (!Array.isArray(siblings)) {
-      throw new RelayerError(200, `Response should be an array`);
+      throw new ServiceError(ServiceType.Relayer, 200, `Response should be an array`);
     }
   
     return siblings.map((aNode) => {
       let node = hexToNode(aNode)
       if (!node) {
-        throw new RelayerError(200, `Cannot convert \'${aNode}\' to a TreeNode`);
+        throw new ServiceError(ServiceType.Relayer, 200, `Cannot convert \'${aNode}\' to a TreeNode`);
       }
       return node;
     });
   }
 
-  private async version(relayerUrl: string): Promise<RelayerVersion> {
-    const url = new URL(`/version`, relayerUrl);
+  private async fetchVersion(serviceUrl: string, service: ServiceType): Promise<ServiceVersion> {
+    const url = new URL(`/version`, serviceUrl);
     const headers = this.defaultHeaders(false);
 
-    const version = await this.fetchJson(url.toString(), {headers});
-    if (isRelayerVersion(version)) {
+    const version = await this.fetchJson(url.toString(), {headers}, service);
+    if (isServiceVersion(version)) {
       return version;
     }
 
-    throw new RelayerError(200, `Incorrect response (expected RelayerVersion, got \'${version}\')`)
+    throw new ServiceError(service, 200, `Incorrect response (expected ServiceVersion, got \'${version}\')`)
   }
 
   // Universal response parser
-  private async fetchJson(url: string, headers: RequestInit): Promise<any> {
+  private async fetchJson(url: string, headers: RequestInit, service: ServiceType): Promise<any> {
     let response: Response;
     try {
       response = await fetch(url, headers);
@@ -2091,12 +2171,12 @@ export class ZkBobClient {
     // Unsuccess error code case (not in range 200-299)
     if (!response.ok) {
       if (responseBody === null) {
-        throw new RelayerError(response.status, 'no description provided');  
+        throw new ServiceError(service, response.status, 'no description provided');  
       }
 
       // process string error response
       if (typeof responseBody === 'string') {
-        throw new RelayerError(response.status, responseBody);
+        throw new ServiceError(service, response.status, responseBody);
       }
 
       // process 'errors' json response
@@ -2105,11 +2185,11 @@ export class ZkBobClient {
           return `[${oneError.path}]: ${oneError.message}`;
         }).join(', ');
 
-        throw new RelayerError(response.status, errorsText);
+        throw new ServiceError(service, response.status, errorsText);
       }
 
       // unknown error format
-      throw new RelayerError(response.status, contentType);
+      throw new ServiceError(service, response.status, contentType);
     } 
 
     return responseBody;
