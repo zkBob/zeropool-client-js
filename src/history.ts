@@ -15,6 +15,7 @@ export enum HistoryTransactionType {
   TransferOut,
   Withdrawal,
   AggregateNotes,
+  DirectDeposit,
 }
 
 export enum HistoryRecordState {
@@ -41,6 +42,10 @@ export interface TokensMoving {
   isLoopback: boolean,
 }
 
+enum PoolSelector {
+  Transact = "af989083",
+  AppendDirectDeposit = "1dc4cb33",
+}
 
 export class HistoryRecord {
   constructor(
@@ -114,6 +119,18 @@ export class HistoryRecord {
   ): Promise<HistoryRecord> {
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
     return new HistoryRecord(HistoryTransactionType.AggregateNotes, ts, [], fee, txHash, state);
+  }
+
+  public static async directDeposit(
+    transfers: {to: string, amount: bigint}[],
+    fee: bigint,
+    ts: number,
+    txHash: string,
+    pending: boolean
+  ): Promise<HistoryRecord> {
+    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount, isLoopback: false}) });
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.DirectDeposit, ts, actions, fee, txHash, state);
   }
 
   public toJson(): string {
@@ -722,10 +739,11 @@ export class HistoryStorage {
 
               // Decode transaction data
               try {
-                const tx = ShieldedTx.decode(txData.input);
-                const feeAmount = BigInt('0x' + tx.memo.substr(0, 16))
-
-                if (tx.selector.toLowerCase() == "af989083") {
+                const txSelector = txData.input.slice(2, 10).toLowerCase();
+                if (txSelector == PoolSelector.Transact) {
+                  // Here is a regular transaction (deposit/transfer/withdrawal)
+                    const tx = ShieldedTx.decode(txData.input);
+                    const feeAmount = BigInt('0x' + tx.memo.substr(0, 16))
                     // All data is collected here. Let's analyze it
 
                     const allRecords: HistoryRecordIdx[] = [];
@@ -757,10 +775,10 @@ export class HistoryStorage {
                       // there are 2 cases: 
                       if (memo.acc) {
                         // 1. we initiated it => outcoming tx(s)
-                        const transfers = await Promise.all(memo.outNotes.map(async ({note, index}) => {
+                        const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
                           const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
                           return {to: destAddr, amount: BigInt(note.b)};
-                        }));;
+                        }));
 
                         if (transfers.length == 0) {
                           const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
@@ -772,7 +790,7 @@ export class HistoryStorage {
                       } else {
                         // 2. somebody initiated it => incoming tx(s)
 
-                        const transfers = await Promise.all(memo.inNotes.map(async ({note, index}) => {
+                        const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
                           const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
                           return {to: destAddr, amount: BigInt(note.b)};
                         }));
@@ -801,8 +819,17 @@ export class HistoryStorage {
 
                     return allRecords;
 
+                } else if (txSelector == PoolSelector.AppendDirectDeposit) {
+                  // Direct Deposit tranaction
+                  const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
+                    const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                    return {to: destAddr, amount: BigInt(note.b)};
+                  }));
+
+                  const rec = await HistoryRecord.directDeposit(transfers, BigInt(0), ts, txHash, pending);
+                  return [HistoryRecordIdx.create(rec, memo.index)];
                 } else {
-                  throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${tx.selector}`);
+                  throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${txSelector}`);
                 }
               }
               catch (e) {
