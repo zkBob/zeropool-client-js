@@ -3,12 +3,16 @@ import { AbiItem } from 'web3-utils';
 import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
 import { NetworkBackend } from './network';
+import { InternalError } from '..';
 
 export class EvmNetwork implements NetworkBackend {
     contract: Contract;
+    ddContract: Contract;
     token: Contract;
     rpcUrl: string;
     web3: Web3;
+
+    private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
 
     constructor(rpcUrl: string) {
         this.rpcUrl = rpcUrl;
@@ -122,6 +126,20 @@ export class EvmNetwork implements NetworkBackend {
             },
             {
                 inputs: [],
+                name: 'direct_deposit_queue',
+                outputs: [{
+                    internalType: 'contract IZkBobDirectDepositQueue',
+                    name: '',
+                    type: 'address'
+                }],
+                stateMutability: 'view',
+                type: 'function'
+            }
+        ];
+        this.contract = new this.web3.eth.Contract(abi) as unknown as Contract;
+
+        const ddAbi: AbiItem[] = [{
+                inputs: [],
                 name: 'directDepositFee',
                 outputs: [{
                     internalType: 'uint64',
@@ -130,9 +148,8 @@ export class EvmNetwork implements NetworkBackend {
                 }],
                 stateMutability: 'view',
                 type: 'function'
-              },
-        ];
-        this.contract = new this.web3.eth.Contract(abi) as unknown as Contract;
+        }];
+        this.ddContract = new this.web3.eth.Contract(ddAbi) as unknown as Contract;
 
         const abiTokenJson: AbiItem[] = [{
                 anonymous: false,
@@ -245,9 +262,20 @@ export class EvmNetwork implements NetworkBackend {
     }
 
     public async getDirectDepositFee(contractAddress: string): Promise<bigint> {
-        this.contract.options.address = contractAddress;
+        let ddContractAddr = this.ddContractAddresses.get(contractAddress);
+        if (!ddContractAddr) {
+            this.contract.options.address = contractAddress;
+            ddContractAddr = await this.contract.methods.direct_deposit_queue().call();
+            if (ddContractAddr) {
+                this.ddContractAddresses.set(contractAddress, ddContractAddr);
+            } else {
+                throw new InternalError(`Cannot fetch DD contract address`);
+            }
+        }
+
+        this.ddContract.options.address = ddContractAddr;
         
-        return BigInt(await this.contract.methods.directDepositFee().call());
+        return BigInt(await this.ddContract.methods.directDepositFee().call());
     }
 
     public async poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
