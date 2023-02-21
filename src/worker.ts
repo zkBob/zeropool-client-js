@@ -43,8 +43,9 @@ const obj = {
     txParser = wasm.TxParser._new()
 
     console.time(`VK initializing`);
-    transferVk = await (await fetch(vkUrls.transferVkUrl)).json();
-    treeVk = await (await fetch(vkUrls.treeVkUrl)).json();
+    const noCacheHeader = { method: 'GET', headers: { 'Cache-Control': 'no-cache' } };
+    transferVk = await (await fetch(vkUrls.transferVkUrl, noCacheHeader)).json();
+    treeVk = await (await fetch(vkUrls.treeVkUrl, noCacheHeader)).json();
     console.timeEnd(`VK initializing`);
 
     console.info('Web worker init complete.');
