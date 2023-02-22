@@ -8,6 +8,8 @@ export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './his
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
 export * from './errors'
 
+const LIB_VERSION = require('../package.json').version;
+
 export enum InitState {
   Started = 1,
   InitWorker,
@@ -29,7 +31,8 @@ export class ZkBobLibState {
 
 async function fetchTxParamsHash(relayerUrl: string): Promise<string> {
   const url = new URL('/params/hash/tx', relayerUrl);
-  const headers = {'content-type': 'application/json;charset=UTF-8'};
+  const headers = {'content-type': 'application/json;charset=UTF-8',
+                   'zkbob-libjs-version': LIB_VERSION};
   const res = await fetch(url.toString(), {headers});
 
   return (await res.json()).hash;
