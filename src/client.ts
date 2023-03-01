@@ -1792,36 +1792,49 @@ export class ZkBobClient {
     const checkIndex = await zpState.getNextIndex();
     const stableIndex = await zpState.lastVerifiedIndex();
     if (checkIndex != stableIndex) {
-      const isStateCorrect = await this.verifyState(tokenAddress);
+      let isStateCorrect = await this.verifyState(tokenAddress);
       if (!isStateCorrect) {
         console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
-        if (stableIndex > 0 && stableIndex < checkIndex &&
-          this.rollbackAttempts < CORRUPT_STATE_ROLLBACK_ATTEMPTS
-        ) {
-          let realRollbackIndex = await zpState.rollback(stableIndex);
-          console.log(`🚑[StateVerify] The user state was rollbacked to index ${realRollbackIndex} [attempt ${this.rollbackAttempts + 1}]`);
-          this.rollbackAttempts++;
-        } else if (this.wipeAttempts < CORRUPT_STATE_WIPE_ATTEMPTS) {
-          await zpState.clean();
-          console.log(`🚑[StateVerify] Full user state was wiped [attempt ${this.wipeAttempts + 1}]...`);
 
-          if(this.rollbackAttempts > 0) {
-            // If the first wipe has no effect
-            // reset account birthday if presented
-            token.birthindex = undefined;
+        // first we should verify the RPC synced with current state
+        const poolIndex =  (await this.config.network.poolState(token.poolAddress)).index;
+        if (poolIndex < checkIndex) {
+          // most likely the RPC stuck, we should verify local state at current poolIndex
+          isStateCorrect = await this.verifyState(tokenAddress, poolIndex);
+          if (isStateCorrect) {
+            console.warn(`🚑[StateVerify] probably RPC stucked. Latest state cannot be verified. State verified up to index ${poolIndex}`);
           }
-
-          this.wipeAttempts++;
-        } else {
-          throw new InternalError(`Unable to synchronize pool state`);
         }
 
-        // resync the state
-        return await this.updateStateOptimisticWorker(tokenAddress);
-      } else {
-        this.rollbackAttempts = 0;
-        this.wipeAttempts = 0;
+        if (!isStateCorrect) {
+          if (stableIndex > 0 && stableIndex < checkIndex &&
+            this.rollbackAttempts < CORRUPT_STATE_ROLLBACK_ATTEMPTS
+          ) {
+            let realRollbackIndex = await zpState.rollback(stableIndex);
+            console.log(`🚑[StateVerify] The user state was rollbacked to index ${realRollbackIndex} [attempt ${this.rollbackAttempts + 1}]`);
+            this.rollbackAttempts++;
+          } else if (this.wipeAttempts < CORRUPT_STATE_WIPE_ATTEMPTS) {
+            await zpState.clean();
+            console.log(`🚑[StateVerify] Full user state was wiped [attempt ${this.wipeAttempts + 1}]...`);
+
+            if(this.rollbackAttempts > 0) {
+              // If the first wipe has no effect
+              // reset account birthday if presented
+              token.birthindex = undefined;
+            }
+
+            this.wipeAttempts++;
+          } else {
+            throw new InternalError(`Unable to synchronize pool state`);
+          }
+
+          // resync the state
+          return await this.updateStateOptimisticWorker(tokenAddress);
+        }
       }
+
+      this.rollbackAttempts = 0;
+      this.wipeAttempts = 0;
     }
 
     return readyToTransact;
@@ -1910,13 +1923,13 @@ export class ZkBobClient {
   }
 
   // returns false when the local state is inconsistent
-  private async verifyState(tokenAddress: string): Promise<boolean> {
+  private async verifyState(tokenAddress: string, index?: bigint): Promise<boolean> {
     const zpState = this.zpStates[tokenAddress];
     const token = this.tokens[tokenAddress];
     const state = this.zpStates[tokenAddress];
 
-    const checkIndex = await zpState.getNextIndex();
-    const localRoot = await zpState.getRoot();
+    const checkIndex = index ?? await zpState.getNextIndex();
+    const localRoot = await zpState.getRootAt(checkIndex);
     const poolRoot =  (await this.config.network.poolState(token.poolAddress, checkIndex)).root;
 
     if (localRoot == poolRoot) {
