@@ -606,9 +606,9 @@ export class HistoryStorage {
         const calldata = await this.getNativeTx(treeIndex, value.txHash);
         if (calldata && calldata.blockNumber && calldata.input) {
           try {
-            const tx = ShieldedTx.decode(calldata.input);
-            if (tx.selector.toLowerCase() == PoolSelector.Transact) {
-
+            const txSelector = calldata.input.slice(2, 10).toLowerCase();
+            if (txSelector == PoolSelector.Transact) {
+              const tx = ShieldedTx.decode(calldata.input);
               const memoblock = hexToBuf(tx.ciphertext);
 
               let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
@@ -646,7 +646,7 @@ export class HistoryStorage {
                 }
               }
 
-              // TEST-ONLY: I'll remove it before merging
+              // TEST-CASE: I'll remove it before merging
               // Currently you could check key extracting correctness with that code
               for (const aChunk of chunks) {
                 if(aChunk.index == treeIndex) {
@@ -675,11 +675,21 @@ export class HistoryStorage {
                   }
                 }
               };
+              // --- END-OF-TEST-CASE ---
               
               const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, nextNullifier, decryptedMemo, chunks, inputs);
               complienceRecords.push(aRec);
+            } else if(txSelector == PoolSelector.AppendDirectDeposit) {
+              // Here is direct deposit transaction
+              // It isn't encrypted so we do not need any extra info
+              let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
+              if (decryptedMemo) {
+                const aRec = new ComplianceHistoryRecord(value, treeIndex, undefined, undefined, decryptedMemo, [], undefined);
+                complienceRecords.push(aRec);
+              }
+
             } else {
-              throw new InternalError(`Cannot decode calldata for tx @ ${treeIndex}: incorrect selector ${tx.selector}`);
+              throw new InternalError(`Cannot decode calldata for tx @ ${treeIndex}: incorrect selector ${txSelector}`);
             }
           }
           catch (e) {
@@ -884,113 +894,114 @@ export class HistoryStorage {
       if (txData) {
         const block = await this.web3.eth.getBlock(txData.blockNumber).catch(() => null);
         if (block && block.timestamp) {
-            let ts: number = 0;
-            if (typeof block.timestamp === "number" ) {
-                ts = block.timestamp;
-            } else if (typeof block.timestamp === "string" ) {
-                ts = Number(block.timestamp);
-            }
+          let ts: number = 0;
+          if (typeof block.timestamp === "number" ) {
+              ts = block.timestamp;
+          } else if (typeof block.timestamp === "string" ) {
+              ts = Number(block.timestamp);
+          }
 
-            // Decode transaction data
-            try {
-              const txSelector = txData.input.slice(2, 10).toLowerCase();
-              if (txSelector == PoolSelector.Transact) {
-                // Here is a regular transaction (deposit/transfer/withdrawal)
-                const tx = ShieldedTx.decode(txData.input);
-                const feeAmount = BigInt('0x' + tx.memo.substr(0, 16))
-                
-                // All data is collected here. Let's analyze it
-                const allRecords: HistoryRecordIdx[] = [];
-                if (tx.txType == TxType.Deposit) {
-                  // here is a deposit transaction (approvable method)
-                  // source address are recovered from the signature
-                  if (tx.extra && tx.extra.length >= 128) {
-                    const fullSig = toCanonicalSignature(tx.extra.substr(0, 128));
-                    const nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
-                    const depositHolderAddr = await this.web3.eth.accounts.recover(nullifier, fullSig);
-
-                    const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
-                    allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                  } else {
-                    //incorrect signature
-                    throw new InternalError(`no signature for approvable deposit`);
-                  }
-                } else if (tx.txType == TxType.BridgeDeposit) {
-                  // here is a deposit transaction (permittable token)
-                  // source address in the memo block (20 bytes, starts from 16 bytes offset)
-                  const depositHolderAddr = '0x' + tx.memo.substr(32, 40);  // TODO: Check it!
+          // Decode transaction data
+          try {
+            const txSelector = txData.input.slice(2, 10).toLowerCase();
+            if (txSelector == PoolSelector.Transact) {
+              // Here is a regular transaction (deposit/transfer/withdrawal)
+              const tx = ShieldedTx.decode(txData.input);
+              const feeAmount = BigInt('0x' + tx.memo.substr(0, 16))
+              
+              // All data is collected here. Let's analyze it
+              const allRecords: HistoryRecordIdx[] = [];
+              if (tx.txType == TxType.Deposit) {
+                // here is a deposit transaction (approvable method)
+                // source address are recovered from the signature
+                if (tx.extra && tx.extra.length >= 128) {
+                  const fullSig = toCanonicalSignature(tx.extra.substr(0, 128));
+                  const nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
+                  const depositHolderAddr = await this.web3.eth.accounts.recover(nullifier, fullSig);
 
                   const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
                   allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                  
-                } else if (tx.txType == TxType.Transfer) {
-                  // there are 2 cases: 
-                  if (memo.acc) {
-                    // 1. we initiated it => outcoming tx(s)
-                    const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
-                      const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
-                      return {to: destAddr, amount: BigInt(note.b)};
-                    }));
+                } else {
+                  //incorrect signature
+                  throw new InternalError(`no signature for approvable deposit`);
+                }
+              } else if (tx.txType == TxType.BridgeDeposit) {
+                // here is a deposit transaction (permittable token)
+                // source address in the memo block (20 bytes, starts from 16 bytes offset)
+                const depositHolderAddr = '0x' + tx.memo.substr(32, 40);  // TODO: Check it!
 
-                    if (transfers.length == 0) {
-                      const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
-                      allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                    } else {
-                      const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
-                      allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                    }
+                const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
+                allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                
+              } else if (tx.txType == TxType.Transfer) {
+                // there are 2 cases: 
+                if (memo.acc) {
+                  // 1. we initiated it => outcoming tx(s)
+                  const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
+                    const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                    return {to: destAddr, amount: BigInt(note.b)};
+                  }));
+
+                  if (transfers.length == 0) {
+                    const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
+                    allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                   } else {
-                    // 2. somebody initiated it => incoming tx(s)
-
-                    const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-                      const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
-                      return {to: destAddr, amount: BigInt(note.b)};
-                    }));
-
-                    const rec = await HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
+                    const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
                     allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                   }
-                } else if (tx.txType == TxType.Withdraw) {
-                  // withdrawal transaction (destination address in the memoblock)
-                  const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
+                } else {
+                  // 2. somebody initiated it => incoming tx(s)
 
-                  const rec = await HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
+                  const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
+                    const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                    return {to: destAddr, amount: BigInt(note.b)};
+                  }));
+
+                  const rec = await HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
                   allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                 }
+              } else if (tx.txType == TxType.Withdraw) {
+                // withdrawal transaction (destination address in the memoblock)
+                const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
 
-                // if we found txHash in the blockchain -> remove it from the saved tx array
-                if (pending) {
-                  // if tx is in pending state - remove it only on success
-                  const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
-                  if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
-                    this.removePendingTxByTxHash(txHash);
-                  }
-                } else {
+                const rec = await HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
+                allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+              }
+
+              // if we found txHash in the blockchain -> remove it from the saved tx array
+              if (pending) {
+                // if tx is in pending state - remove it only on success
+                const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
+                if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
                   this.removePendingTxByTxHash(txHash);
                 }
-
-                return allRecords;
-
-              } else if (txSelector == PoolSelector.AppendDirectDeposit) {
-                // Direct Deposit tranaction
-                const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-                  const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
-                  return {to: destAddr, amount: BigInt(note.b)};
-                }));
-
-                const rec = await HistoryRecord.directDeposit(transfers, BigInt(0), ts, txHash, pending);
-                return [HistoryRecordIdx.create(rec, memo.index)];
               } else {
-                throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${txSelector}`);
+                this.removePendingTxByTxHash(txHash);
               }
-            } catch (e) {
-              // there is no workaround for that issue => throw Error
-              throw new InternalError(`Cannot decode calldata for tx ${txHash}: ${e}`);
-            }
-          }
 
-          // we shouldn't panic here: will retry in the next time
-          console.warn(`[HistoryStorage] unable to fetch block ${txData.blockNumber} for tx @${memo.index}`);
+              return allRecords;
+
+            } else if (txSelector == PoolSelector.AppendDirectDeposit) {
+              // Direct Deposit tranaction
+              const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
+                const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                return {to: destAddr, amount: BigInt(note.b)};
+              }));
+
+              const rec = await HistoryRecord.directDeposit(transfers, BigInt(0), ts, txHash, pending);
+              return [HistoryRecordIdx.create(rec, memo.index)];
+            } else {
+              
+              throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${txSelector}`);
+            }
+          } catch (e) {
+            // there is no workaround for that issue => throw Error
+            throw new InternalError(`Cannot decode calldata for tx ${txHash}: ${e}`);
+          }
+        }
+
+        // we shouldn't panic here: will retry in the next time
+        console.warn(`[HistoryStorage] unable to fetch block ${txData.blockNumber} for tx @${memo.index}`);
       } else {
         // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
         const records = this.sentTxs.get(txHash);
