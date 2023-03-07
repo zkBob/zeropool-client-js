@@ -3,6 +3,7 @@ export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState, SyncStat
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
+export { ServiceType } from './rest-helper'
 export * from './errors'
 
 import { wrap } from 'comlink';
