@@ -3,12 +3,16 @@ import { AbiItem } from 'web3-utils';
 import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
 import { NetworkBackend } from './network';
+import { InternalError } from '..';
 
 export class EvmNetwork implements NetworkBackend {
     contract: Contract;
+    ddContract: Contract;
     token: Contract;
     rpcUrl: string;
     web3: Web3;
+
+    private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
 
     constructor(rpcUrl: string) {
         this.rpcUrl = rpcUrl;
@@ -20,15 +24,24 @@ export class EvmNetwork implements NetworkBackend {
                 constant: true,
                 inputs: [],
                 name: 'denominator',
-                outputs: [
-                    {
-                        name: '',
-                        type: 'uint256',
-                    }
-                ],
+                outputs: [{
+                    name: '',
+                    type: 'uint256',
+                }],
                 stateMutability: 'pure',
                 type: 'function',
-            }, 
+            },
+            {
+                inputs: [],
+                name: 'pool_id',
+                outputs: [{
+                    internalType: 'uint256',
+                    name: '',
+                    type: 'uint256',
+                }],
+                stateMutability: 'view',
+                type: 'function',
+            },
             {
                 inputs:[],
                 name: 'pool_index',
@@ -110,9 +123,33 @@ export class EvmNetwork implements NetworkBackend {
                 }],
                 stateMutability: 'view',
                 type: 'function',
+            },
+            {
+                inputs: [],
+                name: 'direct_deposit_queue',
+                outputs: [{
+                    internalType: 'contract IZkBobDirectDepositQueue',
+                    name: '',
+                    type: 'address'
+                }],
+                stateMutability: 'view',
+                type: 'function'
             }
         ];
         this.contract = new this.web3.eth.Contract(abi) as unknown as Contract;
+
+        const ddAbi: AbiItem[] = [{
+                inputs: [],
+                name: 'directDepositFee',
+                outputs: [{
+                    internalType: 'uint64',
+                    name: '',
+                    type: 'uint64'
+                }],
+                stateMutability: 'view',
+                type: 'function'
+        }];
+        this.ddContract = new this.web3.eth.Contract(ddAbi) as unknown as Contract;
 
         const abiTokenJson: AbiItem[] = [{
                 anonymous: false,
@@ -197,6 +234,11 @@ export class EvmNetwork implements NetworkBackend {
         return BigInt(await this.contract.methods.denominator().call());
     }
 
+    public async getPoolId(contractAddress: string): Promise<number> {
+        this.contract.options.address = contractAddress;
+        return Number(await this.contract.methods.pool_id().call());
+    }
+
     isSignatureCompact(): boolean {
         return true;
     }
@@ -217,6 +259,23 @@ export class EvmNetwork implements NetworkBackend {
         }
         
         return await this.contract.methods.getLimitsFor(addr).call();
+    }
+
+    public async getDirectDepositFee(contractAddress: string): Promise<bigint> {
+        let ddContractAddr = this.ddContractAddresses.get(contractAddress);
+        if (!ddContractAddr) {
+            this.contract.options.address = contractAddress;
+            ddContractAddr = await this.contract.methods.direct_deposit_queue().call();
+            if (ddContractAddr) {
+                this.ddContractAddresses.set(contractAddress, ddContractAddr);
+            } else {
+                throw new InternalError(`Cannot fetch DD contract address`);
+            }
+        }
+
+        this.ddContract.options.address = ddContractAddr;
+        
+        return BigInt(await this.ddContract.methods.directDepositFee().call());
     }
 
     public async poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {

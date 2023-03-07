@@ -21,8 +21,16 @@ export class PolkadotNetwork implements NetworkBackend {
         return BigInt(1000); // FIXME
     }
 
+    async getPoolId(contractAddress: string): Promise<number> {
+        return 0; // FIXME
+    }
+
     async poolLimits(contractAddress: string, address: string | undefined): Promise<any> {
         return undefined; // FIXME
+    }
+
+    async getDirectDepositFee(contractAddress: string): Promise<bigint> {
+        return BigInt(0);
     }
 
     async poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {

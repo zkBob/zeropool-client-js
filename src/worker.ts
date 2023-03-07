@@ -44,8 +44,9 @@ const obj = {
     txParser = wasm.TxParser._new()
 
     console.time(`VK initializing`);
-    transferVk = await (await fetch(vkUrls.transferVkUrl)).json();
-    treeVk = await (await fetch(vkUrls.treeVkUrl)).json();
+    const noCacheHeader = { method: 'GET', headers: { 'Cache-Control': 'no-cache' } };
+    transferVk = await (await fetch(vkUrls.transferVkUrl, noCacheHeader)).json();
+    treeVk = await (await fetch(vkUrls.treeVkUrl, noCacheHeader)).json();
     console.timeEnd(`VK initializing`);
 
     console.info('Web worker init complete.');
@@ -95,11 +96,11 @@ const obj = {
     return zpAccounts[address].calculateNullifier(account, index);
   },
 
-  async createAccount(address: string, sk: Uint8Array, networkName: string, accountId: string): Promise<void> {
+  async createAccount(address: string, sk: Uint8Array, networkName: string, poolId: number, accountId: string): Promise<void> {
     console.debug('Web worker: createAccount');
     try {
       const state = await wasm.UserState.init(`zp.${networkName}.${accountId}`);
-      const acc = new wasm.UserAccount(sk, state);
+      const acc = new wasm.UserAccount(sk, BigInt(poolId), state);
       zpAccounts[address] = acc;
     } catch (e) {
       console.error(e);

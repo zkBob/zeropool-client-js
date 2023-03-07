@@ -7,6 +7,7 @@ import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 
 const LOG_HISTORY_SYNC = false;
+const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
 
 export enum HistoryTransactionType {
   Deposit = 1,
@@ -14,6 +15,7 @@ export enum HistoryTransactionType {
   TransferOut,
   Withdrawal,
   AggregateNotes,
+  DirectDeposit,
 }
 
 export enum HistoryRecordState {
@@ -48,8 +50,8 @@ export interface TokensMoving {
 
 enum PoolSelector {
   Transact = "af989083",
+  AppendDirectDeposit = "1dc4cb33",
 }
-
 
 export class HistoryRecord {
   constructor(
@@ -123,6 +125,18 @@ export class HistoryRecord {
   ): Promise<HistoryRecord> {
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
     return new HistoryRecord(HistoryTransactionType.AggregateNotes, ts, [], fee, txHash, state);
+  }
+
+  public static async directDeposit(
+    transfers: {to: string, amount: bigint}[],
+    fee: bigint,
+    ts: number,
+    txHash: string,
+    pending: boolean
+  ): Promise<HistoryRecord> {
+    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount, isLoopback: false}) });
+    const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
+    return new HistoryRecord(HistoryTransactionType.DirectDeposit, ts, actions, fee, txHash, state);
   }
 
   public toJson(): string {
@@ -211,6 +225,7 @@ const NATIVE_TX_TABLE = 'NATIVE_TX';
 export class HistoryStorage {
   private db: IDBPDatabase;
   private syncIndex = -1;
+  private syncAttempts = 0;
   private worker: any;
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
@@ -270,7 +285,7 @@ export class HistoryStorage {
       this.syncIndex = syncIndex;
     }
 
-    // getting unprocessed memo array
+    // getting unprocessed memo arrays (greater than sync index)
     const allUnprocessedMemos: DecryptedMemo[] = await this.db.getAll(DECRYPTED_MEMO_TABLE, IDBKeyRange.lowerBound(this.syncIndex + 1));
     const allUnprocessedPendingMemos: DecryptedMemo[] = await this.db.getAll(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(this.syncIndex + 1));
     let lastMinedMemoIndex = -1;
@@ -285,13 +300,13 @@ export class HistoryStorage {
         this.unparsedPendingMemo.set(oneMemo.index, oneMemo);
       }
     }
-
+    
     // getting saved history records
     let cursor = await this.db.transaction(TX_TABLE).store.openCursor();
     while (cursor) {
       const curRecord = cursor.value;
       if (curRecord.actions === undefined) {
-        console.log(`Old history record was found! Clean deprecated records...`);
+        console.log(`[HistoryStorage] old history record was found! Clean deprecated records...`);
         await this.db.clear(TX_TABLE);
         await this.db.clear(HISTORY_STATE_TABLE);
         this.syncIndex = -1;
@@ -304,12 +319,60 @@ export class HistoryStorage {
     // getting failed history records
     this.failedHistory = await this.db.getAll(TX_FAILED_TABLE);
 
-    console.log(`HistoryStorage: preload ${this.currentHistory.size} history records, ${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unparsed memos(from index ${this.syncIndex + 1})`);
+    // getting failured memo list and include it in unprocessed one
+    // (memos which are placed below syncIndex but wasn't converted to the HistoryRecord for any reason)
+    const failSyncRecords: number[] = await this.db.get(HISTORY_STATE_TABLE, 'fail_indexes');
+    if (failSyncRecords) {
+      await Promise.all(failSyncRecords.map(async (idx) => {
+        const lostMemo: DecryptedMemo = await this.db.get(DECRYPTED_MEMO_TABLE, idx);
+        if (lostMemo) {
+          this.unparsedMemo.set(idx, lostMemo);
+          console.log(`[HistoryStorage] found lost memo @${idx}`);
+        } else {
+          console.warn(`[HistoryStorage] memo @${idx} was marked as lost but no source memo was found`);
+        }
+      }));
+    } else {
+      // It's seems we faced with that array for the first time
+      // Let's check all history for the leaked records
+      console.log(`[HistoryStorage] checking history for the lost records...`);
+      // we assume that every unprocessed memo should have associated HistoryRecord with the same index
+      let recIndexes = [...this.currentHistory.keys()];
+      let cursor = await this.db.transaction(DECRYPTED_MEMO_TABLE).store.openCursor();
+      while (cursor) {
+        if (!recIndexes.includes(Number(cursor.primaryKey))) {
+          console.warn(`[HistoryStorage] found lost which has no associated HistoryRecord @${Number(cursor.primaryKey)}`);
+          this.unparsedMemo.set(Number(cursor.primaryKey), cursor.value);
+        }
+        cursor = await cursor.continue();
+      }
+    }
+
+    console.log(`[HistoryStorage] preload ${this.currentHistory.size} history records, ${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unparsed memos (synced from ${this.syncIndex + 1})`);
   }
 
   public async getAllHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<HistoryRecord[]> {
     if (this.syncHistoryPromise == undefined) {
-      this.syncHistoryPromise = this.syncHistory(getIsLoopback).finally( () => {
+      this.syncHistoryPromise = new Promise<void>(async (resolve) => {
+        this.syncAttempts = 0;
+        let result = false;
+        do {
+          if (this.syncAttempts++ > 0) {
+            console.warn(`[HistoryStorage] history retry attempt #${this.syncAttempts} (${this.unparsedMemo.size} memo were not converted yet)`);
+          }
+          result = await this.syncHistory(getIsLoopback);
+          if (result) {
+            break;
+          }
+        } while(this.syncAttempts < MAX_SYNC_ATTEMPTS);
+
+        if (!result) {
+          console.warn(`[HistoryStorage] cannot fully sync history after ${this.syncAttempts} attempts (${this.unparsedMemo.size} memo were not converted yet)`);
+        }
+        resolve();
+      }).catch((err) => {
+        console.error(`[HistoryStorage]: unexpected error occured during history sync: ${err.message}`);
+      }).finally(() => {
         this.syncHistoryPromise = undefined;
       });
     }
@@ -671,6 +734,13 @@ export class HistoryStorage {
     } else {
       this.db.put(HISTORY_STATE_TABLE, this.syncIndex, 'sync_index');
     }
+
+    // remove failed indexes if needed
+    let failSyncRecords: number[] = await this.db.get(HISTORY_STATE_TABLE, 'fail_indexes');
+    if (failSyncRecords) {
+      failSyncRecords = failSyncRecords.filter(idx => idx < rollbackIndex);
+      await this.db.put(HISTORY_STATE_TABLE, failSyncRecords, 'fail_indexes');
+    }
   }
 
   public async cleanHistory(): Promise<void> {
@@ -697,21 +767,35 @@ export class HistoryStorage {
 
   // ------- Private routines --------
 
-  private async syncHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<void> {
+  // Returns true if there is all unparsed memo were converted to the HistoryRecords
+  // If one or more transactions were postponed due to recoverable error - return false
+  // Pending transactions are not influence on the return value (in case of error it will re-fetched in the next time)
+  // The method can be throw an error in case of unrecoverable error
+
+  private async syncHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<boolean> {
     const startTime = Date.now();
 
     if (this.unparsedMemo.size > 0 || this.unparsedPendingMemo.size > 0) {
-      console.log(`Starting memo synchronizing from the index ${this.syncIndex + 1} (${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending)  unprocessed memos)`);
+      console.log(`[HistoryStorage] starting memo synchronizing from the index ${this.syncIndex + 1} (${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unprocessed memos)`);
 
       const historyPromises: Promise<HistoryRecordIdx[]>[] = [];
       
       // process mined memos
       const processedIndexes: number[] = [];
+      const unprocessedIndexes: number[] = [];
       for (const oneMemo of this.unparsedMemo.values()) {
-        const hist = this.convertToHistory(oneMemo, false, getIsLoopback);
-        historyPromises.push(hist);
+        const hist = this.convertToHistory(oneMemo, false, getIsLoopback).then( records => {
+          if (records.length > 0) {
+            processedIndexes.push(oneMemo.index);
+          } else {
+            // collect unprocessed indexes as well
+            // (the reason is most likely RPC failure)
+            unprocessedIndexes.push(oneMemo.index)
+          }
 
-        processedIndexes.push(oneMemo.index);
+          return records;
+        });
+        historyPromises.push(hist);
       }
 
       // process pending memos
@@ -738,7 +822,7 @@ export class HistoryStorage {
       for (const oneSet of historyRedords) {
         for (const oneRec of oneSet) {
           if (LOG_HISTORY_SYNC) {
-            console.log(`History record @${oneRec.index} has been created`);
+            console.log(`[HistoryStorage] history record @${oneRec.index} has been created`);
           }
 
           this.currentHistory.set(oneRec.index, oneRec.record);
@@ -746,31 +830,41 @@ export class HistoryStorage {
           if (oneRec.record.state == HistoryRecordState.Mined) {
             // save history record only for mined transactions
             this.put(oneRec.index, oneRec.record);
+            
             newSyncIndex = oneRec.index;
           }
         }
       }
 
+      if (unprocessedIndexes.length > 0) {
+        console.warn(`[HistoryStorage] unprocessed: ${unprocessedIndexes.sort().map((idx) => `@${idx}`).join(', ')}`);
+      }
+
+      // we should save unprocessed records to restore them in case of library reload
+      this.db.put(HISTORY_STATE_TABLE, unprocessedIndexes, 'fail_indexes');
+
       for (const oneIndex of processedIndexes) {
         this.unparsedMemo.delete(oneIndex);
       }
 
-      this.syncIndex = newSyncIndex;
+      this.syncIndex = Math.max(this.syncIndex, newSyncIndex);  // prevent sync index decreasing
       this.db.put(HISTORY_STATE_TABLE, this.syncIndex, 'sync_index');
 
       const timeMs = Date.now() - startTime;
-      console.log(`History has been synced up to index ${this.syncIndex} in ${timeMs} msec`);
+      const remainsStr = unprocessedIndexes.length > 0 ? ` (${unprocessedIndexes.length} memos remain unprecessed)` : '';
+      console.log(`[HistoryStorage] history has been synced up to index ${this.syncIndex}${remainsStr} in ${timeMs} msec (records: ${[...this.currentHistory.keys()].length})`);
     } else {
-      // No any records (new or pending)
-      // delete all pending history records
+      // No any records (new or pending) => delete all pending history records
       for (const [index, record] of this.currentHistory.entries()) {
         if (record.state == HistoryRecordState.Pending) {
           this.currentHistory.delete(index);
         }
       }
 
-      console.log(`Memo sync is not required: already up-to-date (on index ${this.syncIndex + 1})`);
+      console.log(`[HistoryStorage] memo sync is not required: already up-to-date (on index ${this.syncIndex + 1})`);
     }
+
+    return this.unparsedMemo.size == 0;
   }
 
   private async put(index: number, data: HistoryRecord): Promise<HistoryRecord> {
@@ -788,8 +882,8 @@ export class HistoryStorage {
     if (txHash) {
       const txData = await this.getNativeTx(memo.index, txHash);
       if (txData) {
-        const block = await this.web3.eth.getBlock(txData.blockNumber);
-        if (block) {
+        const block = await this.web3.eth.getBlock(txData.blockNumber).catch(() => null);
+        if (block && block.timestamp) {
             let ts: number = 0;
             if (typeof block.timestamp === "number" ) {
                 ts = block.timestamp;
@@ -799,108 +893,118 @@ export class HistoryStorage {
 
             // Decode transaction data
             try {
-              const tx = ShieldedTx.decode(txData.input);
-              const feeAmount = BigInt('0x' + tx.memo.substr(0, 16))
-
-              if (tx.selector.toLowerCase() == "af989083") {
-                  // All data is collected here. Let's analyze it
-
-                  const allRecords: HistoryRecordIdx[] = [];
-                  if (tx.txType == TxType.Deposit) {
-                    // here is a deposit transaction (approvable method)
-                    // source address are recovered from the signature
-                    if (tx.extra && tx.extra.length >= 128) {
-                      const fullSig = toCanonicalSignature(tx.extra.substr(0, 128));
-                      const nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
-                      const depositHolderAddr = await this.web3.eth.accounts.recover(nullifier, fullSig);
-
-                      const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
-                      allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                      
-                    } else {
-                      //incorrect signature
-                      throw new InternalError(`no signature for approvable deposit`);
-                    }
-
-                  } else if (tx.txType == TxType.BridgeDeposit) {
-                    // here is a deposit transaction (permittable token)
-                    // source address in the memo block (20 bytes, starts from 16 bytes offset)
-                    const depositHolderAddr = '0x' + tx.memo.substr(32, 40);  // TODO: Check it!
+              const txSelector = txData.input.slice(2, 10).toLowerCase();
+              if (txSelector == PoolSelector.Transact) {
+                // Here is a regular transaction (deposit/transfer/withdrawal)
+                const tx = ShieldedTx.decode(txData.input);
+                const feeAmount = BigInt('0x' + tx.memo.substr(0, 16))
+                
+                // All data is collected here. Let's analyze it
+                const allRecords: HistoryRecordIdx[] = [];
+                if (tx.txType == TxType.Deposit) {
+                  // here is a deposit transaction (approvable method)
+                  // source address are recovered from the signature
+                  if (tx.extra && tx.extra.length >= 128) {
+                    const fullSig = toCanonicalSignature(tx.extra.substr(0, 128));
+                    const nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
+                    const depositHolderAddr = await this.web3.eth.accounts.recover(nullifier, fullSig);
 
                     const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
                     allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                  } else {
+                    //incorrect signature
+                    throw new InternalError(`no signature for approvable deposit`);
+                  }
+                } else if (tx.txType == TxType.BridgeDeposit) {
+                  // here is a deposit transaction (permittable token)
+                  // source address in the memo block (20 bytes, starts from 16 bytes offset)
+                  const depositHolderAddr = '0x' + tx.memo.substr(32, 40);  // TODO: Check it!
 
-                  } else if (tx.txType == TxType.Transfer) {
-                    // there are 2 cases: 
-                    if (memo.acc) {
-                      // 1. we initiated it => outcoming tx(s)
-                      const transfers = await Promise.all(memo.outNotes.map(async ({note, index}) => {
-                        const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
-                        return {to: destAddr, amount: BigInt(note.b)};
-                      }));;
+                  const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
+                  allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                  
+                } else if (tx.txType == TxType.Transfer) {
+                  // there are 2 cases: 
+                  if (memo.acc) {
+                    // 1. we initiated it => outcoming tx(s)
+                    const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
+                      const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                      return {to: destAddr, amount: BigInt(note.b)};
+                    }));
 
-                      if (transfers.length == 0) {
-                      	const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
-                      	allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                      } else {
-                      	const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
-                      	allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                      }
+                    if (transfers.length == 0) {
+                      const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
+                      allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                     } else {
-                      // 2. somebody initiated it => incoming tx(s)
-
-                      const transfers = await Promise.all(memo.inNotes.map(async ({note, index}) => {
-                        const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
-                        return {to: destAddr, amount: BigInt(note.b)};
-                      }));
-
-                      const rec = await HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
+                      const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
                       allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                     }
-                  } else if (tx.txType == TxType.Withdraw) {
-                    // withdrawal transaction (destination address in the memoblock)
-                    const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
+                  } else {
+                    // 2. somebody initiated it => incoming tx(s)
 
-                    const rec = await HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
+                    const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
+                      const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                      return {to: destAddr, amount: BigInt(note.b)};
+                    }));
+
+                    const rec = await HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
                     allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                   }
+                } else if (tx.txType == TxType.Withdraw) {
+                  // withdrawal transaction (destination address in the memoblock)
+                  const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
 
-                  // if we found txHash in the blockchain -> remove it from the saved tx array
-                  if (pending) {
-                    // if tx is in pending state - remove it only on success
-                    const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
-                    if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
-                      this.removePendingTxByTxHash(txHash);
-                    }
-                  } else {
+                  const rec = await HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
+                  allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                }
+
+                // if we found txHash in the blockchain -> remove it from the saved tx array
+                if (pending) {
+                  // if tx is in pending state - remove it only on success
+                  const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
+                  if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
                     this.removePendingTxByTxHash(txHash);
                   }
+                } else {
+                  this.removePendingTxByTxHash(txHash);
+                }
 
-                  return allRecords;
+                return allRecords;
 
+              } else if (txSelector == PoolSelector.AppendDirectDeposit) {
+                // Direct Deposit tranaction
+                const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
+                  const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                  return {to: destAddr, amount: BigInt(note.b)};
+                }));
+
+                const rec = await HistoryRecord.directDeposit(transfers, BigInt(0), ts, txHash, pending);
+                return [HistoryRecordIdx.create(rec, memo.index)];
               } else {
-                throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${tx.selector}`);
+                throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${txSelector}`);
               }
-            }
-            catch (e) {
+            } catch (e) {
+              // there is no workaround for that issue => throw Error
               throw new InternalError(`Cannot decode calldata for tx ${txHash}: ${e}`);
             }
-        }
+          }
 
-        throw new InternalError(`Unable to get timestamp for block ${txData.blockNumber}`);
+          // we shouldn't panic here: will retry in the next time
+          console.warn(`[HistoryStorage] unable to fetch block ${txData.blockNumber} for tx @${memo.index}`);
       } else {
         // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
         const records = this.sentTxs.get(txHash);
         if (records !== undefined) {
-          console.log(`HistoryStorage: tx ${txHash} isn't indexed yet, but we have ${records.length} associated history record(s)`);
+          console.log(`[HistoryStorage] tx ${txHash} isn't indexed yet, but we have ${records.length} associated history record(s)`);
           return records.map((oneRecord, index) => HistoryRecordIdx.create(oneRecord, memo.index + index));
         } else {
-          console.warn(`HistoryStorage: cannot fetch tx ${txHash} and no local associated records`);
+          // we shouldn't panic here: will retry in the next time
+          console.warn(`[HistoryStorage] cannot fetch tx ${txHash} and no local associated records`);
         }
       }
 
-      // Cannot retrieve transaction info
-      // and there are no associated records
+      // In some cases (e.g. unable to fetch tx) we should return a valid value
+      // Otherwise top-level Promise.all() will failed
       return [];
 
     }
