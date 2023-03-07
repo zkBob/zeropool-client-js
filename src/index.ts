@@ -1,14 +1,16 @@
-import { wrap } from 'comlink';
-import { SnarkConfigParams } from './config';
-import { FileCache } from './file-cache';
 export { TreeNode } from 'libzkbob-rs-wasm-web';
 export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState, SyncStat, ServiceVersion } from './client';
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
 export * from './errors'
+
+import { wrap } from 'comlink';
+import { SnarkConfigParams } from './config';
+import { FileCache } from './file-cache';
 import { ServiceType, defaultHeaders, fetchJson } from './rest-helper'
-import { LimitsFetch, LimitsFromJson } from './client';
+import { LimitsFetch, LimitsFromJson, ServiceVersion, isServiceVersion } from './client';
+import { ServiceError } from './errors';
 
 export enum InitState {
   Started = 1,
@@ -112,4 +114,16 @@ export async function currentLimits(relayerUrl: string, supportId: string, l1Add
     const res = await fetchJson(url.toString(), {headers}, ServiceType.Relayer);
 
   return LimitsFromJson(res);
+}
+
+export async function fetchVersion(serviceUrl: string, service: ServiceType): Promise<ServiceVersion> {
+  const url = new URL(`/version`, serviceUrl);
+  const headers = defaultHeaders();
+
+  const version = await fetchJson(url.toString(), {headers}, service);
+  if (isServiceVersion(version)) {
+    return version;
+  }
+
+  throw new ServiceError(service, 200, `Incorrect response (expected ServiceVersion, got \'${version}\')`)
 }

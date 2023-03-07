@@ -206,7 +206,7 @@ interface ServiceVersionFetch {
   timestamp: number;  // when the version was fetched
 }
 
-const isServiceVersion = (obj: any): obj is ServiceVersion => {
+export const isServiceVersion = (obj: any): obj is ServiceVersion => {
   return typeof obj === 'object' && obj !== null &&
     obj.hasOwnProperty('ref') && typeof obj.ref === 'string' &&
     obj.hasOwnProperty('commitHash') && typeof obj.commitHash === 'string';
