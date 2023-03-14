@@ -1,14 +1,17 @@
-import { wrap } from 'comlink';
-import { SnarkConfigParams } from './config';
-import { FileCache } from './file-cache';
 export { TreeNode } from 'libzkbob-rs-wasm-web';
 export { ZkBobClient, TransferConfig, FeeAmount, PoolLimits, TreeState, SyncStat, ServiceVersion } from './client';
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'
+export { ServiceType } from './rest-helper'
 export * from './errors'
 
-const LIB_VERSION = require('../package.json').version;
+import { wrap } from 'comlink';
+import { SnarkConfigParams } from './config';
+import { FileCache } from './file-cache';
+import { ServiceType, defaultHeaders, fetchJson } from './rest-helper'
+import { LimitsFetch, LimitsFromJson, ServiceVersion, isServiceVersion } from './client';
+import { ServiceError } from './errors';
 
 export enum InitState {
   Started = 1,
@@ -31,11 +34,10 @@ export class ZkBobLibState {
 
 async function fetchTxParamsHash(relayerUrl: string): Promise<string> {
   const url = new URL('/params/hash/tx', relayerUrl);
-  const headers = {'content-type': 'application/json;charset=UTF-8',
-                   'zkbob-libjs-version': LIB_VERSION};
-  const res = await fetch(url.toString(), {headers});
+  const headers = defaultHeaders();
+  const res = await await fetchJson(url.toString(), {headers}, ServiceType.Relayer);
 
-  return (await res.json()).hash;
+  return res.hash;
 }
 
 export async function init(
@@ -94,4 +96,35 @@ export async function init(
     fileCache,
     worker,
   };
+}
+
+export async function relayerFee(relayerUrl: string, supportId: string): Promise<BigInt> {
+  const url = new URL('/fee', relayerUrl);
+  const headers = defaultHeaders(supportId);
+  const res = await fetchJson(url.toString(), {headers}, ServiceType.Relayer);
+  
+  return BigInt(res.fee);
+}
+
+export async function currentLimits(relayerUrl: string, supportId: string, l1Address?: string): Promise<LimitsFetch> {
+  const url = new URL('/limits', relayerUrl);
+    if (l1Address !== undefined) {
+      url.searchParams.set('address', l1Address);
+    }
+    const headers = defaultHeaders(supportId);
+    const res = await fetchJson(url.toString(), {headers}, ServiceType.Relayer);
+
+  return LimitsFromJson(res);
+}
+
+export async function fetchVersion(serviceUrl: string, service: ServiceType): Promise<ServiceVersion> {
+  const url = new URL(`/version`, serviceUrl);
+  const headers = defaultHeaders();
+
+  const version = await fetchJson(url.toString(), {headers}, service);
+  if (isServiceVersion(version)) {
+    return version;
+  }
+
+  throw new ServiceError(service, 200, `Incorrect response (expected ServiceVersion, got \'${version}\')`)
 }
