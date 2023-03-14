@@ -1,7 +1,7 @@
-import { ProverMode, Token, Tokens } from './config';
+import { ProverMode, Tokens } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature,
-          isRangesIntersected, hexToNode, bufToHex
+          isRangesIntersected, bufToHex
         } from './utils';
 import { ZkBobState } from './state';
 import { TxType } from './tx';
@@ -9,29 +9,23 @@ import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
 import { EphemeralAddress } from './ephemeral';
-
-const LOG_STATE_HOTSYNC = false;
-
 import { 
-  Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
+  Proof, DecryptedMemo, ITransferData, IWithdrawData,
   ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, IndexedTx, TreeNode
 } from 'libzkbob-rs-wasm-web';
-
 import { 
-  InternalError, NetworkError, PoolJobError, RelayerJobError, ServiceError, SignatureError, TxDepositDeadlineExpiredError,
+  InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
 import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
 import { isAddress } from 'web3-utils';
-//import { SyncStat, SyncStat } from '.';
-import { ServiceType, fetchJson, defaultHeaders, ServiceVersion } from './services/common';
-import { JobInfo, LimitsFetch, ZkBobRelayer } from './services/relayer';
-import { ZkBobDelegatedProver } from './services/prover';
+import { JobInfo } from './services/relayer';
 import { TreeState, ZkBobAccountlessClient } from './client-base';
 
-const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
+const LOG_STATE_HOTSYNC = false;
 
+const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const BATCH_SIZE = 1000;
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
@@ -147,8 +141,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     client.zpStates = {};
     client.worker = config.worker;
     client.config = config;
-
-    //client.relayerFee = undefined;
 
     let networkName = config.networkName;
     if (!networkName) {
@@ -283,6 +275,10 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return await state.isOwnAddress(shieldedAddress);
   }
 
+  public async verifyShieldedAddress(address: string): Promise<boolean> {
+    return await this.worker.verifyShieldedAddress(address);
+  }
+
   // Waiting while relayer process the jobs set
   public async waitJobsTxHashes(tokenAddress: string, jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
     const promises = jobIds.map(async (jobId) => {
@@ -324,14 +320,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
     return txHash;
   }
-
-  public async setProverMode(tokenAddress: string, mode: ProverMode) {
-    super.setProverMode(tokenAddress, mode);
-
-    if (mode != ProverMode.Delegated) {
-        this.worker.loadTxParams();
-    }
-}
 
   // Start monitoring job
   // Return existing promise or start new one
@@ -874,38 +862,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return jobId;
   }
 
-  // TODO: move to the accountless client
-  private async proveTx(tokenAddress: string, pub: any, sec: any): Promise<any> {
-    const proverMode = this.getProverMode(tokenAddress);
-    const prover = this.prover(tokenAddress)
-    if ((proverMode == ProverMode.Delegated || proverMode == ProverMode.DelegatedWithFallback) && prover) {
-      console.debug('Delegated Prover: proveTx');
-      try {
-        const proof = prover.proveTx(pub, sec);
-        const inputs = Object.values(pub);
-        const txValid = await this.worker.verifyTxProof(inputs, proof);
-        if (!txValid) {
-          throw new TxProofError();
-        }
-        return {inputs, proof};
-      } catch (e) {
-        if (proverMode == ProverMode.Delegated) {
-          console.error(`Failed to prove tx using delegated prover: ${e}`);
-          throw new TxProofError();
-        } else {
-          console.warn(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
-        }
-      }
-    }
-
-    const txProof = await this.worker.proveTx(pub, sec);
-    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
-    if (!txValid) {
-      throw new TxProofError();
-    }
-    return txProof;
-  }
-
   // ------------------=========< Transaction configuration >=========-------------------
   // | These methods includes fee estimation, multitransfer estimation and other inform |
   // | functions.                                                                       |
@@ -1086,9 +1042,74 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return notesParts;
   }
 
-  // ------------------=========< State Processing >=========-------------------
-  // | Updating and monitoring state                                            |
+  // -------------------=========< Prover routines >=========--------------------
+  // | Local and delegated prover support                                       |
   // ----------------------------------------------------------------------------
+  public async setProverMode(tokenAddress: string, mode: ProverMode) {
+    await super.setProverMode(tokenAddress, mode);
+
+    if (mode != ProverMode.Delegated) {
+        this.worker.loadTxParams();
+    }
+  }
+
+  // Universal proving routine
+  private async proveTx(tokenAddress: string, pub: any, sec: any): Promise<any> {
+    const proverMode = this.getProverMode(tokenAddress);
+    const prover = this.prover(tokenAddress)
+    if ((proverMode == ProverMode.Delegated || proverMode == ProverMode.DelegatedWithFallback) && prover) {
+      console.debug('Delegated Prover: proveTx');
+      try {
+        const proof = await prover.proveTx(pub, sec);
+        const inputs = Object.values(pub);
+        const txValid = await this.worker.verifyTxProof(inputs, proof);
+        if (!txValid) {
+          throw new TxProofError();
+        }
+        return {inputs, proof};
+      } catch (e) {
+        if (proverMode == ProverMode.Delegated) {
+          console.error(`Failed to prove tx using delegated prover: ${e}`);
+          throw new TxProofError();
+        } else {
+          console.warn(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
+        }
+      }
+    }
+
+    const txProof = await this.worker.proveTx(pub, sec);
+    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+    if (!txValid) {
+      throw new TxProofError();
+    }
+    return txProof;
+  }
+
+  // ------------------=========< State Processing >=========--------------------
+  // | Updating and monitoring local state                                      |
+  // ----------------------------------------------------------------------------
+
+  // Get the local Merkle tree root & index
+  // Retuned the latest root when the index is undefined
+  public async getLocalState(tokenAddress: string, index?: bigint): Promise<TreeState> {
+    if (index === undefined) {
+      const index = await this.zpStates[tokenAddress].getNextIndex();
+      const root = await this.zpStates[tokenAddress].getRoot();
+
+      return {root, index};
+    } else {
+      const root = await this.zpStates[tokenAddress].getRootAt(index);
+
+      return {root, index};
+    }
+  }
+
+  // Just informal method needed for the debug purposes
+  public async getTreeStartIndex(tokenAddress: string): Promise<bigint | undefined> {
+    const index = await this.zpStates[tokenAddress].getFirstIndex();
+
+    return index;
+  }
 
   // The library can't make any transfers when there are outcoming
   // transactions in the optimistic state
@@ -1120,33 +1141,11 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return true;
   }
 
-  // Get the local Merkle tree root & index
-  // Retuned the latest root when the index is undefined
-  public async getLocalState(tokenAddress: string, index?: bigint): Promise<TreeState> {
-    if (index === undefined) {
-      const index = await this.zpStates[tokenAddress].getNextIndex();
-      const root = await this.zpStates[tokenAddress].getRoot();
-
-      return {root, index};
-    } else {
-      const root = await this.zpStates[tokenAddress].getRootAt(index);
-
-      return {root, index};
-    }
-  }
-
   // Just for testing purposes. This method do not need for client
   public async getLeftSiblings(tokenAddress: string, index: bigint): Promise<TreeNode[]> {
     const siblings = await this.zpStates[tokenAddress].getLeftSiblings(index);
 
     return siblings;
-  }
-
-  // Just informal method needed for the debug purposes
-  public async getTreeStartIndex(tokenAddress: string): Promise<bigint | undefined> {
-    const index = await this.zpStates[tokenAddress].getFirstIndex();
-
-    return index;
   }
 
   // Getting array of accounts and notes for the current account
@@ -1612,10 +1611,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return syncResult;
   }
 
-  public async verifyShieldedAddress(address: string): Promise<boolean> {
-    return await this.worker.verifyShieldedAddress(address);
-  }
-
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------
   // | Getting internal native accounts (for multisig implementation)              |
   // -------------------------------------------------------------------------------
@@ -1662,7 +1657,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return undefined; // relevant stat doesn't found
   }
 
-  // milliseconds
+  // in milliseconds
   public getAverageTimePerTx(): number | undefined {
     if (this.syncStats.length > 0) {
       return this.syncStats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / this.syncStats.length;

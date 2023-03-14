@@ -5,6 +5,8 @@ import { ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/prover";
 import { LimitsFetch, ZkBobRelayer } from "./services/relayer";
 
+const LIB_VERSION = require('../package.json').version;
+
 const DEFAULT_DENOMINATOR = BigInt(1000000000);
 const RELAYER_FEE_LIFETIME = 3600;  // when to refetch the relayer fee (in seconds)
 const DEFAULT_RELAYER_FEE = BigInt(100000000);
@@ -69,7 +71,7 @@ export class ZkBobAccountlessClient {
                 this.provers[address] = ZkBobDelegatedProver.create([token.delegatedProverUrl], supportId);
             }
 
-            //this.proverModes[address] = ProverMode.Local;
+            this.proverModes[address] = ProverMode.Local;
         }
     }
 
@@ -97,8 +99,8 @@ export class ZkBobAccountlessClient {
 
     // Pool contract using default denominator 10^9
     // i.e. values less than 1 Gwei are supposed equals zero
-    // But this is deployable parameter so this method are using to retrieve it
-    public async denominator(tokenAddress: string): Promise<bigint> {
+    // But this is deployable parameter so this method needed to retrieve it
+    protected async denominator(tokenAddress: string): Promise<bigint> {
         let denominator = this.denominators[tokenAddress];
         if (!denominator) {
             try {
@@ -114,20 +116,8 @@ export class ZkBobAccountlessClient {
         return denominator;
     }
 
-    // Convert native pool amount to the base units
-    public async shieldedAmountToWei(tokenAddress, amountGwei: bigint):Promise<bigint> {
-        const denominator = await this.denominator(tokenAddress);
-        return amountGwei * denominator;
-    }
-    
-    // Convert base units to the native pool amount
-    public async weiToShieldedAmount(tokenAddress, amountWei: bigint): Promise<bigint> {
-        const denominator = await this.denominator(tokenAddress);
-        return amountWei / denominator;
-    }
-
     // Each zkBob pool should have his unique identifier
-    public async poolId(tokenAddress: string): Promise<number> {
+    protected async poolId(tokenAddress: string): Promise<number> {
         let poolId = this.poolIds[tokenAddress];
         if (!poolId) {
             try {
@@ -143,42 +133,25 @@ export class ZkBobAccountlessClient {
         return poolId;
     }
 
-    public async setProverMode(tokenAddress: string, mode: ProverMode) {
-        if (!Object.values(ProverMode).includes(mode)) {
-            throw new InternalError("Provided mode isn't correct. Possible modes: Local, Delegated, and DelegatedWithFallback");
-        }
+    // -------------=========< Converting Amount Routines >=========---------------
+    // | Between wei and pool resolution                                          |
+    // ----------------------------------------------------------------------------
 
-        const prover = this.provers[tokenAddress];
-        if (mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) {
-            if (!prover) {
-                this.proverModes[tokenAddress] = ProverMode.Local;
-                throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
-            }
-
-            if ((await prover.healthcheck()) == false) {
-                this.proverModes[tokenAddress] = ProverMode.Local;
-                throw new InternalError(`Delegated prover can't be enabled because delegated prover isn't healthy`)
-            }
-        }
-
-        this.proverModes[tokenAddress] = mode;
+    // Convert native pool amount to the base units
+    public async shieldedAmountToWei(tokenAddress, amountGwei: bigint):Promise<bigint> {
+        const denominator = await this.denominator(tokenAddress);
+        return amountGwei * denominator;
     }
     
-    public getProverMode(tokenAddress: string): ProverMode {
-        return this.proverModes[tokenAddress];
+    // Convert base units to the native pool amount
+    public async weiToShieldedAmount(tokenAddress, amountWei: bigint): Promise<bigint> {
+        const denominator = await this.denominator(tokenAddress);
+        return amountWei / denominator;
     }
 
-    public async getRelayerVersion(tokenAddress: string): Promise<ServiceVersion> {
-        return this.relayers[tokenAddress].version();
-    }
-
-    public async getProverVersion(tokenAddress: string, cached: boolean = true): Promise<ServiceVersion> {
-        if (!this.provers[tokenAddress]) {
-            throw new InternalError("Cannot fetch prover version because delegated prover url wasn't provided");
-        }
-        
-        return this.provers[tokenAddress].version();
-    }
+    // -------------=========< Transaction configuration >=========----------------
+    // | Fees and limits, min tx amount (which are not depend on zkAccount)       |
+    // ----------------------------------------------------------------------------
 
     // Min trensaction fee in Gwei (e.g. deposit or single transfer)
     // To estimate fee in the common case please use feeEstimate instead
@@ -189,7 +162,7 @@ export class ZkBobAccountlessClient {
         return relayer + l1;
     }
 
-    // Base relayer fee per tx. Do not use it derectly, use atomicTxFee instead
+    // Base relayer fee per tx. Do not use it directly, use atomicTxFee instead
     protected async getRelayerFee(tokenAddress: string): Promise<bigint> {
         let cachedFee = this.relayerFee[tokenAddress];
         if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
@@ -335,7 +308,37 @@ export class ZkBobAccountlessClient {
         }
     }
 
-    // ------- STATE ---------
+    // --------------=========< Common Prover Routines >=========------------------
+    // | Support fo switching between different proving modes                     |
+    // ----------------------------------------------------------------------------
+    public async setProverMode(tokenAddress: string, mode: ProverMode) {
+        if (!Object.values(ProverMode).includes(mode)) {
+            throw new InternalError("Provided mode isn't correct. Possible modes: Local, Delegated, and DelegatedWithFallback");
+        }
+
+        const prover = this.provers[tokenAddress];
+        if (mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) {
+            if (!prover) {
+                this.proverModes[tokenAddress] = ProverMode.Local;
+                throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
+            }
+
+            if ((await prover.healthcheck()) == false) {
+                this.proverModes[tokenAddress] = ProverMode.Local;
+                throw new InternalError(`Delegated prover can't be enabled because delegated prover isn't healthy`)
+            }
+        }
+
+        this.proverModes[tokenAddress] = mode;
+    }
+    
+    public getProverMode(tokenAddress: string): ProverMode {
+        return this.proverModes[tokenAddress];
+    }
+
+    // ------------------=========< State Processing >=========--------------------
+    // | Getting the remote state (from the relayer and pool)                     |
+    // ----------------------------------------------------------------------------
 
     // Get relayer regular root & index
     public async getRelayerState(tokenAddress: string): Promise<TreeState> {
@@ -361,6 +364,23 @@ export class ZkBobAccountlessClient {
         return {index: res.index, root: res.root};
     }
 
-    // ------- <><><><><><> ---------
+    // --------------------=========< Versioning >=========------------------------
+    // | Miscellaneous version information                                        |
+    // ----------------------------------------------------------------------------
 
+    public getLibraryVersion(): string {
+        return LIB_VERSION;
+    }
+
+    public async getRelayerVersion(tokenAddress: string): Promise<ServiceVersion> {
+        return this.relayers[tokenAddress].version();
+    }
+
+    public async getProverVersion(tokenAddress: string, cached: boolean = true): Promise<ServiceVersion> {
+        if (!this.provers[tokenAddress]) {
+            throw new InternalError("Cannot fetch prover version because delegated prover url wasn't provided");
+        }
+        
+        return this.provers[tokenAddress].version();
+    }
 }
