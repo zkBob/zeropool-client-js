@@ -16,6 +16,7 @@ export type Tokens = {
 };
 
 export interface Token {
+  chainId: number,
   poolAddress: string;
   relayerUrl: string;
   coldStorageConfigPath: string;

@@ -1,4 +1,4 @@
-import { ProverMode, Tokens } from './config';
+import { ProverMode, Tokens, SnarkConfigParams } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature,
           isRangesIntersected, bufToHex
@@ -22,6 +22,10 @@ import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-u
 import { isAddress } from 'web3-utils';
 import { JobInfo } from './services/relayer';
 import { TreeState, ZkBobAccountlessClient } from './client-base';
+import { ZkBobLibState } from '.';
+import { FileCache } from './file-cache';
+import { wrap } from 'comlink';
+import { defaultHeaders, fetchJson, ServiceType } from './services/common';
 
 const LOG_STATE_HOTSYNC = false;
 
@@ -107,13 +111,16 @@ export interface ClientConfig {
   // A map of supported tokens (token address => token params)
   tokens: Tokens;
   // A worker instance acquired through init() function of this package
-  worker: any;
+  // worker: any;
   // The name of the network is only used for storage
   networkName: string | undefined;
   // An endpoint to interact with the blockchain
   network: NetworkBackend;
   // Support ID - unique random string to track user's activity for support purposes
   supportId: string | undefined;
+  // params from init
+  snarkParams: SnarkConfigParams;
+  forcedMultithreading: boolean | undefined;
 }
 
 export class ZkBobClient extends ZkBobAccountlessClient {
@@ -136,10 +143,63 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     super(tokens, supportId, network);
   }
 
+  private async fetchTxParamsHash(relayerUrl: string): Promise<string> {
+    const url = new URL('/params/hash/tx', relayerUrl);
+    const headers = defaultHeaders();
+    const res = await await fetchJson(url.toString(), {headers}, ServiceType.Relayer);
+  
+    return res.hash;
+  }
+
+  private async workerInit(
+    snarkParams: SnarkConfigParams,
+    relayerURL: string | undefined = undefined, // we'll try to fetch parameters hash for verification
+    //statusCallback: InitLibCallback | undefined = undefined,
+    //forcedMultithreading: boolean | undefined = undefined, // specify this parameter to override multithreading autoselection
+  ): Promise<ZkBobLibState> {
+    const fileCache = await FileCache.init();
+    // Get tx parameters hash from the relayer
+    // to check local params consistence
+    let txParamsHash: string | undefined = undefined;
+    if (relayerURL !== undefined) {
+      try {
+        txParamsHash = await this.fetchTxParamsHash(relayerURL);
+      } catch (err) {
+        console.warn(`Cannot fetch tx parameters hash from the relayer (${err.message})`);
+      }
+    }
+  
+    let worker: any;
+  
+    // Intercept all possible exceptions to process `Failed` status
+    try {
+      worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
+      await worker.initWasm({
+        txParams: snarkParams.transferParamsUrl,
+        treeParams: snarkParams.treeParamsUrl,
+      }, txParamsHash, 
+      {
+        transferVkUrl: snarkParams.transferVkUrl,
+        treeVkUrl: snarkParams.treeVkUrl,
+      },
+      undefined);
+    } catch(err) {
+      console.error(`Cannot initialize client library: ${err.message}`);
+    }
+  
+    return {
+      fileCache,
+      worker,
+    };
+  }
+
   public static async create(config: ClientConfig): Promise<ZkBobClient> {
     const client = new ZkBobClient(config.tokens, config.supportId ?? "", config.network);
+
+    const { worker } = await client.workerInit(config.snarkParams);
+
     client.zpStates = {};
-    client.worker = config.worker;
+    client.worker = worker;
     client.config = config;
 
     let networkName = config.networkName;
