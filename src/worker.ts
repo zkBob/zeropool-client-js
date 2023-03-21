@@ -43,9 +43,8 @@ const obj = {
     txParser = wasm.TxParser._new()
 
     console.time(`VK initializing`);
-    const noCacheHeader = { method: 'GET', headers: { 'Cache-Control': 'no-cache' } };
-    transferVk = await (await fetch(vkUrls.transferVkUrl, noCacheHeader)).json();
-    treeVk = await (await fetch(vkUrls.treeVkUrl, noCacheHeader)).json();
+    transferVk = await (await fetch(vkUrls.transferVkUrl)).json();
+    treeVk = await (await fetch(vkUrls.treeVkUrl)).json();
     console.timeEnd(`VK initializing`);
 
     console.info('Web worker init complete.');
@@ -194,6 +193,9 @@ const obj = {
 
   async assembleAddress(d: string, p_d: string): Promise<string> {
     return wasm.assembleAddress(d, p_d);
+  },
+  async genBurnerAddress(poolId: number, seed: Uint8Array): Promise<string> {
+    return wasm.genBurnerAddress(BigInt(poolId), seed);
   }
 };
 
