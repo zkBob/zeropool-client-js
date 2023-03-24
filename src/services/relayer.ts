@@ -247,4 +247,18 @@ export class ZkBobRelayer implements IZkBobService {
       return node;
     });
   }
+
+  public async txParamsHash(): Promise<string> {
+    const url = new URL('/params/hash/tx', this.url());
+    const headers = defaultHeaders();
+    const res = await fetchJson(url.toString(), {headers}, this.type());
+
+    if (typeof res !== 'object' || res === null ||
+        !res.hasOwnProperty('hash') || typeof res.hash !== 'string')
+    {
+      throw new ServiceError(this.type(), 200, 'Incorrect respons for tx params hash');
+    }
+  
+    return res.hash;
+  }
 }

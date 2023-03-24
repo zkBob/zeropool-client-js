@@ -75,4 +75,24 @@ export namespace NetworkType {
     }
 
   }
+
+  export function networkName(chainId: number): string | undefined {
+    switch (chainId) {
+      case 1:
+        return 'ethereum';
+      case 137:
+        return 'polygon';
+      case 10:
+        return 'optimism';
+      case 11155111:
+        return 'sepolia';
+      case 5:
+        return 'goerli';
+      case 420:
+        return 'goerli-optimism';
+
+      default:
+        return undefined;
+    }
+  }
 }
