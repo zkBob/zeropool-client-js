@@ -102,7 +102,10 @@ export class ZkBobAccountlessClient {
             this.proverModes[alias] = ProverMode.Local;
         }
 
-        this.switchToPool(currentPool);
+        if (!this.pools[currentPool]) {
+            throw new InternalError(`Cannot initialize with the unknown current pool (${currentPool})`);
+        }
+        this.curPool = currentPool;
     }
 
     // get alias of the currently selected pool

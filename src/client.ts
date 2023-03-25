@@ -106,7 +106,7 @@ export interface PartialSyncResult {
 }
 
 export class ZkBobClient extends ZkBobAccountlessClient {
-  private zpStates: { [poolAlias: string]: ZkBobState };
+  private zpStates: { [poolAlias: string]: ZkBobState } = {};
   private worker: any;  // The single worker for the all pools
   private config: ClientConfig;
   private updateStatePromise: Promise<boolean> | undefined;
