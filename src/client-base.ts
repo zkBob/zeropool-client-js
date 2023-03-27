@@ -119,10 +119,11 @@ export class ZkBobAccountlessClient {
     }
 
     protected switchToPool(poolAlias: string) {
-        if (!this.pool(poolAlias)) {
+        const actualPool = poolAlias ?? this.curPool
+        if (!this.pool(actualPool)) {
             throw new InternalError(`Cannot activate unknown pool ${poolAlias}`);
         }
-        this.curPool = poolAlias;
+        this.curPool = actualPool;
     }
 
     protected pool(poolAlias: string | undefined = undefined): Pool {
@@ -144,7 +145,7 @@ export class ZkBobAccountlessClient {
         return chain.backend;
     }
 
-    protected networkName(poolAlias: string | undefined = undefined): string {
+    public networkName(poolAlias: string | undefined = undefined): string {
         const pool = this.pool(poolAlias);
         const chain = this.chains[pool.chainId];
         if (!chain) {
@@ -188,7 +189,7 @@ export class ZkBobAccountlessClient {
     }
 
     // Each zkBob pool should have his unique identifier
-    protected async poolId(poolAlias: string | undefined = undefined): Promise<number> {
+    public async poolId(poolAlias: string | undefined = undefined): Promise<number> {
         const actualPool = poolAlias ?? this.curPool;
         let poolId = this.poolIds[actualPool];
         if (!poolId) {

@@ -192,7 +192,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
   public async login(account: AcccountConfig) {
     this.account = account;
-    this.switchToPool(account.pool, account.birthindex);
+    await this.switchToPool(account.pool, account.birthindex);
     try {
       await this.setProverMode(this.account.proverMode);
     } catch (err) {
@@ -219,6 +219,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
     super.switchToPool(poolAlias); // set active pool for accountless mode
 
+    const newPoolAlias = super.currentPool()
+
     if (this.account) {
       // waiting for ongoing processes
       if (this.updateStatePromise) {
@@ -234,12 +236,12 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       this.skipColdStorage = false;
       this.rollbackAttempts = this.wipeAttempts = 0;
 
-      
-      this.account.pool = poolAlias;
+
+      this.account.pool = newPoolAlias;
       this.account.birthindex = birthindex;
       if (this.account.birthindex == -1) {
         try { // fetch current birthindex right away
-          let curIndex = Number((await this.relayer(poolAlias).info()).deltaIndex);
+          let curIndex = Number((await this.relayer(newPoolAlias).info()).deltaIndex);
           if (curIndex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE) && curIndex >= OUTPLUSONE) {
             curIndex -= OUTPLUSONE; // we should grab almost one transaction from the regular state
             console.log(`Retrieved account birthindex: ${curIndex}`);
@@ -254,11 +256,11 @@ export class ZkBobClient extends ZkBobAccountlessClient {
         }
       }
 
-      this.zpStates[poolAlias] = await ZkBobState.create(this.account.sk, networkName, network.getRpcUrl(), denominator, poolId, pool.tokenAddress, this.worker, pool.coldStorageConfigPath);
+      this.zpStates[newPoolAlias] = await ZkBobState.create(this.account.sk, networkName, network.getRpcUrl(), denominator, poolId, pool.tokenAddress, this.worker, pool.coldStorageConfigPath);
 
-      console.log(`Pool and user account was switched to ${poolAlias} successfully`);
+      console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {
-      console.log(`Pool was switched to ${poolAlias} but account is not set yet`);
+      console.log(`Pool was switched to ${newPoolAlias} but account is not set yet`);
     }
   }
 
