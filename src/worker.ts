@@ -197,6 +197,9 @@ const obj = {
 
   async assembleAddress(d: string, p_d: string): Promise<string> {
     return wasm.assembleAddress(d, p_d);
+  },
+  async genBurnerAddress(poolId: number, seed: Uint8Array): Promise<string> {
+    return wasm.genBurnerAddress(BigInt(poolId), seed);
   }
 };
 
