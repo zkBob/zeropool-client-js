@@ -343,11 +343,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return await this.zpState().history?.getAllHistory((addr) => this.isMyAddress(addr)) ?? [];
   }
 
-  public async genBurnerAddress( poolId: Number, seed: Uint8Array): Promise<string> {
-    return this.worker.genBurnerAddress(poolId, seed)
-  }
-
-
   // ------------------=========< Service Routines >=========-------------------
   // | Methods for creating and sending transactions in different modes        |
   // ---------------------------------------------------------------------------
@@ -356,6 +351,12 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   public async generateAddress(poolAlias: string | undefined = undefined): Promise<string> {
     const state = this.zpState();
     return await state.generateAddress();
+  }
+
+  // Generate address with the specified seed
+  public async genBurnerAddress(seed: Uint8Array, poolAlias: string | undefined = undefined): Promise<string> {
+    const poolId = await this.poolId(poolAlias);
+    return this.worker.genBurnerAddress(poolId, seed);
   }
 
   // Returns true if shieldedAddress belogs to the user's account
