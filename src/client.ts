@@ -310,8 +310,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     if (!this.auxZpStates[accId]) {
       // create gift-card auxiliary state if needed
       const networkName = this.networkName(giftCardAcc.pool);
-      const chainId = this.pool(giftCardAcc.pool).chainId;
-      const giftCardState = await ZkBobState.createNaked(giftCardAcc.sk, giftCardAcc.birthindex, networkName, chainId, this.worker);
+      const poolId = await this.poolId(giftCardAcc.pool);
+      const giftCardState = await ZkBobState.createNaked(giftCardAcc.sk, giftCardAcc.birthindex, networkName, poolId, this.worker);
 
       // state will be removed after gift card redemption or on logout
       this.auxZpStates[accId] = giftCardState;
@@ -327,7 +327,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       this.coldStorageBaseURL(giftCardAcc.pool),
     );
     if (!readyToTransact) {
-      console.warn(`Gift card account isn't ready to transact right now. Please try again`);
+      console.warn(`Gift card account isn't ready to transact right now. Most likely the gift-card is in redeeming state`);
     }
     
     // get gift-card balance
@@ -713,13 +713,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       throw new TxInsufficientFundsError(totalAmount + feeEst.total, available);
     }
 
-    var jobsIds: string[] = [];
-    var optimisticState: StateUpdate = {
-      newLeafs: [],
-      newCommitments: [],
-      newAccounts: [],
-      newNotes: [],
-    }
+    let jobsIds: string[] = [];
+    let optimisticState = this.zeroOptimisticState();
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       const outputs = onePart.outNotes.map((aNote) => { return {to: aNote.destination, amount: `${aNote.amountGwei}`} });
@@ -765,6 +760,17 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return jobsIds;
   }
 
+  private zeroOptimisticState(): StateUpdate {
+    const optimisticState: StateUpdate = {
+      newLeafs: [],
+      newCommitments: [],
+      newAccounts: [],
+      newNotes: [],
+    }
+
+    return optimisticState;
+  }
+
   // Withdraw shielded funds to the specified native chain address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // feeGwei - fee per single transaction (request it with atomicTxFee method)
@@ -801,13 +807,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
 
-    var jobsIds: string[] = [];
-    var optimisticState: StateUpdate = {
-      newLeafs: [],
-      newCommitments: [],
-      newAccounts: [],
-      newNotes: [],
-    }
+    let jobsIds: string[] = [];
+    let optimisticState = this.zeroOptimisticState();
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       
@@ -871,7 +872,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // It's suitable for gift-cards redeeming
   // NOTE: for simplicity we assume the multitransfer doesn't applicable for gift-cards
   // (i.e. any redemption can be done in a single transaction)
-  public async redeemGiftCarg(giftCardAcc: AccountConfig): Promise<string> {
+  public async redeemGiftCard(giftCardAcc: AccountConfig): Promise<string> {
     if (!this.account) {
       throw new InternalError(`Cannot redeem gift card to the uninitialized account`);
     }
@@ -894,7 +895,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       fee: fee.toString(),
     };
     const giftCardState = this.auxZpStates[accId];
-    const txData = await giftCardState.createTransferOptimistic(oneTx, undefined);
+    const txData = await giftCardState.createTransferOptimistic(oneTx, this.zeroOptimisticState());
 
     const startProofDate = Date.now();
     const txProof: Proof = await this.proveTx(txData.public, txData.secret);
@@ -907,7 +908,12 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     const jobId = await relayer.sendTransactions([transaction]);
     this.startJobMonitoring(jobId);
 
-    // forget the gift card state after tx sending
+    // Temporary save transaction in the history module for the current account
+    const ts = Math.floor(Date.now() / 1000);
+    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], fee, ts, '0', true);
+    this.zpState().history?.keepQueuedTransactions([rec], jobId);
+
+    // forget the gift card state 
     this.auxZpStates[accId].free();
     delete this.auxZpStates[accId];
 

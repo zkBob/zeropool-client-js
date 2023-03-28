@@ -1,12 +1,6 @@
 import { bufToHex } from "./utils";
 import { hash } from 'tweetnacl';
 
-export interface Config {
-  snarkParams: SnarkConfigParams;
-  wasmPath: string;
-  workerPath: string;
-}
-
 export interface SnarkConfigParams {
   transferParamsUrl: string;
   treeParamsUrl: string;

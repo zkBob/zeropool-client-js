@@ -85,7 +85,7 @@ export class ZkBobState {
     worker: any,
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
-    zpState.sk = sk;
+    zpState.sk = new Uint8Array(sk);
     zpState.birthIndex = birthIndex;
     
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
@@ -112,11 +112,11 @@ export class ZkBobState {
     worker: any,
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
-    zpState.sk = sk;
+    zpState.sk = new Uint8Array(sk);
     zpState.birthIndex = birthIndex;
 
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
-    zpState.stateId = `${networkName}.${poolId}.${userId}`;
+    zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
 
     await worker.createAccount(zpState.stateId, zpState.sk, poolId);
     zpState.worker = worker;
