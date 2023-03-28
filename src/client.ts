@@ -424,6 +424,11 @@ export class ZkBobClient {
     return await this.zpStates[tokenAddress].history.getAllHistory((addr) => this.isMyAddress(tokenAddress, addr));
   }
 
+  public async genBurnerAddress( poolId: Number, seed: Uint8Array): Promise<string> {
+    return this.worker.genBurnerAddress(poolId, seed)
+  }
+
+
   // ------------------=========< Service Routines >=========-------------------
   // | Methods for creating and sending transactions in different modes        |
   // ---------------------------------------------------------------------------
