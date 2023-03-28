@@ -1,4 +1,4 @@
-import { ProverMode, Pools, SnarkConfigParams, Chains, Pool, ClientConfig, AcccountConfig } from './config';
+import { ProverMode, Pools, SnarkConfigParams, Chains, Pool, ClientConfig, AccountConfig, accountId } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature, bufToHex
         } from './utils';
@@ -63,26 +63,20 @@ export interface FeeAmount { // all values are in Gwei
 }
 
 export class ZkBobClient extends ZkBobAccountlessClient {
+  // States for the current account in the different pools
   private zpStates: { [poolAlias: string]: ZkBobState } = {};
-  private worker: any;  // The single worker for the all pools
-  private config: ClientConfig;
-  
-  //private updateStatePromise: Promise<boolean> | undefined;
-  //private syncStats: SyncStat[] = [];
-  //private skipColdStorage: boolean = false;
-  
-  // Active account config. It can be undefined util usser isn't login
+  // Holds gift cards temporary states (id - gift card unique ID based on sk and pool)
+  private auxZpStates: { [id: string]: ZkBobState } = {};
+  // The single worker for the all pools
+  private worker: any;
+  // Active account config. It can be undefined util user isn't login
   // If it's undefined the ZkBobClient acts as accountless client
   // (client-oriented methods will throw error)
-  private account: AcccountConfig | undefined;
+  private account: AccountConfig | undefined;
 
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
   private jobsMonitors  = new Map<string, Promise<JobInfo>>();
-
-  // State self-healing
-  //private rollbackAttempts = 0;
-  //private wipeAttempts = 0;
 
   private constructor(pools: Pools, chains: Chains, initialPool: string, supportId: string | undefined) {
     super(pools, chains, initialPool, supportId);
@@ -129,7 +123,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
     client.zpStates = {};
     client.worker = worker;
-    client.config = config;
     
     return client;
   }
@@ -137,6 +130,11 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   private async free(): Promise<void> {
     for (const poolName of Object.keys(this.zpStates)) {
       this.freePoolState(poolName);
+    }
+
+    for (const accId of Object.keys(this.auxZpStates)) {
+      await this.auxZpStates[accId].free();
+      delete this.auxZpStates[accId];
     }
   }
 
@@ -149,7 +147,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
 
 
-  public async login(account: AcccountConfig) {
+  public async login(account: AccountConfig) {
     this.account = account;
     await this.switchToPool(account.pool, account.birthindex);
     try {
@@ -303,6 +301,37 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     }
 
     return confirmedBalance + pendingDelta;
+  }
+
+  // `giftCardAccount` fields should be set with the gift card associated properties
+  // (sk, birthIndex, pool)
+  public async giftCardBalance(giftCardAcc: AccountConfig): Promise<bigint> {
+    const accId = accountId(giftCardAcc);
+    if (!this.auxZpStates[accId]) {
+      // create gift-card auxiliary state if needed
+      const networkName = this.networkName(giftCardAcc.pool);
+      const chainId = this.pool(giftCardAcc.pool).chainId;
+      const giftCardState = await ZkBobState.createNaked(giftCardAcc.sk, giftCardAcc.birthindex, networkName, chainId, this.worker);
+
+      // state will be removed after gift card redemption or on logout
+      this.auxZpStates[accId] = giftCardState;
+    }
+
+    // update gift card state
+    const giftCardState = this.auxZpStates[accId];
+    const relayer = this.relayer(giftCardAcc.pool);
+    const readyToTransact = await giftCardState.updateState(
+      relayer,
+      async (index) => (await this.getPoolState(index, giftCardAcc.pool)).root,
+      await this.coldStorageConfig(giftCardAcc.pool),
+      this.coldStorageBaseURL(giftCardAcc.pool),
+    );
+    if (!readyToTransact) {
+      console.warn(`Gift card account isn't ready to transact right now. Please try again`);
+    }
+    
+    // get gift-card balance
+    return giftCardState.getTotalBalance();
   }
 
   // Get history records
@@ -840,12 +869,49 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
   // Transfer shielded tokens from the another account to the current account
   // It's suitable for gift-cards redeeming
-  public async transferFrom(
-    sk: Uint8Array, //source account spending key
-    amountGwei: bigint,
-    feeGwei: bigint = BigInt(0),
-  ): Promise<string> {
-    return "TODO";
+  // NOTE: for simplicity we assume the multitransfer doesn't applicable for gift-cards
+  // (i.e. any redemption can be done in a single transaction)
+  public async redeemGiftCarg(giftCardAcc: AccountConfig): Promise<string> {
+    if (!this.account) {
+      throw new InternalError(`Cannot redeem gift card to the uninitialized account`);
+    }
+    if (giftCardAcc.pool != this.curPool) {
+      throw new InternalError(`Cannot redeem gift card due to unsuitable pool (gift-card pool: ${giftCardAcc.pool}, current pool: ${this.curPool})`);
+    }
+    
+    const accId = accountId(giftCardAcc);
+    const giftCardBalance = await this.giftCardBalance(giftCardAcc);
+    const fee = await this.atomicTxFee();
+    const minTxAmount = await this.minTxAmount();
+    if (giftCardBalance - fee < minTxAmount) {
+      throw new TxInsufficientFundsError(minTxAmount + fee, giftCardBalance)
+    }
+
+    const redeemAmount = giftCardBalance - fee; // full redemption
+    const dstAddr = await this.generateAddress(); // getting address from the current account
+    const oneTx: ITransferData = {
+      outputs: [{to: dstAddr, amount: `${redeemAmount}`}],
+      fee: fee.toString(),
+    };
+    const giftCardState = this.auxZpStates[accId];
+    const txData = await giftCardState.createTransferOptimistic(oneTx, undefined);
+
+    const startProofDate = Date.now();
+    const txProof: Proof = await this.proveTx(txData.public, txData.secret);
+    const proofTime = (Date.now() - startProofDate) / 1000;
+    console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
+
+    const transaction = {memo: txData.memo, proof: txProof, txType: TxType.Transfer};
+
+    const relayer = this.relayer();
+    const jobId = await relayer.sendTransactions([transaction]);
+    this.startJobMonitoring(jobId);
+
+    // forget the gift card state after tx sending
+    this.auxZpStates[accId].free();
+    delete this.auxZpStates[accId];
+
+    return jobId;
   }
 
   // DEPRECATED. Please use depositPermittableV2 method instead
@@ -1237,7 +1303,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       async (index) => (await this.getPoolState(index, poolAlias)).root,
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
-      );
+    );
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------

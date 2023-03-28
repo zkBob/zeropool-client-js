@@ -1,3 +1,6 @@
+import { bufToHex } from "./utils";
+import { hash } from 'tweetnacl';
+
 export interface Config {
   snarkParams: SnarkConfigParams;
   wasmPath: string;
@@ -53,7 +56,7 @@ export interface ClientConfig {
   forcedMultithreading: boolean | undefined;
 }
 
-export interface AcccountConfig {
+export interface AccountConfig {
   // Spending key for the account
   sk: Uint8Array;
   // Initial (current) pool alias (e.g. 'BOB-Polygon' or 'BOB-Optimism')
@@ -65,4 +68,10 @@ export interface AcccountConfig {
   birthindex: number | undefined;
   // Current prover mode (local, delegated, delegated with fallback)
   proverMode: ProverMode;
+}
+
+// Create account unique ID based on the pool and spending key
+export function accountId(acc: AccountConfig): string {
+  const userId = bufToHex(hash(acc.sk)).slice(0, 32);
+  return `${acc.pool}.${userId}`;
 }

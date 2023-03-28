@@ -204,6 +204,7 @@ export class ZkBobState {
 
   public async free(): Promise<void> {
     await this.worker.free(this.stateId);
+    this.sk.fill(0);
   }
 
   public async generateAddress(): Promise<string> {
@@ -263,6 +264,7 @@ export class ZkBobState {
     return this.updateStatePromise;
   }
 
+  // returns is ready to transact
   private async updateStateOptimisticWorker(
     relayer: ZkBobRelayer,
     getPoolRoot: (index: bigint) => Promise<bigint>,
