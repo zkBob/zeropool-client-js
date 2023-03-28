@@ -29,7 +29,7 @@ export interface Pool {
   tokenAddress: string,
   relayerUrls: string[];
   delegatedProverUrls: string[];
-  coldStorageConfigPath: string;
+  coldStorageConfigPath?: string;
 }
 
 export enum ProverMode {

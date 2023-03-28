@@ -1,6 +1,7 @@
 export { TreeNode } from 'libzkbob-rs-wasm-web';
 export { ZkBobAccountlessClient, PoolLimits, TreeState } from './client-base';
-export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount, SyncStat } from './client';
+export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount } from './client';
+export { SyncStat } from './state';
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history'
 export { EphemeralAddress, EphemeralPool } from './ephemeral'

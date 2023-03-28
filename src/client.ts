@@ -1,18 +1,14 @@
 import { ProverMode, Pools, SnarkConfigParams, Chains, Pool, ClientConfig, AcccountConfig } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
-          toTwosComplementHex, addressFromSignature,
-          isRangesIntersected, bufToHex
+          toTwosComplementHex, addressFromSignature, bufToHex
         } from './utils';
-import { ZkBobState } from './state';
+import { SyncStat, ZkBobState } from './state';
 import { TxType } from './tx';
 import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
 import { EphemeralAddress } from './ephemeral';
-import { 
-  Proof, DecryptedMemo, ITransferData, IWithdrawData,
-  ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, IndexedTx, TreeNode
-} from 'libzkbob-rs-wasm-web';
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode } from 'libzkbob-rs-wasm-web';
 import { 
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
@@ -22,31 +18,14 @@ import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-u
 import { isAddress } from 'web3-utils';
 import { JobInfo, ZkBobRelayer } from './services/relayer';
 import { TreeState, ZkBobAccountlessClient } from './client-base';
-import { FileCache } from './file-cache';
 import { wrap } from 'comlink';
-import { defaultHeaders, fetchJson, ServiceType } from './services/common';
 import { ZkBobDelegatedProver } from './services/prover';
 
-const LOG_STATE_HOTSYNC = false;
-
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
+const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
-const BATCH_SIZE = 1000;
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
-const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
-const CORRUPT_STATE_ROLLBACK_ATTEMPTS = 2; // number of state restore attempts (via rollback)
-const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via wipe)
-const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
-const MIN_TX_COUNT_FOR_STAT = 10;
-
-export interface BatchResult {
-  txCount: number;
-  maxMinedIndex: number;
-  maxPendingIndex: number;
-  state: Map<number, StateUpdate>;  // key: first tx index, 
-                                    // value: StateUpdate object (notes, accounts, leafs and comminments)
-}
 
 // Transfer destination + amount
 // Used as input in `transferMulti` method
@@ -83,35 +62,15 @@ export interface FeeAmount { // all values are in Gwei
   insufficientFunds: boolean; // true when the local balance is insufficient for requested tx amount
 }
 
-// Used to collect state synchronization statistic
-// It could be helpful to monitor average sync time
-export interface SyncStat {
-  txCount: number;  // total txs count (relayer + CDN)
-  cdnTxCnt: number; // number of transactions fetched in binary format from CDN (cold storage)
-  decryptedLeafs: number; // deposit/withdrawal = 1 leaf,
-                          // transfer = 1 + notes_cnt leafs
-  fullSync: boolean;  // true in case of bulding full Merkle tree on the client
-
-  totalTime: number; // msec
-  timePerTx: number;  // msec
-}
-
-export interface PartialSyncResult {
-  txCount: number;  // total txs count (relayer + CDN)
-  decryptedLeafs: number; // deposit/withdrawal = 1 leaf,
-                          // transfer = 1 + notes_cnt leafs
-  firstIndex: number; // first index of the synced range
-  nextIndex: number;  // index after synced range
-  totalTime: number; // msec
-}
-
 export class ZkBobClient extends ZkBobAccountlessClient {
   private zpStates: { [poolAlias: string]: ZkBobState } = {};
   private worker: any;  // The single worker for the all pools
   private config: ClientConfig;
-  private updateStatePromise: Promise<boolean> | undefined;
-  private syncStats: SyncStat[] = [];
-  private skipColdStorage: boolean = false;
+  
+  //private updateStatePromise: Promise<boolean> | undefined;
+  //private syncStats: SyncStat[] = [];
+  //private skipColdStorage: boolean = false;
+  
   // Active account config. It can be undefined util usser isn't login
   // If it's undefined the ZkBobClient acts as accountless client
   // (client-oriented methods will throw error)
@@ -122,8 +81,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   private jobsMonitors  = new Map<string, Promise<JobInfo>>();
 
   // State self-healing
-  private rollbackAttempts = 0;
-  private wipeAttempts = 0;
+  //private rollbackAttempts = 0;
+  //private wipeAttempts = 0;
 
   private constructor(pools: Pools, chains: Chains, initialPool: string, supportId: string | undefined) {
     super(pools, chains, initialPool, supportId);
@@ -208,7 +167,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // Swithing to the another pool without logout with the same spending key
   // Also available before login (just switch pool to use the instance as an accoutless client)
   public async switchToPool(poolAlias: string, birthindex?: number) {
-    this.freePoolState(poolAlias);
+    // remove currently activated state if exist [to reduce memory consumption]
+    this.freePoolState(this.curPool);
 
     // the following values should be available even in case of accountless client => get it to exclude any throws
     const pool = this.pool(poolAlias);
@@ -222,20 +182,9 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     const newPoolAlias = super.currentPool()
 
     if (this.account) {
-      // waiting for ongoing processes
-      if (this.updateStatePromise) {
-        await this.updateStatePromise;
-        this.updateStatePromise = undefined;
-      }
       this.monitoredJobs.clear();
       await Promise.all(this.jobsMonitors.values());
       this.jobsMonitors.clear();
-    
-      // reset variables
-      this.syncStats = [];
-      this.skipColdStorage = false;
-      this.rollbackAttempts = this.wipeAttempts = 0;
-
 
       this.account.pool = newPoolAlias;
       this.account.birthindex = birthindex;
@@ -256,7 +205,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
         }
       }
 
-      this.zpStates[newPoolAlias] = await ZkBobState.create(this.account.sk, networkName, network.getRpcUrl(), denominator, poolId, pool.tokenAddress, this.worker, pool.coldStorageConfigPath);
+      this.zpStates[newPoolAlias] = await ZkBobState.create(this.account.sk, this.account.birthindex, networkName, network.getRpcUrl(), denominator, poolId, pool.tokenAddress, this.worker);
 
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {
@@ -362,7 +311,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       await this.updateState();
     }
 
-    return await this.zpState().history.getAllHistory((addr) => this.isMyAddress(addr));
+    return await this.zpState().history?.getAllHistory((addr) => this.isMyAddress(addr)) ?? [];
   }
 
   // ------------------=========< Service Routines >=========-------------------
@@ -486,14 +435,14 @@ export class ZkBobClient extends ZkBobAccountlessClient {
         } else if (job.state === 'failed')  {
           // [TERMINAL STATE] Transaction was failed during relayer's verification
           const relayerReason = job.failedReason ?? 'unknown reason';
-          state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
+          state.history?.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
           console.info(`JobMonitoring: ${jobDescr} was discarded by relayer with reason '${relayerReason}'`);
           break;
         } else if (job.state === 'sent') {
           // Tx should appear in the optimistic state with current txHash
           if (job.txHash) {
             if (lastTxHash != job.txHash) {
-              state.history.setTxHashForQueuedTransactions(jobId, job.txHash);
+              state.history?.setTxHashForQueuedTransactions(jobId, job.txHash);
               console.info(`JobMonitoring: ${jobDescr} was ${job.resolvedJobId != jobId ? 'RE' : ''}sent to the pool: ${job.txHash}`);   
             }
           } else {
@@ -513,12 +462,12 @@ export class ZkBobClient extends ZkBobAccountlessClient {
             console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
           }
 
-          state.history.setSentTransactionFailedByPool(jobId, job.txHash ?? '', revertReason);
+          state.history?.setSentTransactionFailedByPool(jobId, job.txHash ?? '', revertReason);
           console.info(`JobMonitoring: ${jobDescr} was reverted on pool with reason '${revertReason}': ${job.txHash}`);
           break;
         } else if (job.state === 'completed') {
           // [TERMINAL STATE] Transaction has been mined successfully and should appear in the regular state
-          state.history.setQueuedTransactionsCompleted(jobId, job.txHash ?? '');
+          state.history?.setQueuedTransactionsCompleted(jobId, job.txHash ?? '');
           if (job.txHash) {
             console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
           } else {
@@ -554,6 +503,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     const pool = this.pool();
     const relayer = this.relayer();
     const state = this.zpState();
+    const denominator = await this.denominator();
 
     const minTx = await this.minTxAmount();
     if (amountGwei < minTx) {
@@ -579,7 +529,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       });
 
       // permittable deposit signature should be calculated for the typed data
-      const value = (amountGwei + feeGwei) * state.denominator;
+      const value = (amountGwei + feeGwei) * denominator;
       const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
       let signature = truncateHexPrefix(await signTypedData(BigInt(deadline), value, salt));
       if (this.network(this.curPool).isSignatureCompact()) {
@@ -612,7 +562,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       // Checking the depositor's token balance before sending tx
       let balance;
       try {
-        balance = (await this.network(this.curPool).getTokenBalance(pool.tokenAddress, claimedAddr)) / state.denominator;
+        balance = (await this.network(this.curPool).getTokenBalance(pool.tokenAddress, claimedAddr)) / denominator;
       } catch (err) {
         throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
       }
@@ -627,7 +577,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       // Temporary save transaction in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
       const rec = await HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, '0', true);
-      state.history.keepQueuedTransactions([rec], jobId);
+      state.history?.keepQueuedTransactions([rec], jobId);
 
       return jobId;
 
@@ -686,22 +636,23 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     feeGwei: bigint = BigInt(0),
   ): Promise<string> {
     const state = this.zpState();
-    const fromAddress = await state.ephemeralPool.getEphemeralAddress(ephemeralIndex);
+    const fromAddress = await state.ephemeralPool().getEphemeralAddress(ephemeralIndex);
 
     return this.depositPermittable(amountGwei, async (deadline, value, salt) => {
       const pool = this.pool();
       const state = this.zpState();
+      const denominator = await this.denominator();
 
       // we should check token balance here since the library is fully responsible
       // for ephemeral address in contrast to depositing from external user's address
-      const neededGwei = value / state.denominator;
+      const neededGwei = value / denominator;
       if(fromAddress.tokenBalance < neededGwei) {
         throw new TxInsufficientFundsError(neededGwei, fromAddress.tokenBalance);
       }
 
-      let ephemeralAddress = await state.ephemeralPool.getAddress(ephemeralIndex);
+      let ephemeralAddress = await state.ephemeralPool().getAddress(ephemeralIndex);
       const dataToSign = await this.createPermittableDepositData('1', ephemeralAddress, pool.poolAddress, value, deadline, salt);
-      return await state.ephemeralPool.signTypedData(dataToSign, ephemeralIndex);
+      return await state.ephemeralPool().signTypedData(dataToSign, ephemeralIndex);
     }, fromAddress.address, feeGwei);
   }
 
@@ -767,10 +718,10 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
       if (transfers.length == 0) {
         const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
-        state.history.keepQueuedTransactions([record], jobId);
+        state.history?.keepQueuedTransactions([record], jobId);
       } else {
         const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(addr));
-        state.history.keepQueuedTransactions([record], jobId);
+        state.history?.keepQueuedTransactions([record], jobId);
       }
 
       if (index < (txParts.length - 1)) {
@@ -778,7 +729,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
         // if there are few additional tx, we should collect the optimistic state before processing them
         await this.waitJobTxHash(jobId);
 
-        optimisticState = await this.getNewState();
+        optimisticState = await this.zpState().getNewState(this.relayer(), this.account?.birthindex ?? 0);
       }
     }
 
@@ -869,10 +820,10 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       const ts = Math.floor(Date.now() / 1000);
       if (txType == TxType.Transfer) {
         const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
-        state.history.keepQueuedTransactions([record], jobId);
+        state.history?.keepQueuedTransactions([record], jobId);
       } else {
         const record = await HistoryRecord.withdraw(address, onePart.outNotes[0].amountGwei, onePart.fee, ts, '0', true);
-        state.history.keepQueuedTransactions([record], jobId);
+        state.history?.keepQueuedTransactions([record], jobId);
       }
 
       if (index < (txParts.length - 1)) {
@@ -880,11 +831,21 @@ export class ZkBobClient extends ZkBobAccountlessClient {
         // if there are few additional tx, we should collect the optimistic state before processing them
         await this.waitJobTxHash(jobId);
 
-        optimisticState = await this.getNewState();
+        optimisticState = await this.zpState().getNewState(this.relayer(), this.account?.birthindex ?? 0);
       }
     }
 
     return jobsIds;
+  }
+
+  // Transfer shielded tokens from the another account to the current account
+  // It's suitable for gift-cards redeeming
+  public async transferFrom(
+    sk: Uint8Array, //source account spending key
+    amountGwei: bigint,
+    feeGwei: bigint = BigInt(0),
+  ): Promise<string> {
+    return "TODO";
   }
 
   // DEPRECATED. Please use depositPermittableV2 method instead
@@ -902,6 +863,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     const pool = this.pool();
     const state = this.zpState();
     const relayer = this.relayer();
+    const denominator = await this.denominator();
 
     const minTx = await this.minTxAmount();
     if (amountGwei < minTx) {
@@ -946,7 +908,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     // Checking the depositor's token balance before sending tx
     let balance;
     try {
-      balance = (await this.network(this.curPool).getTokenBalance(pool.tokenAddress, addrFromSig)) / state.denominator;
+      balance = (await this.network(this.curPool).getTokenBalance(pool.tokenAddress, addrFromSig)) / denominator;
     } catch (err) {
       throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
     }
@@ -962,7 +924,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     // Temporary save transaction in the history module (to prevent history delays)
     const ts = Math.floor(Date.now() / 1000);
     const rec = await HistoryRecord.deposit(addrFromSig, amountGwei, feeGwei, ts, '0', true);
-    state.history.keepQueuedTransactions([rec], jobId);
+    state.history?.keepQueuedTransactions([rec], jobId);
 
     return jobId;
   }
@@ -1150,7 +1112,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // | Local and delegated prover support                                       |
   // ----------------------------------------------------------------------------
   public async setProverMode(mode: ProverMode) {
-    // TODO:!!!!!!!
     await super.setProverMode(mode);
     if (mode != ProverMode.Delegated) {
         this.worker.loadTxParams();
@@ -1270,482 +1231,45 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // Request the latest state from the relayer
   // Returns isReadyToTransact flag
   public async updateState(): Promise<boolean> {
-    if (this.updateStatePromise == undefined) {
-      this.updateStatePromise = this.updateStateOptimisticWorker().finally(() => {
-        this.updateStatePromise = undefined;
-      });
-    } else {
-      console.info(`The state currently updating, waiting for finish...`);
-    }
-
-    return this.updateStatePromise;
-  }
-
-  // ---===< TODO >===---
-  // The optimistic state currently processed only in the client library
-  // Wasm package holds only the mined transactions
-  // Currently it's just a workaround
-  private async updateStateOptimisticWorker(): Promise<boolean> {
-    /*if (!this.account) {
-      throw new InternalError('Ca');
-    }*/
-
-    const zpState = this.zpState();
-    const pool = this.pool();
-    const relayer = this.relayer();
-
-    let startIndex = Number(await zpState.getNextIndex());
-
-    const stateInfo = await relayer.info();
-    const nextIndex = Number(stateInfo.deltaIndex);
-    const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
-
-    let readyToTransact = true;
-
-    if (optimisticIndex > startIndex) {
-      // Use partial tree loading if possible
-      let birthindex = this.account?.birthindex ?? 0;
-      if (birthindex >= Number(stateInfo.deltaIndex)) {
-        // we should grab almost one transaction from the regular state
-        birthindex = Number(stateInfo.deltaIndex) - OUTPLUSONE;
-      }
-      let siblings: TreeNode[] | undefined;
-      if (startIndex == 0 && birthindex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE)) {
-        try {
-          siblings = await relayer.siblings(birthindex);
-          console.log(`🍰[PartialSync] got ${siblings.length} sibling(s) for index ${birthindex}`);
-          startIndex = birthindex;
-        } catch (err) {
-          console.warn(`🍰[PartialSync] cannot retrieve siblings: ${err}`);
-        }
-      }
-
-      // Try to using the cold storage
-      const coldResult = await this.loadColdStorageTxs(startIndex);
-
-      const curStat: SyncStat = {
-        txCount: (optimisticIndex - startIndex) / OUTPLUSONE,
-        cdnTxCnt: coldResult.txCount,
-        decryptedLeafs: coldResult.decryptedLeafs,
-        fullSync: startIndex == 0 ? true : false,
-        totalTime: coldResult.totalTime,
-        timePerTx: 0,
-      };
-
-      // change hot sync position
-      startIndex = coldResult.nextIndex;
-      console.log(`🔥[HotSync] fetching transactions between ${startIndex} and ${optimisticIndex}...`);
-      const startTime = Date.now();
-
-      const batches: Promise<BatchResult>[] = [];
-      for (let i = startIndex; i <= optimisticIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
-        const oneBatch = relayer.fetchTransactionsOptimistic(BigInt(i), BATCH_SIZE).then( async txs => {
-          console.log(`🔥[HotSync] got ${txs.length} transactions from index ${i}`);
-
-          const batchState = new Map<number, StateUpdate>();
-          
-          const txHashes: Record<number, string> = {};
-          const indexedTxs: IndexedTx[] = [];
-
-          const txHashesPending: Record<number, string> = {};
-          const indexedTxsPending: IndexedTx[] = [];
-
-          let maxMinedIndex = -1;
-          let maxPendingIndex = -1;
-
-          for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-            const tx = txs[txIdx];
-            const memo_idx = i + txIdx * OUTPLUSONE; // Get the first leaf index in the tree
-            
-            // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
-            const memo = tx.slice(129); // Skip mined flag, txHash and commitment
-            const commitment = tx.slice(65, 129)
-
-            const indexedTx: IndexedTx = {
-              index: memo_idx,
-              memo: memo,
-              commitment: commitment,
-            }
-
-            // 3. Get txHash
-            const txHash = tx.slice(1, 65);
-
-            // 4. Get mined flag
-            if (tx.slice(0, 1) === '1') {
-              indexedTxs.push(indexedTx);
-              txHashes[memo_idx] = '0x' + txHash;
-              maxMinedIndex = Math.max(maxMinedIndex, memo_idx);
-            } else {
-              indexedTxsPending.push(indexedTx);
-              txHashesPending[memo_idx] = '0x' + txHash;
-              maxPendingIndex = Math.max(maxPendingIndex, memo_idx);
-            }
-          }
-
-          if (indexedTxs.length > 0) {
-            const parseResult: ParseTxsResult = await this.worker.parseTxs(this.account?.sk, indexedTxs);
-            const decryptedMemos = parseResult.decryptedMemos;
-            batchState.set(i, parseResult.stateUpdate);
-            if (LOG_STATE_HOTSYNC) {
-              this.logStateSync(i, i + txs.length * OUTPLUSONE, decryptedMemos);
-            }
-            for (let decryptedMemoIndex = 0; decryptedMemoIndex < decryptedMemos.length; ++decryptedMemoIndex) {
-              // save memos corresponding to the our account to restore history
-              const myMemo = decryptedMemos[decryptedMemoIndex];
-              myMemo.txHash = txHashes[myMemo.index];
-              zpState.history.saveDecryptedMemo(myMemo, false);
-            }
-          }
-
-          if (indexedTxsPending.length > 0) {
-            const parseResult: ParseTxsResult = await this.worker.parseTxs(this.account?.sk, indexedTxsPending);
-            const decryptedPendingMemos = parseResult.decryptedMemos;
-            for (let idx = 0; idx < decryptedPendingMemos.length; ++idx) {
-              // save memos corresponding to the our account to restore history
-              const myMemo = decryptedPendingMemos[idx];
-              myMemo.txHash = txHashesPending[myMemo.index];
-              zpState.history.saveDecryptedMemo(myMemo, true);
-
-              if (myMemo.acc != undefined) {
-                // There is a pending transaction initiated by ourselfs
-                // So we cannot create new transactions in that case
-                readyToTransact = false;
-              }
-            }
-          }
-
-          return {txCount: txs.length, maxMinedIndex, maxPendingIndex, state: batchState} ;
-        });
-        batches.push(oneBatch);
-      };
-
-      const totalState = new Map<number, StateUpdate>();
-      const initRes: BatchResult = {txCount: 0, maxMinedIndex: -1, maxPendingIndex: -1, state: totalState};
-      const totalRes = (await Promise.all(batches)).reduce((acc, cur) => {
-        return {
-          txCount: acc.txCount + cur.txCount,
-          maxMinedIndex: Math.max(acc.maxMinedIndex, cur.maxMinedIndex),
-          maxPendingIndex: Math.max(acc.maxPendingIndex, cur.maxPendingIndex),
-          state: new Map([...Array.from(acc.state.entries()), ...Array.from(cur.state.entries())]),
-        }
-      }, initRes);
-
-      const idxs = [...totalRes.state.keys()].sort((i1, i2) => i1 - i2);
-      for (const idx of idxs) {
-        const oneStateUpdate = totalRes.state.get(idx);
-        if (oneStateUpdate !== undefined) {
-          try {
-            await zpState.updateState(oneStateUpdate, siblings);
-          } catch (err) {
-            const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
-            console.warn(`🔥[HotSync] cannot update state from index ${idx}${siblingsDescr}`);
-            if (siblings != undefined) {
-              // if we try to update state with siblings and got an error - do not use partial sync again
-              this.account!.birthindex = undefined;
-            }
-            throw new InternalError(`Unable to synchronize pool state`);
-          }
-
-          curStat.decryptedLeafs += oneStateUpdate.newLeafs.length;
-        } else {
-          throw new InternalError(`Cannot find state batch at index ${idx}`);
-        }
-      }
-
-      // remove unneeded pending records
-      zpState.history.setLastMinedTxIndex(totalRes.maxMinedIndex);
-      zpState.history.setLastPendingTxIndex(totalRes.maxPendingIndex);
-
-
-      const hotSyncTime = Date.now() - startTime;
-      const hotSyncTimePerTx = hotSyncTime / totalRes.txCount;
-
-      curStat.txCount = totalRes.txCount + coldResult.txCount;
-      curStat.cdnTxCnt = coldResult.txCount;
-      curStat.totalTime = hotSyncTime + coldResult.totalTime;
-      curStat.timePerTx = curStat.totalTime / curStat.txCount;
-
-      // save relevant stats only
-      if (curStat.txCount >= MIN_TX_COUNT_FOR_STAT) {
-        this.syncStats.push(curStat);
-      }
-
-
-      console.log(`🔥[HotSync] finished in ${hotSyncTime / 1000} sec | ${totalRes.txCount} tx, avg speed ${hotSyncTimePerTx.toFixed(1)} ms/tx`);
-      if (coldResult.txCount > 0) {
-        console.log(`🧊🔥[TotalSync] finished in ${curStat.totalTime / 1000} sec | ${curStat.txCount} tx, avg speed ${curStat.timePerTx.toFixed(1)} ms/tx`);
-      }
-    } else {
-      zpState.history.setLastMinedTxIndex(nextIndex - OUTPLUSONE);
-      zpState.history.setLastPendingTxIndex(-1);
-
-      console.log(`Local state is up to date @${startIndex}`);
-    }
-
-    // Self-healing code
-    const checkIndex = await zpState.getNextIndex();
-    const stableIndex = await zpState.lastVerifiedIndex();
-    if (checkIndex != stableIndex) {
-      const isStateCorrect = await this.verifyState();
-      if (!isStateCorrect) {
-        console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
-        if (stableIndex > 0 && stableIndex < checkIndex &&
-          this.rollbackAttempts < CORRUPT_STATE_ROLLBACK_ATTEMPTS
-        ) {
-          let realRollbackIndex = await zpState.rollback(stableIndex);
-          console.log(`🚑[StateVerify] The user state was rollbacked to index ${realRollbackIndex} [attempt ${this.rollbackAttempts + 1}]`);
-          this.rollbackAttempts++;
-        } else if (this.wipeAttempts < CORRUPT_STATE_WIPE_ATTEMPTS) {
-          await zpState.clean();
-          console.log(`🚑[StateVerify] Full user state was wiped [attempt ${this.wipeAttempts + 1}]...`);
-
-          if(this.rollbackAttempts > 0) {
-            // If the first wipe has no effect
-            // reset account birthday if presented
-            this.account!.birthindex = undefined;
-          }
-
-          this.wipeAttempts++;
-        } else {
-          throw new InternalError(`Unable to synchronize pool state`);
-        }
-
-        // resync the state
-        return await this.updateStateOptimisticWorker();
-      } else {
-        this.rollbackAttempts = 0;
-        this.wipeAttempts = 0;
-      }
-    }
-
-    return readyToTransact;
-  }
-
-  // Just fetch and process the new state without local state updating
-  // Return StateUpdate object
-  // This method used for multi-tx
-  public async getNewState(): Promise<StateUpdate> {
-    const relayer = this.relayer();
-    const zpState = this.zpState();
-
-    const startIndex = await zpState.getNextIndex();
-
-    const stateInfo = await relayer.info();
-    const optimisticIndex = BigInt(stateInfo.optimisticDeltaIndex);
-
-    if (optimisticIndex > startIndex) {
-      const startTime = Date.now();
-      
-      console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
-
-      const numOfTx = Number((optimisticIndex - startIndex) / BigInt(OUTPLUSONE));
-      const stateUpdate = relayer.fetchTransactionsOptimistic(startIndex, numOfTx).then( async txs => {
-        console.log(`Getting ${txs.length} transactions from index ${startIndex}`);
-        
-        const indexedTxs: IndexedTx[] = [];
-
-        for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-          const tx = txs[txIdx];
-          // Get the first leaf index in the tree
-          const memo_idx = Number(startIndex) + txIdx * OUTPLUSONE;
-          
-          // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
-          // 1. Extract memo block
-          const memo = tx.slice(129); // Skip mined flag, txHash and commitment
-
-          // 2. Get transaction commitment
-          const commitment = tx.slice(65, 129)
-          
-          const indexedTx: IndexedTx = {
-            index: memo_idx,
-            memo: memo,
-            commitment: commitment,
-          }
-
-          // 3. add indexed tx
-          indexedTxs.push(indexedTx);
-        }
-
-        const parseResult: ParseTxsResult = await this.worker.parseTxs(this.account?.sk, indexedTxs);
-
-        return parseResult.stateUpdate;
-      });
-
-      const msElapsed = Date.now() - startTime;
-      const avgSpeed = msElapsed / numOfTx;
-
-      console.log(`Fetch finished in ${msElapsed / 1000} sec | ${numOfTx} tx, avg speed ${avgSpeed.toFixed(1)} ms/tx`);
-
-      return stateUpdate;
-    } else {
-      console.log(`Do not need to fetch @${startIndex}`);
-
-      return {newLeafs: [], newCommitments: [], newAccounts: [], newNotes: []};
-    }
-  }
-
-  public async logStateSync(startIndex: number, endIndex: number, decryptedMemos: DecryptedMemo[]) {
-    for (const decryptedMemo of decryptedMemos) {
-      if (decryptedMemo.index > startIndex) {
-        console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${decryptedMemo.index - OUTPLUSONE})`);
-      }
-      startIndex = decryptedMemo.index + OUTPLUSONE; 
-
-      if (decryptedMemo.acc) {
-        console.info(`📝 Adding account, notes, and hashes to state (at index ${decryptedMemo.index})`);
-      } else {
-        console.info(`📝 Adding notes and hashes to state (at index ${decryptedMemo.index})`);
-      }
-    }
-
-    if (startIndex < endIndex) {
-      console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${endIndex - OUTPLUSONE})`);
-    }
-  }
-
-  // returns false when the local state is inconsistent
-  private async verifyState(): Promise<boolean> {
-    const zpState = this.zpState();
-    const pool = this.pool();
-
-    const checkIndex = await zpState.getNextIndex();
-    const localRoot = await zpState.getRoot();
-    const poolRoot =  (await this.network(this.curPool).poolState(pool.poolAddress, checkIndex)).root;
-
-    if (localRoot == poolRoot) {
-      await zpState.setLastVerifiedIndex(checkIndex);
-      
-      return true;
-    }
-
-    return false;
-  }
-
-  private async loadColdStorageTxs(fromIndex?: number, toIndex?: number): Promise<PartialSyncResult> {
-    const pool = this.pool();
-    const zpState = this.zpState();
-
-    const startRange = fromIndex ?? 0;  // inclusively
-    const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
-
-    const syncResult: PartialSyncResult = {
-      txCount: 0,
-      decryptedLeafs: 0,
-      firstIndex: startRange,
-      nextIndex: startRange,
-      totalTime: 0,
-    };
-
-    const coldConfig = zpState.coldStorageConfig;
-    if (coldConfig) {
-      const actualRangeStart = Math.max(startRange, Number(coldConfig.index_from));
-      const actualRangeEnd = Math.min(endRange, Number(coldConfig.next_index));
-
-      if (this.skipColdStorage == false &&
-          (startRange % OUTPLUSONE) == 0 && 
-          (endRange % OUTPLUSONE) == 0 &&
-          isRangesIntersected(startRange, endRange, Number(coldConfig.index_from), Number(coldConfig.next_index)) &&
-          ((actualRangeEnd - actualRangeStart) / OUTPLUSONE) >= COLD_STORAGE_USAGE_THRESHOLD
-      ) {
-        const startTime = Date.now();
-
-        // try get txs from the cold storage
-        try {
-          console.log(`🧊[ColdSync] loading txs up to index ${zpState.coldStorageConfig.next_index}...`);
-          const coldStorageBaseAddr = pool.coldStorageConfigPath.substring(0, pool.coldStorageConfigPath.lastIndexOf('/'));
-          const promises = zpState.coldStorageConfig.bulks
-            .filter(aBulk => {
-              return isRangesIntersected(actualRangeStart, actualRangeEnd, Number(aBulk.index_from), Number(aBulk.next_index))
-            })
-            .map(async (bulkInfo) => {
-              let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
-              if (response.ok) {
-                let aBulk = await response.arrayBuffer();
-                if (aBulk.byteLength == bulkInfo.bytes) {
-                  console.log(`🧊[ColdSync] got bulk ${bulkInfo.filename} with ${bulkInfo.tx_count} txs (${bulkInfo.bytes} bytes)`);
-
-                  return new Uint8Array(aBulk);
-                }
-
-                //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: got ${aBulk.byteLength} bytes, expected ${bulkInfo.bytes} bytes`);
-                //return new Uint8Array();
-                throw new InternalError(`Cold storage corrupted (invalid file size: ${aBulk.byteLength})`)
-              } else {
-                //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: response code ${response.status} (${response.statusText})`);
-                //return new Uint8Array();
-                throw new InternalError(`Couldn't load cold storage (invalid response code: ${response.status})`)
-              }
-            });
-          
-          let bulksData = (await Promise.all(promises)).filter(data => data.length > 0);
-          
-
-          let result: ParseTxsColdStorageResult = await zpState.updateStateColdStorage(bulksData, BigInt(actualRangeStart), BigInt(actualRangeEnd));
-          result.decryptedMemos.forEach((aMemo) => {
-            zpState.history.saveDecryptedMemo(aMemo, false);
-          });
-
-
-          syncResult.txCount = result.txCnt;
-          syncResult.decryptedLeafs = result.decryptedLeafsCnt;
-          syncResult.firstIndex = actualRangeStart;
-          syncResult.nextIndex = actualRangeEnd;
-          syncResult.totalTime = Date.now() - startTime;
-          
-          const isStateCorrect = await this.verifyState();
-          if (!isStateCorrect) {
-            console.warn(`🧊[ColdSync] Merkle tree root at index ${await zpState.getNextIndex()} mistmatch! Wiping the state...`);
-            await zpState.clean();  // rollback to 0
-            this.skipColdStorage = true;  // prevent cold storage usage
-
-            syncResult.txCount = 0;
-            syncResult.decryptedLeafs = 0;
-            syncResult.firstIndex = 0;
-            syncResult.nextIndex = 0;
-          } else {
-            console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
-            console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
-          }
-          
-        } catch (err) {
-          console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
-        }
-      }
-    }
-
-    return syncResult;
+    const poolAlias = this.curPool;
+    return await this.zpState().updateState(
+      this.relayer(),
+      async (index) => (await this.getPoolState(index, poolAlias)).root,
+      await this.coldStorageConfig(),
+      this.coldStorageBaseURL(),
+      );
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------
   // | Getting internal native accounts (for multisig implementation)              |
   // -------------------------------------------------------------------------------
   public async getEphemeralAddress(index: number): Promise<EphemeralAddress> {
-    const ephPool = this.zpState().ephemeralPool;
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getEphemeralAddress(index);
   }
 
   public async getNonusedEphemeralIndex(): Promise<number> {
-    const ephPool = this.zpState().ephemeralPool;
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getNonusedEphemeralIndex();
   }
 
   public async getUsedEphemeralAddresses(): Promise<EphemeralAddress[]> {
-    const ephPool = this.zpState().ephemeralPool;
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getUsedEphemeralAddresses();
   }
 
   public async getEphemeralAddressInTxCount(index: number): Promise<number> {
-    const ephPool = this.zpState().ephemeralPool;
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getEphemeralAddressInTxCount(index);
   }
 
   public async getEphemeralAddressOutTxCount(index: number): Promise<number> {
-    const ephPool = this.zpState().ephemeralPool;
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getEphemeralAddressOutTxCount(index);
   }
 
   public getEphemeralAddressPrivateKey(index: number): string {
-    const ephPool = this.zpState().ephemeralPool;
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getEphemeralAddressPrivateKey(index);
   }
 
@@ -1753,7 +1277,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // | Calculating sync time                                                 |
   // -------------------------------------------------------------------------
   public getStatFullSync(): SyncStat | undefined {
-    for (const aStat of this.syncStats) {
+    const stats = this.zpState().syncStatistics();
+    for (const aStat of stats) {
       if (aStat.fullSync) {
         return aStat;
       }
@@ -1764,8 +1289,9 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
   // in milliseconds
   public getAverageTimePerTx(): number | undefined {
-    if (this.syncStats.length > 0) {
-      return this.syncStats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / this.syncStats.length;
+    const stats = this.zpState().syncStatistics();
+    if (stats.length > 0) {
+      return stats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / stats.length;
     }
 
     return undefined; // relevant stat doesn't found

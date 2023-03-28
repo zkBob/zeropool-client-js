@@ -6,6 +6,7 @@ import { NetworkBackend } from "./networks/network";
 import { ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/prover";
 import { LimitsFetch, ZkBobRelayer } from "./services/relayer";
+import { ColdStorageConfig } from "./coldstorage";
 
 const LIB_VERSION = require('../package.json').version;
 
@@ -55,14 +56,15 @@ export interface ChainConfig {
 }
 
 export class ZkBobAccountlessClient {
-    private chains:       { [chainId: string]: ChainConfig } = {};
-    private pools:        { [name: string]: Pool } = {};
-    private relayers:     { [name: string]: ZkBobRelayer } = {};
-    private provers:      { [name: string]: ZkBobDelegatedProver } = {};
-    private proverModes:  { [name: string]: ProverMode } = {};
-    private denominators: { [name: string]: bigint } = {};
-    private poolIds:      { [name: string]: number } = {};
-    private relayerFee:   { [name: string]: RelayerFeeFetch } = {};
+    private chains:         { [chainId: string]: ChainConfig } = {};
+    private pools:          { [name: string]: Pool } = {};
+    private relayers:       { [name: string]: ZkBobRelayer } = {};
+    private provers:        { [name: string]: ZkBobDelegatedProver } = {};
+    private proverModes:    { [name: string]: ProverMode } = {};
+    private denominators:   { [name: string]: bigint } = {};
+    private poolIds:        { [name: string]: number } = {};
+    private relayerFee:     { [name: string]: RelayerFeeFetch } = {};
+    private coldStorageCfg: { [name: string]: ColdStorageConfig } = {};
     protected supportId: string | undefined;
 
     // The current pool alias should always be set to ability few accountless operations
@@ -204,6 +206,36 @@ export class ZkBobAccountlessClient {
         }
 
         return poolId;
+    }
+
+    protected async coldStorageConfig(poolAlias: string | undefined = undefined): Promise<ColdStorageConfig | undefined> {
+        const actualPoolName = poolAlias ?? this.curPool;
+        if (!this.coldStorageCfg[actualPoolName]) {
+            const pool = this.pool(actualPoolName);
+            if (pool.coldStorageConfigPath) {
+                try {
+                    let response = await fetch(pool.coldStorageConfigPath);
+                    let config: ColdStorageConfig = await response.json();
+                    if (config.network.toLowerCase() != this.networkName(actualPoolName).toLowerCase()) {
+                    throw new InternalError('Incorrect cold storage configuration');
+                    }
+                    this.coldStorageCfg[actualPoolName] = config;
+                } catch (err) {
+                    console.error(`Cannot initialize cold storage: ${err}`);
+                }
+            }
+        }
+
+        return this.coldStorageCfg[actualPoolName];
+    }
+
+    protected coldStorageBaseURL(poolAlias: string | undefined = undefined): string | undefined {
+        const pool = this.pool(poolAlias);
+        if (pool.coldStorageConfigPath) {
+            return pool.coldStorageConfigPath.substring(0, pool.coldStorageConfigPath.lastIndexOf('/'));
+        }
+
+        return undefined;
     }
 
     // -------------=========< Converting Amount Routines >=========---------------

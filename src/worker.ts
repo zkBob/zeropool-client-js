@@ -1,3 +1,4 @@
+import { accountBodyToRLP } from '@ethereumjs/util';
 import { expose } from 'comlink';
 import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, TreeNode,
           ITransferData, IDepositData, IWithdrawData, IDepositPermittableData
@@ -8,7 +9,7 @@ import { SnarkParams } from './params';
 let txParams: SnarkParams;
 let treeParams: any;
 let txParser: any;
-let zpAccounts: { [tokenAddress: string]: any } = {};
+let zpAccounts: { [accountId: string]: any } = {};
 let transferVk: any;
 let treeVk: any;
 
@@ -73,111 +74,113 @@ const obj = {
     return result;
   },
 
-  async createAccount(address: string, sk: Uint8Array, networkName: string, poolId: number, userId: string): Promise<void> {
+  // accountId is a unique string depends on network, poolId and sk
+  // The local db will be named with accountId
+  async createAccount(accountId: string, sk: Uint8Array, poolId: number): Promise<void> {
     console.debug('Web worker: createAccount');
     try {
-      const state = await wasm.UserState.init(`zp.${networkName}.${userId}`);
+      const state = await wasm.UserState.init(accountId);
       const acc = new wasm.UserAccount(sk, BigInt(poolId), state);
-      zpAccounts[address] = acc;
+      zpAccounts[accountId] = acc;
     } catch (e) {
       console.error(e);
     }
   },
 
-  async totalBalance(address: string): Promise<string> {
-    return zpAccounts[address].totalBalance();
+  async totalBalance(accountId: string): Promise<string> {
+    return zpAccounts[accountId].totalBalance();
   },
 
-  async accountBalance(address: string): Promise<string> {
-    return zpAccounts[address].accountBalance();
+  async accountBalance(accountId: string): Promise<string> {
+    return zpAccounts[accountId].accountBalance();
   },
 
-  async noteBalance(address: string): Promise<string> {
-    return zpAccounts[address].noteBalance();
+  async noteBalance(accountId: string): Promise<string> {
+    return zpAccounts[accountId].noteBalance();
   },
 
-  async usableNotes(address: string): Promise<any[]> {
-    return zpAccounts[address].getUsableNotes();
+  async usableNotes(accountId: string): Promise<any[]> {
+    return zpAccounts[accountId].getUsableNotes();
   },
 
-  async isOwnAddress(address: string, shieldedAddress: string): Promise<boolean> {
-    return zpAccounts[address].isOwnAddress(shieldedAddress);
+  async isOwnAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
+    return zpAccounts[accountId].isOwnAddress(shieldedAddress);
   },
 
-  async rawState(address: string): Promise<any> {
-    return zpAccounts[address].getWholeState();
+  async rawState(accountId: string): Promise<any> {
+    return zpAccounts[accountId].getWholeState();
   },
 
-  async free(address: string): Promise<void> {
-    return zpAccounts[address].free();
+  async free(accountId: string): Promise<void> {
+    return zpAccounts[accountId].free();
   },
 
-  async generateAddress(address: string): Promise<string> {
-    return zpAccounts[address].generateAddress();
+  async generateAddress(accountId: string): Promise<string> {
+    return zpAccounts[accountId].generateAddress();
   },
 
-  async createDepositPermittable(address: string, deposit: IDepositPermittableData): Promise<any> {
-    return zpAccounts[address].createDepositPermittable(deposit);
+  async createDepositPermittable(accountId: string, deposit: IDepositPermittableData): Promise<any> {
+    return zpAccounts[accountId].createDepositPermittable(deposit);
   },
 
-  async createTransferOptimistic(address: string, tx: ITransferData, optimisticState: any): Promise<any> {
-    return zpAccounts[address].createTransferOptimistic(tx, optimisticState);
+  async createTransferOptimistic(accountId: string, tx: ITransferData, optimisticState: any): Promise<any> {
+    return zpAccounts[accountId].createTransferOptimistic(tx, optimisticState);
   },
 
-  async createWithdrawalOptimistic(address: string, tx: IWithdrawData, optimisticState: any): Promise<any> {
-    return zpAccounts[address].createWithdrawalOptimistic(tx, optimisticState);
+  async createWithdrawalOptimistic(accountId: string, tx: IWithdrawData, optimisticState: any): Promise<any> {
+    return zpAccounts[accountId].createWithdrawalOptimistic(tx, optimisticState);
   },
 
-  async createDeposit(address: string, deposit: IDepositData): Promise<any> {
-    return zpAccounts[address].createDeposit(deposit);
+  async createDeposit(accountId: string, deposit: IDepositData): Promise<any> {
+    return zpAccounts[accountId].createDeposit(deposit);
   },
 
-  async createTransfer(address: string, transfer: ITransferData): Promise<any> {
-    return zpAccounts[address].createTransfer(transfer);
+  async createTransfer(accountId: string, transfer: ITransferData): Promise<any> {
+    return zpAccounts[accountId].createTransfer(transfer);
   },
 
-  async nextTreeIndex(address: string): Promise<bigint> {
-    return zpAccounts[address].nextTreeIndex();
+  async nextTreeIndex(accountId: string): Promise<bigint> {
+    return zpAccounts[accountId].nextTreeIndex();
   },
 
-  async firstTreeIndex(address: string): Promise<bigint | undefined> {
-    return zpAccounts[address].firstTreeIndex();
+  async firstTreeIndex(accountId: string): Promise<bigint | undefined> {
+    return zpAccounts[accountId].firstTreeIndex();
   },
 
-  async getRoot(address: string): Promise<string> {
-    return zpAccounts[address].getRoot();
+  async getRoot(accountId: string): Promise<string> {
+    return zpAccounts[accountId].getRoot();
   },
 
-  async getRootAt(address: string, index: bigint): Promise<string> {
-    return zpAccounts[address].getRootAt(index);
+  async getRootAt(accountId: string, index: bigint): Promise<string> {
+    return zpAccounts[accountId].getRootAt(index);
   },
 
-  async getLeftSiblings(address: string, index: bigint): Promise<TreeNode[]> {
-    return zpAccounts[address].getLeftSiblings(index);
+  async getLeftSiblings(accountId: string, index: bigint): Promise<TreeNode[]> {
+    return zpAccounts[accountId].getLeftSiblings(index);
   },
 
-  async rollbackState(address: string, index: bigint): Promise<bigint> {
-    return zpAccounts[address].rollbackState(index);
+  async rollbackState(accountId: string, index: bigint): Promise<bigint> {
+    return zpAccounts[accountId].rollbackState(index);
   },
 
-  async wipeState(address: string): Promise<void> {
-    return zpAccounts[address].wipeState();
+  async wipeState(accountId: string): Promise<void> {
+    return zpAccounts[accountId].wipeState();
   },
 
-  async getTreeLastStableIndex(address: string): Promise<bigint> {
-    return zpAccounts[address].treeGetStableIndex();
+  async getTreeLastStableIndex(accountId: string): Promise<bigint> {
+    return zpAccounts[accountId].treeGetStableIndex();
   },
 
-  async setTreeLastStableIndex(address: string, index: bigint): Promise<void> {
-    return zpAccounts[address].treeSetStableIndex(index);
+  async setTreeLastStableIndex(accountId: string, index: bigint): Promise<void> {
+    return zpAccounts[accountId].treeSetStableIndex(index);
   },
 
-  async updateState(address: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
-    return zpAccounts[address].updateState(stateUpdate, siblings);
+  async updateState(accountId: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
+    return zpAccounts[accountId].updateState(stateUpdate, siblings);
   },
 
-  async updateStateColdStorage(address: string, bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<ParseTxsColdStorageResult> {
-    return zpAccounts[address].updateStateColdStorage(bulks, indexFrom, indexTo);
+  async updateStateColdStorage(accountId: string, bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<ParseTxsColdStorageResult> {
+    return zpAccounts[accountId].updateStateColdStorage(bulks, indexFrom, indexTo);
   },
 
   async verifyTxProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
