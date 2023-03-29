@@ -55,6 +55,8 @@ export interface ChainConfig {
     networkName: string;
 }
 
+// Provides base functionality of the zkBob client
+// without attaching the user account
 export class ZkBobAccountlessClient {
     private chains:         { [chainId: string]: ChainConfig } = {};
     private pools:          { [name: string]: Pool } = {};
@@ -69,7 +71,8 @@ export class ZkBobAccountlessClient {
 
     // The current pool alias should always be set to ability few accountless operations
     protected curPool: string;
-
+    
+    // public constructor
     constructor(pools: Pools, chains: Chains, currentPool: string, supportId: string | undefined) {
         this.supportId = supportId;
 
@@ -110,6 +113,10 @@ export class ZkBobAccountlessClient {
         this.curPool = currentPool;
     }
 
+    // --------------=========< Configuration properties >=========----------------
+    // | Chains and pools properties, switching between pools                     |
+    // ----------------------------------------------------------------------------
+
     // get alias of the currently selected pool
     public currentPool(): string {
         return this.curPool;
@@ -120,12 +127,25 @@ export class ZkBobAccountlessClient {
         return Object.keys(this.pools);
     }
 
-    protected switchToPool(poolAlias: string) {
+    // swithing to the another pool
+    public switchToPool(poolAlias: string) {
         const actualPool = poolAlias ?? this.curPool
         if (!this.pool(actualPool)) {
             throw new InternalError(`Cannot activate unknown pool ${poolAlias}`);
         }
+
+        // try to set the prover mode for the new pool if it was not defined yet
+        if (!this.proverModes[actualPool]) {
+            let proverMode = this.proverModes[this.curPool] ?? ProverMode.Local;
+            if (this.pool(actualPool).delegatedProverUrls.length == 0) {
+                proverMode = ProverMode.Local;
+            }
+
+            this.proverModes[actualPool] = proverMode;
+        }
+
         this.curPool = actualPool;
+
     }
 
     protected pool(poolAlias: string | undefined = undefined): Pool {
@@ -190,7 +210,7 @@ export class ZkBobAccountlessClient {
         return denominator;
     }
 
-    // Each zkBob pool should have his unique identifier
+    // Each zkBob pool should have a unique identifier
     public async poolId(poolAlias: string | undefined = undefined): Promise<number> {
         const actualPool = poolAlias ?? this.curPool;
         let poolId = this.poolIds[actualPool];
@@ -208,7 +228,8 @@ export class ZkBobAccountlessClient {
         return poolId;
     }
 
-    protected async coldStorageConfig(poolAlias: string | undefined = undefined): Promise<ColdStorageConfig | undefined> {
+    // get the cold storage configuration for the specified pool
+    public async coldStorageConfig(poolAlias: string | undefined = undefined): Promise<ColdStorageConfig | undefined> {
         const actualPoolName = poolAlias ?? this.curPool;
         if (!this.coldStorageCfg[actualPoolName]) {
             const pool = this.pool(actualPoolName);
@@ -229,7 +250,8 @@ export class ZkBobAccountlessClient {
         return this.coldStorageCfg[actualPoolName];
     }
 
-    protected coldStorageBaseURL(poolAlias: string | undefined = undefined): string | undefined {
+    // path to search cold storage bulk files for the specified pool
+    public coldStorageBaseURL(poolAlias: string | undefined = undefined): string | undefined {
         const pool = this.pool(poolAlias);
         if (pool.coldStorageConfigPath) {
             return pool.coldStorageConfigPath.substring(0, pool.coldStorageConfigPath.lastIndexOf('/'));

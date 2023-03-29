@@ -68,6 +68,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // Holds gift cards temporary states (id - gift card unique ID based on sk and pool)
   private auxZpStates: { [id: string]: ZkBobState } = {};
   // The single worker for the all pools
+  // Currently we assume parameters are the same for the all pools
   private worker: any;
   // Active account config. It can be undefined util user isn't login
   // If it's undefined the ZkBobClient acts as accountless client
@@ -77,6 +78,10 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
   private jobsMonitors  = new Map<string, Promise<JobInfo>>();
+
+  // ------------------------=========< Lifecycle >=========------------------------
+  // | Init and free client, login/logout, switching between pools                 |
+  // -------------------------------------------------------------------------------
 
   private constructor(pools: Pools, chains: Chains, initialPool: string, supportId: string | undefined) {
     super(pools, chains, initialPool, supportId);
@@ -145,8 +150,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     }
   }
 
-
-
   public async login(account: AccountConfig) {
     this.account = account;
     await this.switchToPool(account.pool, account.birthindex);
@@ -168,7 +171,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     // remove currently activated state if exist [to reduce memory consumption]
     this.freePoolState(this.curPool);
 
-    // the following values should be available even in case of accountless client => get it to exclude any throws
+    // the following values for the requested pool should be available
+    // even in case of accountless client => get it to exclude any throws
     const pool = this.pool(poolAlias);
     const denominator = await this.denominator(poolAlias);
     const poolId = await this.poolId(poolAlias);
@@ -186,7 +190,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
       this.account.pool = newPoolAlias;
       this.account.birthindex = birthindex;
-      if (this.account.birthindex == -1) {
+      if (this.account.birthindex == -1) {  // -1 means `account born right now`
         try { // fetch current birthindex right away
           let curIndex = Number((await this.relayer(newPoolAlias).info()).deltaIndex);
           if (curIndex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE) && curIndex >= OUTPLUSONE) {
@@ -203,7 +207,16 @@ export class ZkBobClient extends ZkBobAccountlessClient {
         }
       }
 
-      this.zpStates[newPoolAlias] = await ZkBobState.create(this.account.sk, this.account.birthindex, networkName, network.getRpcUrl(), denominator, poolId, pool.tokenAddress, this.worker);
+      this.zpStates[newPoolAlias] = await ZkBobState.create(
+          this.account.sk,
+          this.account.birthindex,
+          networkName,
+          network.getRpcUrl(),
+          denominator,
+          poolId,
+          pool.tokenAddress,
+          this.worker
+        );
 
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {
@@ -223,22 +236,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     }
 
     return this.zpStates[requestedPool];
-  }
-
-  protected network(poolAlias: string | undefined = undefined): NetworkBackend {
-    return super.network(poolAlias ?? this.curPool);
-  }
-
-  protected pool(poolAlias: string | undefined = undefined): Pool {
-    return super.pool(poolAlias ?? this.curPool);
-  }
-
-  protected relayer(poolAlias: string | undefined = undefined): ZkBobRelayer {
-    return super.relayer(poolAlias ?? this.curPool);
-  }
-
-  protected prover(poolAlias: string | undefined = undefined): ZkBobDelegatedProver | undefined {
-    return super.prover(poolAlias ?? this.curPool);
   }
 
   // ------------------=========< Balances and History >=========-------------------
@@ -303,8 +300,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return confirmedBalance + pendingDelta;
   }
 
-  // `giftCardAccount` fields should be set with the gift card associated properties
-  // (sk, birthIndex, pool)
+  // `giftCardAccount` fields should be set with the gift card associated properties:
+  // (sk, birthIndex, pool); proverMode field doesn't affect here
   public async giftCardBalance(giftCardAcc: AccountConfig): Promise<bigint> {
     const accId = accountId(giftCardAcc);
     if (!this.auxZpStates[accId]) {
@@ -330,7 +327,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       console.warn(`Gift card account isn't ready to transact right now. Most likely the gift-card is in redeeming state`);
     }
     
-    // get gift-card balance
     return giftCardState.getTotalBalance();
   }
 
