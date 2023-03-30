@@ -238,7 +238,7 @@ export class ZkBobAccountlessClient {
                     let response = await fetch(pool.coldStorageConfigPath);
                     let config: ColdStorageConfig = await response.json();
                     if (config.network.toLowerCase() != this.networkName(actualPoolName).toLowerCase()) {
-                    throw new InternalError('Incorrect cold storage configuration');
+                        throw new InternalError('Incorrect cold storage configuration');
                     }
                     this.coldStorageCfg[actualPoolName] = config;
                 } catch (err) {

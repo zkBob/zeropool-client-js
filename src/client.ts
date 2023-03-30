@@ -343,7 +343,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
   // Generate shielded address to receive funds
   public async generateAddress(poolAlias: string | undefined = undefined): Promise<string> {
-    const state = this.zpState();
+    const state = this.zpState(poolAlias);
     return await state.generateAddress();
   }
 

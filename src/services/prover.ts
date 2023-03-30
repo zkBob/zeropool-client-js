@@ -16,7 +16,7 @@ export class ZkBobDelegatedProver implements IZkBobService {
 
     public static create(proverUrls: string[], supportId: string | undefined): ZkBobDelegatedProver {
         if (proverUrls.length == 0) {
-            throw new InternalError('ZkBobDelegatedProver: you should provide almost one relayer url');
+            throw new InternalError('ZkBobDelegatedProver: you should provide almost one delegated prover url');
         }
 
         const object = new ZkBobDelegatedProver();
@@ -33,7 +33,7 @@ export class ZkBobDelegatedProver implements IZkBobService {
     // -------------------------------------------------------------------------------
 
     public type(): ServiceType {
-        return ServiceType.Relayer;
+        return ServiceType.DelegatedProver;
     }
 
 
@@ -55,9 +55,9 @@ export class ZkBobDelegatedProver implements IZkBobService {
         }
 
         return cachedVer.version;
-        }
+    }
 
-        public url(): string {
+    public url(): string {
         return this.proverUrls[this.curIdx];
     }
 
