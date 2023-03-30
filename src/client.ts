@@ -532,7 +532,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     const pool = this.pool();
     const relayer = this.relayer();
     const state = this.zpState();
-    const denominator = await this.denominator();
 
     const minTx = await this.minTxAmount();
     if (amountGwei < minTx) {
@@ -558,7 +557,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       });
 
       // permittable deposit signature should be calculated for the typed data
-      const value = (amountGwei + feeGwei) * denominator;
+      const value = await this.shieldedAmountToWei(amountGwei + feeGwei);
       const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
       let signature = truncateHexPrefix(await signTypedData(BigInt(deadline), value, salt));
       if (this.network(this.curPool).isSignatureCompact()) {
@@ -589,9 +588,10 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
       // Checking the depositor's token balance before sending tx
-      let balance;
+      let balance: bigint;
       try {
-        balance = (await this.network(this.curPool).getTokenBalance(pool.tokenAddress, claimedAddr)) / denominator;
+        const balanceWei = await this.network(this.curPool).getTokenBalance(pool.tokenAddress, claimedAddr);
+        balance = await this.weiToShieldedAmount(balanceWei);
       } catch (err) {
         throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
       }
@@ -670,11 +670,10 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     return this.depositPermittable(amountGwei, async (deadline, value, salt) => {
       const pool = this.pool();
       const state = this.zpState();
-      const denominator = await this.denominator();
 
       // we should check token balance here since the library is fully responsible
       // for ephemeral address in contrast to depositing from external user's address
-      const neededGwei = value / denominator;
+      const neededGwei = await this.weiToShieldedAmount(value);
       if(fromAddress.tokenBalance < neededGwei) {
         throw new TxInsufficientFundsError(neededGwei, fromAddress.tokenBalance);
       }
@@ -935,7 +934,6 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     const pool = this.pool();
     const state = this.zpState();
     const relayer = this.relayer();
-    const denominator = await this.denominator();
 
     const minTx = await this.minTxAmount();
     if (amountGwei < minTx) {
@@ -978,9 +976,10 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     }
 
     // Checking the depositor's token balance before sending tx
-    let balance;
+    let balance: bigint;
     try {
-      balance = (await this.network(this.curPool).getTokenBalance(pool.tokenAddress, addrFromSig)) / denominator;
+      const balanceWei = await this.network(this.curPool).getTokenBalance(pool.tokenAddress, addrFromSig);
+      balance = await this.weiToShieldedAmount(balanceWei);
     } catch (err) {
       throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
     }

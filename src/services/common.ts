@@ -57,9 +57,9 @@ export async function fetchJson(url: string, headers: RequestInit, service: Serv
     let responseBody: any = null;
     const contentType = response.headers.get('content-type')!;
     if (contentType === null) responseBody = null;
-    else if (contentType.startsWith('application/json;')) responseBody = await response.json();
-    else if (contentType.startsWith('text/plain;')) responseBody = await response.text();
-    else if (contentType.startsWith('text/html;')) responseBody = (await response.text()).replace(/<[^>]+>/g, '').replace(/(?:\r\n|\r|\n)/g, ' ').replace(/^\s+|\s+$/gm,'');
+    else if (contentType.startsWith('application/json')) responseBody = await response.json();
+    else if (contentType.startsWith('text/plain')) responseBody = await response.text();
+    else if (contentType.startsWith('text/html')) responseBody = (await response.text()).replace(/<[^>]+>/g, '').replace(/(?:\r\n|\r|\n)/g, ' ').replace(/^\s+|\s+$/gm,'');
     else console.warn(`Unsupported response content-type in response: ${contentType}`);
 
     // Unsuccess error code case (not in range 200-299)

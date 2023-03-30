@@ -149,12 +149,12 @@ export class ZkBobAccountlessClient {
     }
 
     protected pool(poolAlias: string | undefined = undefined): Pool {
-        const token = this.pools[poolAlias ?? this.curPool];
-        if (!token) {
+        const pool = this.pools[poolAlias ?? this.curPool];
+        if (!pool) {
             throw new InternalError(`Unknown pool: ${poolAlias ?? this.curPool}`);
         }
 
-        return token;
+        return pool;
     }
 
     protected network(poolAlias: string | undefined = undefined): NetworkBackend {
@@ -300,7 +300,7 @@ export class ZkBobAccountlessClient {
                 this.relayerFee[actualPool] = cachedFee;
             } catch (err) {
                 console.error(`Cannot fetch relayer fee, will using default (${DEFAULT_RELAYER_FEE}): ${err}`);
-                return DEFAULT_RELAYER_FEE;
+                return this.relayerFee[actualPool]?.fee ?? DEFAULT_RELAYER_FEE;
             }
         }
 
