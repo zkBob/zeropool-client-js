@@ -81,7 +81,7 @@ export class ZkBobAccountlessClient {
                 throw new InternalError(`Chain with id ${chainId} being initialized without RPC URL`);
             }
             // TODO: implement multi-RPC NetworkBackend 
-            const backend = new EvmNetwork(chain.rpcUrls[0]);
+            const backend = new EvmNetwork(chain.rpcUrls[0], false);    // initialize backend in the disabled state
             const networkName = NetworkType.networkName(Number(chainId));
             if (!networkName) {
                 throw new InternalError(`The chain with id ${chainId} currently unsupported`);
@@ -102,6 +102,10 @@ export class ZkBobAccountlessClient {
             // create a delegated prover service if url presented
             if (pool.delegatedProverUrls.length > 0) {
                 this.provers[alias] = ZkBobDelegatedProver.create(pool.delegatedProverUrls, supportId);
+            }
+
+            if (alias == currentPool) {
+                this.chains[pool.chainId].backend.setEnabled(true);
             }
 
             this.proverModes[alias] = ProverMode.Local;
@@ -132,6 +136,14 @@ export class ZkBobAccountlessClient {
         const actualPool = poolAlias ?? this.curPool
         if (!this.pool(actualPool)) {
             throw new InternalError(`Cannot activate unknown pool ${poolAlias}`);
+        }
+
+        // disable current network backend and enable new one for the new pool
+        const oldChainId = this.pools[this.curPool].chainId;
+        const newChainId = this.pools[actualPool].chainId;
+        if (newChainId != oldChainId) {
+            this.chains[oldChainId].backend.setEnabled(false);
+            this.chains[newChainId].backend.setEnabled(true);
         }
 
         // try to set the prover mode for the new pool if it was not defined yet

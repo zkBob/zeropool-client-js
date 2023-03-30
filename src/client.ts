@@ -165,17 +165,16 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     // remove currently activated state if exist [to reduce memory consumption]
     this.freePoolState(this.curPool);
 
-    // the following values for the requested pool should be available
-    // even in case of accountless client => get it to exclude any throws
-    const pool = this.pool(poolAlias);
-    const denominator = await this.denominator(poolAlias);
-    const poolId = await this.poolId(poolAlias);
-    const network = this.network(poolAlias);
-    const networkName = this.networkName(poolAlias);
-
-    super.switchToPool(poolAlias); // set active pool for accountless mode
-
+    // set active pool for accountless mode, activate network backend
+    super.switchToPool(poolAlias);
     const newPoolAlias = super.currentPool()
+
+    // the following values needed to initialize ZkBobState
+    const pool = this.pool(newPoolAlias);
+    const denominator = await this.denominator(newPoolAlias);
+    const poolId = await this.poolId(newPoolAlias);
+    const network = this.network(newPoolAlias);
+    const networkName = this.networkName(newPoolAlias);
 
     if (this.account) {
       this.monitoredJobs.clear();
