@@ -1,4 +1,7 @@
-import { DecryptedMemo, IDepositData, IDepositPermittableData, IndexedTx, ITransferData, IWithdrawData, ParseTxsColdStorageResult, ParseTxsResult, StateUpdate, TreeNode } from 'libzkbob-rs-wasm-web';
+import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
+          ParseTxsResult, ParseTxsColdStorageResult, StateUpdate,
+          DecryptedMemo, IndexedTx, TreeNode,
+      } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
 import { bufToHex, isRangesIntersected } from './utils';
 import { hash } from 'tweetnacl';
@@ -8,7 +11,6 @@ import { ColdStorageConfig } from './coldstorage';
 import { InternalError } from './errors';
 import { ZkBobRelayer } from './services/relayer';
 import { CONSTANTS } from './constants';
-import { NetworkBackend } from './networks/network';
 
 const LOG_STATE_HOTSYNC = false;
 

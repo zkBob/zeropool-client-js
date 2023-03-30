@@ -1,7 +1,7 @@
-import { accountBodyToRLP } from '@ethereumjs/util';
 import { expose } from 'comlink';
-import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, TreeNode,
-          ITransferData, IDepositData, IWithdrawData, IDepositPermittableData
+import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
+          ParseTxsResult, ParseTxsColdStorageResult, StateUpdate,
+          IndexedTx, TreeNode, SnarkProof,
         } from 'libzkbob-rs-wasm-web';
 import { threads } from 'wasm-feature-detect';
 import { SnarkParams } from './params';

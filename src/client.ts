@@ -1,10 +1,9 @@
-import { ProverMode, Pools, SnarkConfigParams, Chains, Pool, ClientConfig, AccountConfig, accountId } from './config';
+import { Chains, Pools, SnarkConfigParams, ClientConfig, AccountConfig, accountId, ProverMode } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature, bufToHex
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
 import { TxType } from './tx';
-import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
 import { EphemeralAddress } from './ephemeral';
@@ -16,10 +15,9 @@ import {
 import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
 import { isAddress } from 'web3-utils';
-import { JobInfo, ZkBobRelayer } from './services/relayer';
+import { JobInfo } from './services/relayer';
 import { TreeState, ZkBobAccountlessClient } from './client-base';
 import { wrap } from 'comlink';
-import { ZkBobDelegatedProver } from './services/prover';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
