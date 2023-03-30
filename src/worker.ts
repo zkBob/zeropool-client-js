@@ -17,9 +17,9 @@ let wasm: any;
 
 const obj = {
   async initWasm(
-    paramUrls: { txParams: string; treeParams: string },
+    txParamsUrl: string,
     txParamsHash: string | undefined = undefined,  // skip hash checking when undefined
-    vkUrls: {transferVkUrl: string, treeVkUrl: string},
+    txVkUrl: string,
     forcedMultithreading: boolean | undefined = undefined,
   ) {
     console.info('Initializing web worker...');
@@ -40,13 +40,12 @@ const obj = {
       await wasm.default()
     }
 
-    txParams = new SnarkParams(paramUrls.txParams, txParamsHash);
+    txParams = new SnarkParams(txParamsUrl, txParamsHash);
     txParser = wasm.TxParser._new()
 
     console.time(`VK initializing`);
     const noCacheHeader = { method: 'GET', headers: { 'Cache-Control': 'no-cache' } };
-    transferVk = await (await fetch(vkUrls.transferVkUrl, noCacheHeader)).json();
-    treeVk = await (await fetch(vkUrls.treeVkUrl, noCacheHeader)).json();
+    transferVk = await (await fetch(txVkUrl, noCacheHeader)).json();
     console.timeEnd(`VK initializing`);
 
     console.info('Web worker init complete.');

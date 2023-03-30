@@ -3,9 +3,7 @@ import { hash } from 'tweetnacl';
 
 export interface SnarkConfigParams {
   transferParamsUrl: string;
-  treeParamsUrl: string;
   transferVkUrl: string;
-  treeVkUrl: string;
 }
 
 export interface Chain {

@@ -102,16 +102,12 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     let worker: any;
   
     worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
-      await worker.initWasm({
-        txParams: snarkParams.transferParamsUrl,
-        treeParams: snarkParams.treeParamsUrl,
-      },
-      txParamsHash, 
-      {
-        transferVkUrl: snarkParams.transferVkUrl,
-        treeVkUrl: snarkParams.treeVkUrl,
-      },
-      forcedMultithreading);
+      await worker.initWasm(
+        snarkParams.transferParamsUrl,
+        txParamsHash, 
+        snarkParams.transferVkUrl,
+        forcedMultithreading
+      );
   
     return worker;
   }
