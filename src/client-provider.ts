@@ -55,9 +55,10 @@ export interface ChainConfig {
     networkName: string;
 }
 
-// Provides base functionality of the zkBob client
+// Provides base functionality for the zkBob solution
+// within the specified configuration and selected pool
 // without attaching the user account
-export class ZkBobAccountlessClient {
+export class ZkBobProvider {
     private chains:         { [chainId: string]: ChainConfig } = {};
     private pools:          { [name: string]: Pool } = {};
     private relayers:       { [name: string]: ZkBobRelayer } = {};
@@ -69,7 +70,7 @@ export class ZkBobAccountlessClient {
     private coldStorageCfg: { [name: string]: ColdStorageConfig } = {};
     protected supportId: string | undefined;
 
-    // The current pool alias should always be set to ability few accountless operations
+    // The current pool alias should always be set
     protected curPool: string;
     
     // public constructor
@@ -133,86 +134,84 @@ export class ZkBobAccountlessClient {
 
     // swithing to the another pool
     public switchToPool(poolAlias: string) {
-        const actualPool = poolAlias ?? this.curPool
-        if (!this.pool(actualPool)) {
+        if (!this.pools[poolAlias]) {
             throw new InternalError(`Cannot activate unknown pool ${poolAlias}`);
         }
 
         // disable current network backend and enable new one for the new pool
         const oldChainId = this.pools[this.curPool].chainId;
-        const newChainId = this.pools[actualPool].chainId;
+        const newChainId = this.pools[poolAlias].chainId;
         if (newChainId != oldChainId) {
             this.chains[oldChainId].backend.setEnabled(false);
             this.chains[newChainId].backend.setEnabled(true);
         }
 
         // try to set the prover mode for the new pool if it was not defined yet
-        if (!this.proverModes[actualPool]) {
+        if (!this.proverModes[poolAlias]) {
+            // apply current prover mode or use a local prover by default
             let proverMode = this.proverModes[this.curPool] ?? ProverMode.Local;
-            if (this.pool(actualPool).delegatedProverUrls.length == 0) {
+            if (this.pools[poolAlias].delegatedProverUrls.length == 0) {
                 proverMode = ProverMode.Local;
             }
 
-            this.proverModes[actualPool] = proverMode;
+            this.proverModes[poolAlias] = proverMode;
         }
 
-        this.curPool = actualPool;
-
+        this.curPool = poolAlias;
     }
 
-    protected pool(poolAlias: string | undefined = undefined): Pool {
-        const pool = this.pools[poolAlias ?? this.curPool];
+    protected pool(): Pool {
+        const pool = this.pools[this.curPool];
         if (!pool) {
-            throw new InternalError(`Unknown pool: ${poolAlias ?? this.curPool}`);
+            throw new InternalError(`Unknown pool: ${this.curPool}`);
         }
 
         return pool;
     }
 
-    protected network(poolAlias: string | undefined = undefined): NetworkBackend {
-        const pool = this.pool(poolAlias);
-        const chain = this.chains[pool.chainId];
+    protected network(): NetworkBackend {
+        const chainId = this.pool().chainId;
+        const chain = this.chains[chainId];
         if (!chain) {
-            throw new InternalError(`Unknown chain with id: ${pool.chainId}`);
+            throw new InternalError(`Unknown chain with id: ${chainId}`);
         }
         
         return chain.backend;
     }
 
-    public networkName(poolAlias: string | undefined = undefined): string {
-        const pool = this.pool(poolAlias);
-        const chain = this.chains[pool.chainId];
+    public networkName(): string {
+        const chainId = this.pool().chainId;
+        const chain = this.chains[chainId];
         if (!chain) {
-            throw new InternalError(`Unknown chain with id: ${pool.chainId}`);
+            throw new InternalError(`Unknown chain with id: ${chainId}`);
         }
         
         return chain.networkName;
     }
 
-    protected relayer(poolAlias: string | undefined = undefined): ZkBobRelayer {
-        const relayer = this.relayers[poolAlias ?? this.curPool];
+    protected relayer(): ZkBobRelayer {
+        const relayer = this.relayers[this.curPool];
         if (!relayer) {
-            throw new InternalError(`No relayer for the pool ${poolAlias ?? this.curPool}`);
+            throw new InternalError(`No relayer for the pool ${this.curPool}`);
         }
 
         return relayer;
     }
 
-    protected prover(poolAlias: string | undefined = undefined): ZkBobDelegatedProver | undefined {
-        return this.provers[poolAlias ?? this.curPool];
+    protected prover(): ZkBobDelegatedProver | undefined {
+        return this.provers[this.curPool];
     }
 
     // Pool contract using default denominator 10^9
     // i.e. values less than 1 Gwei are supposed equals zero
     // But this is deployable parameter so this method needed to retrieve it
-    protected async denominator(poolAlias: string | undefined = undefined): Promise<bigint> {
-        const actualPool = poolAlias ?? this.curPool;
-        let denominator = this.denominators[actualPool];
+    protected async denominator(): Promise<bigint> {
+        let denominator = this.denominators[this.curPool];
         if (!denominator) {
             try {
-                const pool = this.pool(actualPool);
-                denominator = await this.network(actualPool).getDenominator(pool.poolAddress);
-                this.denominators[actualPool] = denominator;
+                const pool = this.pool();
+                denominator = await this.network().getDenominator(pool.poolAddress);
+                this.denominators[this.curPool] = denominator;
             } catch (err) {
                 console.error(`Cannot fetch denominator value from the relayer, will using default 10^9: ${err}`);
                 denominator = DEFAULT_DENOMINATOR;
@@ -223,14 +222,13 @@ export class ZkBobAccountlessClient {
     }
 
     // Each zkBob pool should have a unique identifier
-    public async poolId(poolAlias: string | undefined = undefined): Promise<number> {
-        const actualPool = poolAlias ?? this.curPool;
-        let poolId = this.poolIds[actualPool];
+    public async poolId(): Promise<number> {
+        let poolId = this.poolIds[this.curPool];
         if (!poolId) {
             try {
-                const token = this.pool(actualPool);
-                poolId = await this.network(actualPool).getPoolId(token.poolAddress);
-                this.poolIds[actualPool] = poolId;
+                const token = this.pool();
+                poolId = await this.network().getPoolId(token.poolAddress);
+                this.poolIds[this.curPool] = poolId;
             } catch (err) {
                 console.error(`Cannot fetch pool ID, will using default (0): ${err}`);
                 poolId = 0;
@@ -241,30 +239,29 @@ export class ZkBobAccountlessClient {
     }
 
     // get the cold storage configuration for the specified pool
-    public async coldStorageConfig(poolAlias: string | undefined = undefined): Promise<ColdStorageConfig | undefined> {
-        const actualPoolName = poolAlias ?? this.curPool;
-        if (!this.coldStorageCfg[actualPoolName]) {
-            const pool = this.pool(actualPoolName);
+    public async coldStorageConfig(): Promise<ColdStorageConfig | undefined> {
+        if (!this.coldStorageCfg[this.curPool]) {
+            const pool = this.pool();
             if (pool.coldStorageConfigPath) {
                 try {
                     let response = await fetch(pool.coldStorageConfigPath);
                     let config: ColdStorageConfig = await response.json();
-                    if (config.network.toLowerCase() != this.networkName(actualPoolName).toLowerCase()) {
+                    if (config.network.toLowerCase() != this.networkName().toLowerCase()) {
                         throw new InternalError('Incorrect cold storage configuration');
                     }
-                    this.coldStorageCfg[actualPoolName] = config;
+                    this.coldStorageCfg[this.curPool] = config;
                 } catch (err) {
                     console.error(`Cannot initialize cold storage: ${err}`);
                 }
             }
         }
 
-        return this.coldStorageCfg[actualPoolName];
+        return this.coldStorageCfg[this.curPool];
     }
 
     // path to search cold storage bulk files for the specified pool
-    public coldStorageBaseURL(poolAlias: string | undefined = undefined): string | undefined {
-        const pool = this.pool(poolAlias);
+    public coldStorageBaseURL(): string | undefined {
+        const pool = this.pool();
         if (pool.coldStorageConfigPath) {
             return pool.coldStorageConfigPath.substring(0, pool.coldStorageConfigPath.lastIndexOf('/'));
         }
@@ -277,14 +274,14 @@ export class ZkBobAccountlessClient {
     // ----------------------------------------------------------------------------
 
     // Convert native pool amount to the base units
-    public async shieldedAmountToWei(amountShielded: bigint, poolAlias: string | undefined = undefined): Promise<bigint> {
-        const denominator = await this.denominator(poolAlias);
+    public async shieldedAmountToWei(amountShielded: bigint): Promise<bigint> {
+        const denominator = await this.denominator();
         return amountShielded * denominator;
     }
     
     // Convert base units to the native pool amount
-    public async weiToShieldedAmount(amountWei: bigint, poolAlias: string | undefined = undefined): Promise<bigint> {
-        const denominator = await this.denominator(poolAlias);
+    public async weiToShieldedAmount(amountWei: bigint): Promise<bigint> {
+        const denominator = await this.denominator();
         return amountWei / denominator;
     }
 
@@ -294,34 +291,32 @@ export class ZkBobAccountlessClient {
 
     // Min trensaction fee in Gwei (e.g. deposit or single transfer)
     // To estimate fee in the common case please use feeEstimate instead
-    public async atomicTxFee(poolAlias: string | undefined = undefined): Promise<bigint> {
-        const relayer = await this.getRelayerFee(poolAlias);
+    public async atomicTxFee(): Promise<bigint> {
+        const relayer = await this.getRelayerFee();
         const l1 = BigInt(0);
 
         return relayer + l1;
     }
 
     // Base relayer fee per tx. Do not use it directly, use atomicTxFee instead
-    protected async getRelayerFee(poolAlias: string | undefined = undefined): Promise<bigint> {
-        const actualPool = poolAlias ?? this.curPool;
-        let cachedFee = this.relayerFee[actualPool];
+    protected async getRelayerFee(): Promise<bigint> {
+        let cachedFee = this.relayerFee[this.curPool];
         if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
             try {
-                const fee = await this.relayers[actualPool].fee()
+                const fee = await this.relayer().fee()
                 cachedFee = {fee, timestamp: Date.now()};
-                this.relayerFee[actualPool] = cachedFee;
+                this.relayerFee[this.curPool] = cachedFee;
             } catch (err) {
                 console.error(`Cannot fetch relayer fee, will using default (${DEFAULT_RELAYER_FEE}): ${err}`);
-                return this.relayerFee[actualPool]?.fee ?? DEFAULT_RELAYER_FEE;
+                return this.relayerFee[this.curPool]?.fee ?? DEFAULT_RELAYER_FEE;
             }
         }
 
         return cachedFee.fee;
     }
 
-    public async directDepositFee(poolAlias: string | undefined = undefined): Promise<bigint> {
-        const token = this.pool(poolAlias);
-        return await this.network(poolAlias).getDirectDepositFee(token.poolAddress);
+    public async directDepositFee(): Promise<bigint> {
+        return this.network().getDirectDepositFee(this.pool().poolAddress);
     }
 
     public async minTxAmount(): Promise<bigint> {
@@ -331,10 +326,10 @@ export class ZkBobAccountlessClient {
     // The deposit and withdraw amount is limited by few factors:
     // https://docs.zkbob.com/bob-protocol/deposit-and-withdrawal-limits
     // Global limits are fetched from the relayer (except personal deposit limit from the specified address)
-    public async getLimits(address: string | undefined, directRequest: boolean = false, poolAlias: string | undefined = undefined): Promise<PoolLimits> {
-        const token = this.pool(poolAlias);
-        const network = this.network(poolAlias);
-        const relayer = this.relayer(poolAlias);
+    public async getLimits(address: string | undefined, directRequest: boolean = false): Promise<PoolLimits> {
+        const token = this.pool();
+        const network = this.network();
+        const relayer = this.relayer();
 
         async function fetchLimitsFromContract(network: NetworkBackend): Promise<LimitsFetch> {
             const poolLimits = await network.poolLimits(token.poolAddress, address);
@@ -452,34 +447,32 @@ export class ZkBobAccountlessClient {
     // --------------=========< Common Prover Routines >=========------------------
     // | Support fo switching between different proving modes                     |
     // ----------------------------------------------------------------------------
-    public async setProverMode(mode: ProverMode, poolAlias: string | undefined = undefined) {
+    public async setProverMode(mode: ProverMode) {
         if (!Object.values(ProverMode).includes(mode)) {
             throw new InternalError("Provided mode isn't correct. Possible modes: Local, Delegated, and DelegatedWithFallback");
         }
 
-        const actualPool = poolAlias ?? this.curPool;
-        const prover = this.prover(actualPool);
+        const prover = this.prover();
 
         if (mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) {
             if (!prover) {
-                this.proverModes[actualPool] = ProverMode.Local;
+                this.proverModes[this.curPool] = ProverMode.Local;
                 throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
             }
 
             if ((await prover.healthcheck()) == false) {
-                this.proverModes[actualPool] = ProverMode.Local;
+                this.proverModes[this.curPool] = ProverMode.Local;
                 throw new InternalError(`Delegated prover can't be enabled because delegated prover isn't healthy`)
             }
         }
 
-        this.proverModes[actualPool] = mode;
+        this.proverModes[this.curPool] = mode;
     }
     
-    public getProverMode(poolAlias: string | undefined = undefined): ProverMode {
-        const actualPool = poolAlias ?? this.curPool;
-        const mode = this.proverModes[actualPool];
+    public getProverMode(): ProverMode {
+        const mode = this.proverModes[this.curPool];
         if (!mode) {
-            throw new InternalError(`No prover mode set for the pool ${actualPool}`);
+            throw new InternalError(`No prover mode set for the pool ${this.curPool}`);
         }
 
         return mode;
@@ -490,25 +483,24 @@ export class ZkBobAccountlessClient {
     // ----------------------------------------------------------------------------
 
     // Get relayer regular root & index
-    public async getRelayerState(poolAlias: string | undefined = undefined): Promise<TreeState> {
-        const relayer = this.relayer(poolAlias);
+    public async getRelayerState(): Promise<TreeState> {
+        const relayer = this.relayer();
         const info = await relayer.info();
 
         return {root: BigInt(info.root), index: info.deltaIndex};
     }
 
     // Get relayer optimistic root & index
-    public async getRelayerOptimisticState(poolAlias: string | undefined = undefined): Promise<TreeState> {
-        const relayer = this.relayer(poolAlias);
-        const info = await relayer.info();
+    public async getRelayerOptimisticState(): Promise<TreeState> {
+        const info = await this.relayer().info();
 
         return {root: BigInt(info.optimisticRoot), index: info.optimisticDeltaIndex};
     }
 
     // Get pool info (direct web3 request)
-    public async getPoolState(index?: bigint, poolAlias: string | undefined = undefined): Promise<TreeState> {
-        const token = this.pool(poolAlias);
-        const res = await this.network(poolAlias).poolState(token.poolAddress, index);
+    public async getPoolState(index?: bigint): Promise<TreeState> {
+        const token = this.pool();
+        const res = await this.network().poolState(token.poolAddress, index);
 
         return {index: res.index, root: res.root};
     }
@@ -521,14 +513,14 @@ export class ZkBobAccountlessClient {
         return LIB_VERSION;
     }
 
-    public async getRelayerVersion(poolAlias: string | undefined = undefined): Promise<ServiceVersion> {
-        return this.relayer(poolAlias).version();
+    public async getRelayerVersion(): Promise<ServiceVersion> {
+        return this.relayer().version();
     }
 
-    public async getProverVersion(poolAlias: string | undefined = undefined): Promise<ServiceVersion> {
-        const prover = this.prover(poolAlias)
+    public async getProverVersion(): Promise<ServiceVersion> {
+        const prover = this.prover()
         if (!prover) {
-            throw new InternalError(`Cannot fetch prover version because delegated prover wasn't initialized for the pool ${poolAlias ?? this.curPool}`);
+            throw new InternalError(`Cannot fetch prover version because delegated prover wasn't initialized for the pool ${this.curPool}`);
         }
         
         return prover.version();
