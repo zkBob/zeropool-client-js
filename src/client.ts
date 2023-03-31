@@ -16,7 +16,7 @@ import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
 import { isAddress } from 'web3-utils';
 import { JobInfo } from './services/relayer';
-import { TreeState, ZkBobAccountlessClient } from './client-base';
+import { TreeState, ZkBobProvider } from './client-provider';
 import { wrap } from 'comlink';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
@@ -60,7 +60,7 @@ export interface FeeAmount { // all values are in Gwei
   insufficientFunds: boolean; // true when the local balance is insufficient for requested tx amount
 }
 
-export class ZkBobClient extends ZkBobAccountlessClient {
+export class ZkBobClient extends ZkBobProvider {
   // States for the current account in the different pools
   private zpStates: { [poolAlias: string]: ZkBobState } = {};
   // Holds gift cards temporary states (id - gift card unique ID based on sk and pool)
@@ -94,7 +94,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
     // to check local params consistence
     let txParamsHash: string | undefined = undefined;
     try {
-      txParamsHash = await this.relayer(this.curPool).txParamsHash();
+      txParamsHash = await this.relayer().txParamsHash();
     } catch (err) {
       console.warn(`Cannot fetch tx parameters hash from the relayer (${err.message})`);
     }
@@ -163,18 +163,19 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // Also available before login (just switch pool to use the instance as an accoutless client)
   public async switchToPool(poolAlias: string, birthindex?: number) {
     // remove currently activated state if exist [to reduce memory consumption]
-    this.freePoolState(this.curPool);
+    const oldPoolAlias = super.currentPool();
+    this.freePoolState(oldPoolAlias);
 
     // set active pool for accountless mode, activate network backend
     super.switchToPool(poolAlias);
-    const newPoolAlias = super.currentPool()
+    const newPoolAlias = super.currentPool();
 
     // the following values needed to initialize ZkBobState
-    const pool = this.pool(newPoolAlias);
-    const denominator = await this.denominator(newPoolAlias);
-    const poolId = await this.poolId(newPoolAlias);
-    const network = this.network(newPoolAlias);
-    const networkName = this.networkName(newPoolAlias);
+    const pool = this.pool();
+    const denominator = await this.denominator();
+    const poolId = await this.poolId();
+    const network = this.network();
+    const networkName = this.networkName();
 
     if (this.account) {
       this.monitoredJobs.clear();
@@ -185,7 +186,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       this.account.birthindex = birthindex;
       if (this.account.birthindex == -1) {  // -1 means `account born right now`
         try { // fetch current birthindex right away
-          let curIndex = Number((await this.relayer(newPoolAlias).info()).deltaIndex);
+          let curIndex = Number((await this.relayer().info()).deltaIndex);
           if (curIndex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE) && curIndex >= OUTPLUSONE) {
             curIndex -= OUTPLUSONE; // we should grab almost one transaction from the regular state
             console.log(`Retrieved account birthindex: ${curIndex}`);
@@ -222,7 +223,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   }
 
   // return current state if poolAlias absent
-  protected zpState(poolAlias: string | undefined = undefined): ZkBobState {
+  private zpState(poolAlias: string | undefined = undefined): ZkBobState {
     const requestedPool = poolAlias ?? this.curPool;
     if (!this.zpStates[requestedPool]) {
       throw new InternalError(`State for pool ${requestedPool} is not initialized`);
@@ -296,11 +297,15 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // `giftCardAccount` fields should be set with the gift card associated properties:
   // (sk, birthIndex, pool); proverMode field doesn't affect here
   public async giftCardBalance(giftCardAcc: AccountConfig): Promise<bigint> {
+    if (giftCardAcc.pool != this.currentPool()) {
+      throw new InternalError(`The current pool (${this.currentPool()}) doesn't match gift-card's one (${giftCardAcc.pool})`);
+    }
+
     const accId = accountId(giftCardAcc);
     if (!this.auxZpStates[accId]) {
       // create gift-card auxiliary state if needed
-      const networkName = this.networkName(giftCardAcc.pool);
-      const poolId = await this.poolId(giftCardAcc.pool);
+      const networkName = this.networkName();
+      const poolId = await this.poolId();
       const giftCardState = await ZkBobState.createNaked(giftCardAcc.sk, giftCardAcc.birthindex, networkName, poolId, this.worker);
 
       // state will be removed after gift card redemption or on logout
@@ -309,12 +314,12 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
     // update gift card state
     const giftCardState = this.auxZpStates[accId];
-    const relayer = this.relayer(giftCardAcc.pool);
+    const relayer = this.relayer();
     const readyToTransact = await giftCardState.updateState(
       relayer,
-      async (index) => (await this.getPoolState(index, giftCardAcc.pool)).root,
-      await this.coldStorageConfig(giftCardAcc.pool),
-      this.coldStorageBaseURL(giftCardAcc.pool),
+      async (index) => (await this.getPoolState(index)).root,
+      await this.coldStorageConfig(),
+      this.coldStorageBaseURL(),
     );
     if (!readyToTransact) {
       console.warn(`Gift card account isn't ready to transact right now. Most likely the gift-card is in redeeming state`);
@@ -337,14 +342,14 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // ---------------------------------------------------------------------------
 
   // Generate shielded address to receive funds
-  public async generateAddress(poolAlias: string | undefined = undefined): Promise<string> {
-    const state = this.zpState(poolAlias);
+  public async generateAddress(): Promise<string> {
+    const state = this.zpState(this.currentPool());
     return await state.generateAddress();
   }
 
   // Generate address with the specified seed
-  public async genBurnerAddress(seed: Uint8Array, poolAlias: string | undefined = undefined): Promise<string> {
-    const poolId = await this.poolId(poolAlias);
+  public async genBurnerAddress(seed: Uint8Array): Promise<string> {
+    const poolId = await this.poolId();
     return this.worker.genBurnerAddress(poolId, seed);
   }
 
@@ -480,7 +485,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
             revertReason = job.failedReason;  // reason from the relayer
           } else if (job.txHash) {
             // the relayer doesn't provide failure reason - fetch it directly
-            const retrievedReason = (await this.network(this.curPool).getTxRevertReason(job.txHash));
+            const retrievedReason = (await this.network().getTxRevertReason(job.txHash));
             revertReason = retrievedReason ?? 'transaction was not found\\reverted'
           } else {
             console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
@@ -555,7 +560,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       const value = await this.shieldedAmountToWei(amountGwei + feeGwei);
       const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
       let signature = truncateHexPrefix(await signTypedData(BigInt(deadline), value, salt));
-      if (this.network(this.curPool).isSignatureCompact()) {
+      if (this.network().isSignatureCompact()) {
         signature = toCompactSignature(signature);
       }
 
@@ -585,7 +590,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       // Checking the depositor's token balance before sending tx
       let balance: bigint;
       try {
-        const balanceWei = await this.network(this.curPool).getTokenBalance(pool.tokenAddress, claimedAddr);
+        const balanceWei = await this.network().getTokenBalance(pool.tokenAddress, claimedAddr);
         balance = await this.weiToShieldedAmount(balanceWei);
       } catch (err) {
         throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
@@ -684,7 +689,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // Returns jobIds from the relayer or throw an Error
   public async transferMulti(transfers: TransferRequest[], feeGwei: bigint = BigInt(0)): Promise<string[]> {
     const state = this.zpState();
-    const relayer = this.relayer(this.curPool);
+    const relayer = this.relayer();
 
     await Promise.all(transfers.map(async (aTx) => {
       if (!await this.verifyShieldedAddress(aTx.destination)) {
@@ -770,7 +775,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // feeGwei - fee per single transaction (request it with atomicTxFee method)
   // Returns jobId from the relayer or throw an Error
   public async withdrawMulti(address: string, amountGwei: bigint, feeGwei: bigint = BigInt(0)): Promise<string[]> {
-    const relayer = this.relayer(this.curPool);
+    const relayer = this.relayer();
     const state = this.zpState();
 
     // Validate withdrawal address:
@@ -966,14 +971,14 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       fullSignature = addr + signature;
     }
 
-    if (this.network(this.curPool).isSignatureCompact()) {
+    if (this.network().isSignatureCompact()) {
       fullSignature = toCompactSignature(fullSignature);
     }
 
     // Checking the depositor's token balance before sending tx
     let balance: bigint;
     try {
-      const balanceWei = await this.network(this.curPool).getTokenBalance(pool.tokenAddress, addrFromSig);
+      const balanceWei = await this.network().getTokenBalance(pool.tokenAddress, addrFromSig);
       balance = await this.weiToShieldedAmount(balanceWei);
     } catch (err) {
       throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
@@ -1008,7 +1013,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   //  1. txCnt contains number of transactions for maximum available transfer
   //  2. txCnt can't be less than 1 (e.g. when balance is less than atomic fee)
   public async feeEstimate(transfersGwei: bigint[], txType: TxType, updateState: boolean = true): Promise<FeeAmount> {
-    const relayer = await this.getRelayerFee(this.curPool);
+    const relayer = await this.getRelayerFee();
     const l1 = BigInt(0);
     let txCnt = 1;
     const totalPerTx = relayer + l1;
@@ -1047,7 +1052,7 @@ export class ZkBobClient extends ZkBobAccountlessClient {
       await this.updateState();
     }
 
-    const txFee = await this.atomicTxFee(this.curPool);
+    const txFee = await this.atomicTxFee();
     const groupedNotesBalances = await this.getGroupedNotes();
     let accountBalance = await state.accountBalance();
 
@@ -1187,8 +1192,8 @@ export class ZkBobClient extends ZkBobAccountlessClient {
 
   // Universal proving routine
   private async proveTx(pub: any, sec: any): Promise<any> {
-    const proverMode = this.getProverMode(this.curPool);
-    const prover = this.prover(this.curPool)
+    const proverMode = this.getProverMode();
+    const prover = this.prover()
     if ((proverMode == ProverMode.Delegated || proverMode == ProverMode.DelegatedWithFallback) && prover) {
       console.debug('Delegated Prover: proveTx');
       try {
@@ -1297,10 +1302,9 @@ export class ZkBobClient extends ZkBobAccountlessClient {
   // Request the latest state from the relayer
   // Returns isReadyToTransact flag
   public async updateState(): Promise<boolean> {
-    const poolAlias = this.curPool;
     return await this.zpState().updateState(
       this.relayer(),
-      async (index) => (await this.getPoolState(index, poolAlias)).root,
+      async (index) => (await this.getPoolState(index)).root,
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );
