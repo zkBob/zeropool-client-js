@@ -1183,11 +1183,10 @@ export class ZkBobClient extends ZkBobProvider {
   // | Local and delegated prover support                                       |
   // ----------------------------------------------------------------------------
   public async setProverMode(mode: ProverMode) {
-    await super.setProverMode(mode);
     if (mode != ProverMode.Delegated) {
         this.worker.loadTxParams();
     }
-    //this.account?.proverMode = mode;
+    await super.setProverMode(mode);
   }
 
   // Universal proving routine
