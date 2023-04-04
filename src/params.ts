@@ -44,21 +44,20 @@ export class SnarkParams {
     }
 
     // VKs are much smaller than params so we can refetch it in case any errors
+    // VK doesn't stored at the local storage (no verification ability currently)
     public async getVk(): Promise<any> {
         let attempts = 0;
         while (!this.isVkReady() && attempts++ < MAX_VK_LOAD_ATTEMPTS) {
           console.time(`VK initializing`);
           try {
-            const cache = await this.fileCache();
-            let vkData = await cache.getOrCache(this.vkUrl);
-            const vk = JSON.parse(Buffer.from(vkData).toString('utf8'));
+            const vk = await (await fetch(this.vkUrl, { headers: { 'Cache-Control': 'no-cache' } })).json();
             // verify VK structure
             if (typeof vk === 'object' && vk !== null &&
-                vk.hasOwnProperty('alpha') && typeof Array.isArray(vk.alpha) &&
-                vk.hasOwnProperty('beta') && typeof Array.isArray(vk.beta) &&
-                vk.hasOwnProperty('gamma') && typeof Array.isArray(vk.gamma) &&
-                vk.hasOwnProperty('delta') && typeof Array.isArray(vk.delta) &&
-                vk.hasOwnProperty('ic') && typeof Array.isArray(vk.uc))
+                vk.hasOwnProperty('alpha') && Array.isArray(vk.alpha) &&
+                vk.hasOwnProperty('beta') && Array.isArray(vk.beta) &&
+                vk.hasOwnProperty('gamma') && Array.isArray(vk.gamma) &&
+                vk.hasOwnProperty('delta') && Array.isArray(vk.delta) &&
+                vk.hasOwnProperty('ic') && Array.isArray(vk.ic))
             {
                 this.vk = vk;
             } else {
@@ -67,7 +66,7 @@ export class SnarkParams {
 
             this.vk = vk;
           } catch(err) {
-            console.warn(`Cannot load verification key: ${err.message}`);
+            console.warn(`VK loading attempt has failed: ${err.message}`);
           } finally {
             console.timeEnd(`VK initializing`);
           }

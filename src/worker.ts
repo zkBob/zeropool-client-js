@@ -9,8 +9,6 @@ import { SnarkParams } from './params';
 let txParams: SnarkParams;
 let txParser: any;
 let zpAccounts: { [accountId: string]: any } = {};
-let transferVk: any;
-let treeVk: any;
 
 let wasm: any;
 
@@ -40,7 +38,10 @@ const obj = {
     }
 
     txParams = new SnarkParams(txParamsUrl, txVkUrl, txParamsHash);
-    txParams.getVk(); // VK is always needed to transact, so initiate its loading right now
+    // VK is always needed to transact, so initiate its loading right now
+    txParams.getVk().catch((err) => {
+      console.warn(`Unable to fetch tx verification key (don't worry, it will refetched when needed): ${err.message}`);
+    });
 
     txParser = wasm.TxParser._new()
 
@@ -174,7 +175,7 @@ const obj = {
   },
 
   async verifyTxProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
-    const vk = await txParams.getVk();
+    const vk = await txParams.getVk();  // will throw error if VK fetch fail
     return wasm.Proof.verify(vk, inputs, proof);
   },
 
