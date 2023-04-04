@@ -7,7 +7,6 @@ import { threads } from 'wasm-feature-detect';
 import { SnarkParams } from './params';
 
 let txParams: SnarkParams;
-let treeParams: any;
 let txParser: any;
 let zpAccounts: { [accountId: string]: any } = {};
 let transferVk: any;
@@ -40,30 +39,22 @@ const obj = {
       await wasm.default()
     }
 
-    txParams = new SnarkParams(txParamsUrl, txParamsHash);
-    txParser = wasm.TxParser._new()
+    txParams = new SnarkParams(txParamsUrl, txVkUrl, txParamsHash);
+    txParams.getVk(); // VK is always needed to transact, so initiate its loading right now
 
-    console.time(`VK initializing`);
-    const noCacheHeader = { method: 'GET', headers: { 'Cache-Control': 'no-cache' } };
-    transferVk = await (await fetch(txVkUrl, noCacheHeader)).json();
-    console.timeEnd(`VK initializing`);
+    txParser = wasm.TxParser._new()
 
     console.info('Web worker init complete.');
   },
 
   async loadTxParams() {
-    txParams.load(wasm);
+    txParams.getParams(wasm);
   },
 
   async proveTx(pub, sec) {
     console.debug('Web worker: proveTx');
-    let params = await txParams.get(wasm);
+    let params = await txParams.getParams(wasm);
     return wasm.Proof.tx(params, pub, sec);
-  },
-
-  async proveTree(pub, sec) {
-    console.debug('Web worker: proveTree');
-    return wasm.Proof.tree(treeParams, pub, sec);
   },
 
   async parseTxs(sk: Uint8Array, txs: IndexedTx[]): Promise<ParseTxsResult> {
@@ -183,11 +174,8 @@ const obj = {
   },
 
   async verifyTxProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
-    return wasm.Proof.verify(transferVk!, inputs, proof);
-  },
-
-  async verifyTreeProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
-    return wasm.Proof.verify(treeVk!, inputs, proof);
+    const vk = await txParams.getVk();
+    return wasm.Proof.verify(vk, inputs, proof);
   },
 
   async verifyShieldedAddress(shieldedAddress: string): Promise<boolean> {
