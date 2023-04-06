@@ -1,4 +1,4 @@
-import { ServiceType } from "./rest-helper";
+import { ServiceType } from "./services/common";
 
 export class BobError extends Error {
     constructor(message: string) {

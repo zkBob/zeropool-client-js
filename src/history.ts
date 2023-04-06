@@ -209,7 +209,7 @@ export class HistoryStorage {
   }
 
   static async init(db_id: string, rpcUrl: string, worker: any): Promise<HistoryStorage> {
-    const db = await openDB(`zeropool.${db_id}.history`, 3, {
+    const db = await openDB(`zkb.${db_id}.history`, 3, {
       upgrade(db, oldVersion, newVersions) {
         if (oldVersion < 2) {
           db.createObjectStore(TX_TABLE);   // table holds parsed history transactions

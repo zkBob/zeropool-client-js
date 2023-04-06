@@ -17,7 +17,7 @@ export function deriveSpendingKey(mnemonic: string, networkType: NetworkType): U
 }
 
 // Universal key derivation: the same SK will be derived for each network from a seed
-export function deriveSpendingKeyZkBob(mnemonic: string, networkType: NetworkType): Uint8Array {
+export function deriveSpendingKeyZkBob(mnemonic: string): Uint8Array {
   return bigintToArrayLe(Privkey(mnemonic, "m/0'/0'").k);
 }
 

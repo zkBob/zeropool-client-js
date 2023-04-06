@@ -1,4 +1,6 @@
 export interface NetworkBackend {
+    isEnabled(): boolean;
+    setEnabled(enabled: boolean);
     getChainId(): Promise<number>;
     getTokenName(tokenAddress: string): Promise<string>;
     getTokenNonce(tokenAddress: string, address: string): Promise<number>;
