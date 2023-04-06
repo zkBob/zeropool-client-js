@@ -1,43 +1,47 @@
 import { NetworkBackend } from './network';
 
 export class PolkadotNetwork implements NetworkBackend {
+    isEnabled(): boolean { return false; }
+    
+    setEnabled(_enabled: boolean) { }
+
     async getChainId(): Promise<number> {
         return 0; // FIXME
     }
 
-    async getTokenName(tokenAddress: string): Promise<string> {
+    async getTokenName(_tokenAddress: string): Promise<string> {
         return '';
     }
 
-    async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
+    async getTokenNonce(_tokenAddress: string, _address: string): Promise<number> {
         return 0;
     }
 
-    async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {
+    async getTokenBalance(_tokenAddress: string, _address: string): Promise<bigint> {
         return BigInt(0);
     }
 
-    async getDenominator(contractAddress: string): Promise<bigint> {
+    async getDenominator(_contractAddress: string): Promise<bigint> {
         return BigInt(1000); // FIXME
     }
 
-    async getPoolId(contractAddress: string): Promise<number> {
+    async getPoolId(_contractAddress: string): Promise<number> {
         return 0; // FIXME
     }
 
-    async poolLimits(contractAddress: string, address: string | undefined): Promise<any> {
+    async poolLimits(_contractAddress: string, _address: string | undefined): Promise<any> {
         return undefined; // FIXME
     }
 
-    async getDirectDepositFee(contractAddress: string): Promise<bigint> {
+    async getDirectDepositFee(_contractAddress: string): Promise<bigint> {
         return BigInt(0);
     }
 
-    async poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
+    async poolState(_contractAddress: string, _index?: bigint): Promise<{index: bigint, root: bigint}> {
         return {index: BigInt(0), root: BigInt(0)};
     }
 
-    public async getTxRevertReason(txHash: string): Promise<string | null> {
+    public async getTxRevertReason(_txHash: string): Promise<string | null> {
         return null;
     }
 
