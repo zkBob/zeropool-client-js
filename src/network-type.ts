@@ -10,6 +10,7 @@ export enum NetworkType {
   polkadot = 'polkadot',
   kusama = 'kusama',
   polygon = 'polygon',
+  optimism = 'optimism',
   // testnets
   sepolia = 'sepolia',
   goerli = 'goerli',
@@ -34,6 +35,7 @@ export namespace NetworkType {
       case NetworkType.xdai:
       case NetworkType.aurora:
       case NetworkType.polygon:
+      case NetworkType.optimism:
       case NetworkType.sepolia:
       case NetworkType.goerli:
         return `/0'/0/${account}`;
@@ -69,6 +71,8 @@ export namespace NetworkType {
         return 434;
       case NetworkType.polygon:
         return 966;
+      case NetworkType.optimism:
+        return 614;
       case NetworkType.sepolia:
       case NetworkType.goerli:
         return 1;
