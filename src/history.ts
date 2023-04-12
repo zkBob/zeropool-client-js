@@ -5,6 +5,7 @@ import { ShieldedTx, TxType } from './tx';
 import { toCanonicalSignature } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
+import { ZkBobState } from './state';
 
 const LOG_HISTORY_SYNC = false;
 const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
@@ -179,7 +180,7 @@ export class HistoryStorage {
   private db: IDBPDatabase;
   private syncIndex = -1;
   private syncAttempts = 0;
-  private worker: any;
+  private state: ZkBobState;
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
                                           //(while tx isn't processed on relayer)
@@ -202,13 +203,13 @@ export class HistoryStorage {
   private syncHistoryPromise: Promise<void> | undefined;
   private web3;
 
-  constructor(db: IDBPDatabase, rpcUrl: string, worker: any) {
+  constructor(db: IDBPDatabase, rpcUrl: string, state: ZkBobState) {
     this.db = db;
     this.web3 = new Web3(rpcUrl);
-    this.worker = worker;
+    this.state = state;
   }
 
-  static async init(db_id: string, rpcUrl: string, worker: any): Promise<HistoryStorage> {
+  static async init(db_id: string, rpcUrl: string, state: ZkBobState): Promise<HistoryStorage> {
     const db = await openDB(`zkb.${db_id}.history`, 3, {
       upgrade(db, oldVersion, newVersions) {
         if (oldVersion < 2) {
@@ -223,7 +224,7 @@ export class HistoryStorage {
       }
     });
 
-    const storage = new HistoryStorage(db, rpcUrl, worker);
+    const storage = new HistoryStorage(db, rpcUrl, state);
     await storage.preloadCache();
 
     return storage;
@@ -776,7 +777,7 @@ export class HistoryStorage {
                       if (memo.acc) {
                         // 1. we initiated it => outcoming tx(s)
                         const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
-                          const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                          const destAddr = await this.state.assembleAddress(note.d, note.p_d);
                           return {to: destAddr, amount: BigInt(note.b)};
                         }));
 
@@ -791,7 +792,7 @@ export class HistoryStorage {
                         // 2. somebody initiated it => incoming tx(s)
 
                         const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-                          const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                          const destAddr = await this.state.assembleAddress(note.d, note.p_d);
                           return {to: destAddr, amount: BigInt(note.b)};
                         }));
 
@@ -822,7 +823,7 @@ export class HistoryStorage {
                 } else if (txSelector == PoolSelector.AppendDirectDeposit) {
                   // Direct Deposit tranaction
                   const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-                    const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                    const destAddr = await this.state.assembleAddress(note.d, note.p_d);
                     return {to: destAddr, amount: BigInt(note.b)};
                   }));
 
