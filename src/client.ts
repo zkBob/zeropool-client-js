@@ -7,7 +7,7 @@ import { TxType } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
 import { EphemeralAddress } from './ephemeral';
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode } from 'libzkbob-rs-wasm-web';
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
 import { 
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
@@ -363,6 +363,10 @@ export class ZkBobClient extends ZkBobProvider {
   // Returns true if shieldedAddress belogs to the user's account and the current pool
   public async isMyAddress(shieldedAddress: string): Promise<boolean> {
     return this.zpState().isOwnAddress(shieldedAddress);
+  }
+
+  public async addressInfo(shieldedAddress: string): Promise<IAddressComponents> {
+    return this.zpState().parseAddress(shieldedAddress);
   }
 
   // Waiting while relayer process the jobs set

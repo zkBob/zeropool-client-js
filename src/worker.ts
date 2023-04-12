@@ -1,7 +1,7 @@
 import { expose } from 'comlink';
 import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
           ParseTxsResult, ParseTxsColdStorageResult, StateUpdate,
-          IndexedTx, TreeNode, SnarkProof,
+          IndexedTx, TreeNode, SnarkProof, IAddressComponents,
         } from 'libzkbob-rs-wasm-web';
 import { threads } from 'wasm-feature-detect';
 import { SnarkParams } from './params';
@@ -195,6 +195,10 @@ const obj = {
   async assembleAddress(accountId: string, d: string, p_d: string): Promise<string> {
     return zpAccounts[accountId].assembleAddress(d, p_d);
   },
+
+  async parseAddress(accountId: string, shieldedAddress: string): Promise<IAddressComponents> {
+    return zpAccounts[accountId].parseAddress(shieldedAddress);
+  }
 };
 
 expose(obj);

@@ -1,6 +1,6 @@
 import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
           ParseTxsResult, ParseTxsColdStorageResult, StateUpdate,
-          DecryptedMemo, IndexedTx, TreeNode,
+          DecryptedMemo, IndexedTx, TreeNode, IAddressComponents,
       } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
 import { bufToHex, isRangesIntersected } from './utils';
@@ -227,6 +227,10 @@ export class ZkBobState {
 
   public async assembleAddress(d: string, p_d: string): Promise<string> {
     return this.worker.assembleAddress(this.stateId, d, p_d);
+  }
+
+  public async parseAddress(shieldedAddress: string): Promise<IAddressComponents> {
+    return this.worker.parseAddress(this.stateId, shieldedAddress);
   }
 
   public async createDepositPermittable(deposit: IDepositPermittableData): Promise<any> {
