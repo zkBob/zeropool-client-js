@@ -10,6 +10,8 @@ import { ZkBobState } from './state';
 const LOG_HISTORY_SYNC = false;
 const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
 
+const HISTORY_RECORD_VERSION = 3; // used to upgrade history records format in the database
+
 export enum HistoryTransactionType {
   Deposit = 1,
   TransferIn,
@@ -221,8 +223,46 @@ export class HistoryStorage {
         if (oldVersion < 3) {
           db.createObjectStore(TX_FAILED_TABLE, {autoIncrement: true});
         }
+
+        if (oldVersion == 0) {
+          // database was created => initialize it
+          db.put(HISTORY_STATE_TABLE, HISTORY_RECORD_VERSION, 'version');
+        }
       }
     });
+
+    // upgrade existig history records if needed
+    const savedVersion: number = await db.get(HISTORY_STATE_TABLE, 'version');
+    if (!savedVersion) {
+      console.info(`[HistoryStorage] converting old zk-addresses in the history`);
+      let cursor = await db.transaction(TX_TABLE, "readwrite").store.openCursor();
+      while (cursor) {
+        const curRecord: HistoryRecord = cursor.value;
+        let isRecChanged = false;
+        if (curRecord.actions) {
+          for (const aRec of curRecord.actions) {
+            if (!aRec.from.startsWith('0x') && aRec.from.includes(':') == false) {
+              // old address => rebuild it
+              try {
+                const newAddr = state.convertAddress(aRec.from);
+                isRecChanged = true;
+                console.info(`[HistoryStorage] ${aRec.from} -> ${newAddr}`);
+                aRec.from
+              } catch(err) {
+                console.warn(`[HistoryStorage] Cannot convert old zkAddress ${aRec.from} to the new one: ${err.message}`);
+              }
+            }
+          }
+          console.log(`[HistoryStorage] old history record was found! Clean deprecated records...`);
+        }
+        if (isRecChanged) {
+          cursor.update(curRecord);
+        }
+        cursor = await cursor.continue();
+      }
+      
+      await db.put(HISTORY_STATE_TABLE, HISTORY_RECORD_VERSION, 'version');
+    }
 
     const storage = new HistoryStorage(db, rpcUrl, state);
     await storage.preloadCache();

@@ -196,6 +196,10 @@ const obj = {
     return zpAccounts[accountId].assembleAddress(d, p_d);
   },
 
+  async convertAddressToChainSpecific(accountId: string, oldAddress: string): Promise<string> {
+    return zpAccounts[accountId].convertAddressToChainSpecific(oldAddress);
+  },
+
   async parseAddress(accountId: string, shieldedAddress: string): Promise<IAddressComponents> {
     return zpAccounts[accountId].parseAddress(shieldedAddress);
   }

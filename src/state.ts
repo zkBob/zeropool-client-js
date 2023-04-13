@@ -229,6 +229,11 @@ export class ZkBobState {
     return this.worker.assembleAddress(this.stateId, d, p_d);
   }
 
+  // Converts zk-addresss from the old prefixless format to the new chain-specific one
+  public async convertAddress(shieldedAddress: string): Promise<string> {
+    return await this.worker.convertAddressToChainSpecific(this.stateId, shieldedAddress);
+  }
+
   public async parseAddress(shieldedAddress: string): Promise<IAddressComponents> {
     return this.worker.parseAddress(this.stateId, shieldedAddress);
   }
