@@ -212,6 +212,7 @@ export class HistoryStorage {
   }
 
   static async init(db_id: string, rpcUrl: string, state: ZkBobState): Promise<HistoryStorage> {
+    let isNewDB = false;
     const db = await openDB(`zkb.${db_id}.history`, 3, {
       upgrade(db, oldVersion, newVersions) {
         if (oldVersion < 2) {
@@ -224,41 +225,44 @@ export class HistoryStorage {
           db.createObjectStore(TX_FAILED_TABLE, {autoIncrement: true});
         }
 
-        if (oldVersion == 0) {
-          // database was created => initialize it
-          db.put(HISTORY_STATE_TABLE, HISTORY_RECORD_VERSION, 'version');
+        if (oldVersion == 0 ) {
+          isNewDB = true;
         }
       }
     });
 
-    // upgrade existig history records if needed
+    // Working with the internal records version
     const savedVersion: number = await db.get(HISTORY_STATE_TABLE, 'version');
-    if (!savedVersion) {
-      console.info(`[HistoryStorage] converting old zk-addresses in the history`);
-      let cursor = await db.transaction(TX_TABLE, "readwrite").store.openCursor();
-      while (cursor) {
-        const curRecord: HistoryRecord = cursor.value;
-        let isRecChanged = false;
-        if (curRecord.actions) {
-          for (const aRec of curRecord.actions) {
-            if (!aRec.from.startsWith('0x') && aRec.from.includes(':') == false) {
-              // old address => rebuild it
-              try {
-                const newAddr = state.convertAddress(aRec.from);
-                isRecChanged = true;
-                console.info(`[HistoryStorage] ${aRec.from} -> ${newAddr}`);
-                aRec.from
-              } catch(err) {
-                console.warn(`[HistoryStorage] Cannot convert old zkAddress ${aRec.from} to the new one: ${err.message}`);
+    if (!savedVersion || savedVersion < HISTORY_RECORD_VERSION) {
+      if (!savedVersion && !isNewDB) {
+        // upgrade existig history records if needed
+        // we should make it once to prevent history scanning on the each initialization
+        let cursor = await db.transaction(TX_TABLE, "readwrite").store.openCursor();
+        let oldAddressDetected = false;
+        while (cursor && !oldAddressDetected) {
+          const curRecord: HistoryRecord = cursor.value;
+          if (curRecord.actions) {
+            for (const aRec of curRecord.actions) {
+              if (!aRec.from.startsWith('0x') && aRec.from.includes(':') == false ||
+                  !aRec.to.startsWith('0x') && aRec.to.includes(':') == false)
+              { // old address detected
+                oldAddressDetected = true;
+                break;
               }
             }
+            console.log(`[HistoryStorage] old history record was found! Clean deprecated records...`);
           }
-          console.log(`[HistoryStorage] old history record was found! Clean deprecated records...`);
+          cursor = await cursor.continue();
         }
-        if (isRecChanged) {
-          cursor.update(curRecord);
+
+        if (oldAddressDetected) {
+          console.warn(`[HistoryStorage] old history record was found! Cleaning history to rebuilt it...`);
+          await db.clear(TX_TABLE);
+          await db.delete(HISTORY_STATE_TABLE, 'sync_index');
+          await db.delete(HISTORY_STATE_TABLE, 'fail_indexes');
+        } else {
+          console.info(`[HistoryStorage] history was scanned for the old addresses, no matches were found`);
         }
-        cursor = await cursor.continue();
       }
       
       await db.put(HISTORY_STATE_TABLE, HISTORY_RECORD_VERSION, 'version');
@@ -299,8 +303,7 @@ export class HistoryStorage {
       if (curRecord.actions === undefined) {
         console.log(`[HistoryStorage] old history record was found! Clean deprecated records...`);
         await this.db.clear(TX_TABLE);
-        await this.db.clear(HISTORY_STATE_TABLE);
-        this.syncIndex = -1;
+        await this.cleanIndexes();
         return this.preloadCache();
       }
       this.currentHistory.set(Number(cursor.primaryKey), cursor.value);
@@ -642,14 +645,19 @@ export class HistoryStorage {
     await this.db.clear(TX_FAILED_TABLE);
     await this.db.clear(DECRYPTED_MEMO_TABLE);
     await this.db.clear(DECRYPTED_PENDING_MEMO_TABLE);
-    await this.db.clear(HISTORY_STATE_TABLE);
+    await this.cleanIndexes();
 
     // Clean local cache
-    this.syncIndex = -1;
     this.unparsedMemo.clear();
     this.unparsedPendingMemo.clear();
     this.currentHistory.clear();
     this.failedHistory = [];
+  }
+
+  private async cleanIndexes(): Promise<void> {
+    await this.db.delete(HISTORY_STATE_TABLE, 'sync_index');
+    await this.db.delete(HISTORY_STATE_TABLE, 'fail_indexes');
+    this.syncIndex = -1;
   }
 
   // ------- Private rouutines --------
