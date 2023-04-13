@@ -334,7 +334,7 @@ export class ZkBobClient extends ZkBobProvider {
       await this.updateState();
     }
 
-    return await this.zpState().history?.getAllHistory((addr) => this.isMyAddress(addr)) ?? [];
+    return await this.zpState().history?.getAllHistory() ?? [];
   }
 
   // ------------------=========< Service Routines >=========-------------------

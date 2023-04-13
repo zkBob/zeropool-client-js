@@ -302,7 +302,7 @@ export class HistoryStorage {
     console.log(`[HistoryStorage] preload ${this.currentHistory.size} history records, ${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unparsed memos (synced from ${this.syncIndex + 1})`);
   }
 
-  public async getAllHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<HistoryRecord[]> {
+  public async getAllHistory(): Promise<HistoryRecord[]> {
     if (this.syncHistoryPromise == undefined) {
       this.syncHistoryPromise = new Promise<void>(async (resolve) => {
         this.syncAttempts = 0;
@@ -311,7 +311,7 @@ export class HistoryStorage {
           if (this.syncAttempts++ > 0) {
             console.warn(`[HistoryStorage] history retry attempt #${this.syncAttempts} (${this.unparsedMemo.size} memo were not converted yet)`);
           }
-          result = await this.syncHistory(getIsLoopback);
+          result = await this.syncHistory();
           if (result) {
             break;
           }
@@ -619,7 +619,7 @@ export class HistoryStorage {
   // Pending transactions are not influence on the return value (in case of error it will re-fetched in the next time)
   // The method can be throw an error in case of unrecoverable error
 
-  private async syncHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<boolean> {
+  private async syncHistory(): Promise<boolean> {
     const startTime = Date.now();
 
     if (this.unparsedMemo.size > 0 || this.unparsedPendingMemo.size > 0) {
@@ -631,7 +631,7 @@ export class HistoryStorage {
       const processedIndexes: number[] = [];
       const unprocessedIndexes: number[] = [];
       for (const oneMemo of this.unparsedMemo.values()) {
-        const hist = this.convertToHistory(oneMemo, false, getIsLoopback).then( records => {
+        const hist = this.convertToHistory(oneMemo, false).then( records => {
           if (records.length > 0) {
             processedIndexes.push(oneMemo.index);
           } else {
@@ -649,7 +649,7 @@ export class HistoryStorage {
       const processedPendingIndexes: number[] = [];
       for (const oneMemo of this.unparsedPendingMemo.values()) {
         if (this.failedHistory.find(rec => rec.txHash == oneMemo.txHash) === undefined) {
-          const hist = this.convertToHistory(oneMemo, true, getIsLoopback);
+          const hist = this.convertToHistory(oneMemo, true);
           historyPromises.push(hist);
 
           processedPendingIndexes.push(oneMemo.index);
@@ -724,7 +724,7 @@ export class HistoryStorage {
     return data;
   }
 
-  private async convertToHistory(memo: DecryptedMemo, pending: boolean, getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<HistoryRecordIdx[]> {
+  private async convertToHistory(memo: DecryptedMemo, pending: boolean): Promise<HistoryRecordIdx[]> {
     const txHash = memo.txHash;
     if (txHash) {
       const txData = await this.web3.eth.getTransaction(txHash).catch(() => null);
@@ -785,7 +785,13 @@ export class HistoryStorage {
                           const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
                           allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                         } else {
-                          const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
+                          const rec = await HistoryRecord.transferOut(
+                            transfers,
+                            feeAmount,
+                            ts, txHash,
+                            pending,
+                            async (addr) => this.state.isOwnAddress(addr)
+                          );
                           allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                         }
                       } else {
