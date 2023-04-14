@@ -68,7 +68,6 @@ const obj = {
 
   // accountId is a unique string depends on network, poolId and sk
   // The local db will be named with accountId
-  // isSepoliaBobPool - a workaround for pool_id overlaping between Polygon and Sepolia BOB pools
   async createAccount(accountId: string, sk: Uint8Array, poolId: number, network: string): Promise<void> {
     console.debug('Web worker: createAccount');
     try {
