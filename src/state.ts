@@ -1,6 +1,6 @@
 import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
           ParseTxsResult, ParseTxsColdStorageResult, StateUpdate,
-          DecryptedMemo, IndexedTx, TreeNode,
+          DecryptedMemo, IndexedTx, TreeNode, IAddressComponents,
       } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
 import { bufToHex, isRangesIntersected } from './utils';
@@ -93,10 +93,10 @@ export class ZkBobState {
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
 
-    await worker.createAccount(zpState.stateId, zpState.sk, poolId);
+    await worker.createAccount(zpState.stateId, zpState.sk, poolId, networkName);
     zpState.worker = worker;
     
-    zpState.history = await HistoryStorage.init(zpState.stateId, rpcUrl, worker);
+    zpState.history = await HistoryStorage.init(zpState.stateId, rpcUrl, zpState);
 
     let network = networkName as NetworkType;
     zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, network, rpcUrl, denominator);
@@ -120,7 +120,7 @@ export class ZkBobState {
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
 
-    await worker.createAccount(zpState.stateId, zpState.sk, poolId);
+    await worker.createAccount(zpState.stateId, zpState.sk, poolId, networkName);
     zpState.worker = worker;
 
     return zpState;
@@ -154,16 +154,6 @@ export class ZkBobState {
 
   public async usableNotes(): Promise<any[]> {
     return await this.worker.usableNotes(this.stateId);
-  }
-
-  public async isOwnAddress(shieldedAddress: string): Promise<boolean> {
-    let res = this.shieldedAddressCache.get(shieldedAddress);
-    if (res === undefined) {
-      res = this.worker.isOwnAddress(this.stateId, shieldedAddress);
-      this.shieldedAddressCache.set(shieldedAddress, res!);
-    }
-
-    return res!;
   }
 
   public async getRoot(): Promise<bigint> {
@@ -213,6 +203,41 @@ export class ZkBobState {
     return await this.worker.generateAddress(this.stateId);
   }
 
+  public async generateUniversalAddress(): Promise<string> {
+    return await this.worker.generateUniversalAddress(this.stateId);
+  }
+
+  public async generateAddressForSeed(seed: Uint8Array): Promise<string> {
+    return await this.worker.generateAddressForSeed(this.stateId, seed);
+  }
+
+  public async verifyShieldedAddress(shieldedAddress: string): Promise<boolean> {
+    return await this.worker.verifyShieldedAddress(this.stateId, shieldedAddress);
+  }
+
+  public async isOwnAddress(shieldedAddress: string): Promise<boolean> {
+    let res = this.shieldedAddressCache.get(shieldedAddress);
+    if (res === undefined) {
+      res = this.worker.isOwnAddress(this.stateId, shieldedAddress);
+      this.shieldedAddressCache.set(shieldedAddress, res!);
+    }
+
+    return res!;
+  }
+
+  public async assembleAddress(d: string, p_d: string): Promise<string> {
+    return this.worker.assembleAddress(this.stateId, d, p_d);
+  }
+
+  // Converts zk-addresss from the old prefixless format to the new chain-specific one
+  public async convertAddress(shieldedAddress: string): Promise<string> {
+    return await this.worker.convertAddressToChainSpecific(this.stateId, shieldedAddress);
+  }
+
+  public async parseAddress(shieldedAddress: string): Promise<IAddressComponents> {
+    return this.worker.parseAddress(this.stateId, shieldedAddress);
+  }
+
   public async createDepositPermittable(deposit: IDepositPermittableData): Promise<any> {
     return await this.worker.createDepositPermittable(this.stateId, deposit);
   }
@@ -232,10 +257,6 @@ export class ZkBobState {
   public async createTransfer(transfer: ITransferData): Promise<any> {
     return await this.worker.createTransfer(this.stateId, transfer);
   }
-
-  /*private async updateStateInternal(stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
-    return await this.worker.updateState(this.stateId, stateUpdate, siblings);
-  }*/
 
   public async lastVerifiedIndex(): Promise<bigint> {
     return await this.worker.getTreeLastStableIndex(this.stateId);

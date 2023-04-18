@@ -1,10 +1,11 @@
 import { expose } from 'comlink';
 import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
           ParseTxsResult, ParseTxsColdStorageResult, StateUpdate,
-          IndexedTx, TreeNode, SnarkProof,
+          IndexedTx, TreeNode, SnarkProof, IAddressComponents,
         } from 'libzkbob-rs-wasm-web';
 import { threads } from 'wasm-feature-detect';
 import { SnarkParams } from './params';
+import { InternalError } from './errors';
 
 let txParams: SnarkParams;
 let txParser: any;
@@ -67,12 +68,11 @@ const obj = {
 
   // accountId is a unique string depends on network, poolId and sk
   // The local db will be named with accountId
-  async createAccount(accountId: string, sk: Uint8Array, poolId: number): Promise<void> {
+  async createAccount(accountId: string, sk: Uint8Array, poolId: number, network: string): Promise<void> {
     console.debug('Web worker: createAccount');
     try {
       const state = await wasm.UserState.init(accountId);
-      const acc = new wasm.UserAccount(sk, BigInt(poolId), state);
-      zpAccounts[accountId] = acc;
+      zpAccounts[accountId] = new wasm.UserAccount(sk, poolId, state, network);
     } catch (e) {
       console.error(e);
     }
@@ -94,20 +94,12 @@ const obj = {
     return zpAccounts[accountId].getUsableNotes();
   },
 
-  async isOwnAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
-    return zpAccounts[accountId].isOwnAddress(shieldedAddress);
-  },
-
   async rawState(accountId: string): Promise<any> {
     return zpAccounts[accountId].getWholeState();
   },
 
   async free(accountId: string): Promise<void> {
     return zpAccounts[accountId].free();
-  },
-
-  async generateAddress(accountId: string): Promise<string> {
-    return zpAccounts[accountId].generateAddress();
   },
 
   async createDepositPermittable(accountId: string, deposit: IDepositPermittableData): Promise<any> {
@@ -179,15 +171,36 @@ const obj = {
     return wasm.Proof.verify(vk, inputs, proof);
   },
 
-  async verifyShieldedAddress(shieldedAddress: string): Promise<boolean> {
-    return wasm.validateAddress(shieldedAddress);
+  async generateAddress(accountId: string): Promise<string> {
+    return zpAccounts[accountId].generateAddress();
   },
 
-  async assembleAddress(d: string, p_d: string): Promise<string> {
-    return wasm.assembleAddress(d, p_d);
+  async generateUniversalAddress(accountId: string): Promise<string> {
+    return zpAccounts[accountId].generateUniversalAddress();
   },
-  async genBurnerAddress(poolId: number, seed: Uint8Array): Promise<string> {
-    return wasm.genBurnerAddress(BigInt(poolId), seed);
+
+  async generateAddressForSeed(accountId: string, seed: Uint8Array): Promise<string> {
+    return zpAccounts[accountId].generateAddressForSeed(seed);
+  },
+
+  async verifyShieldedAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
+    return zpAccounts[accountId].validateAddress(shieldedAddress);
+  },
+
+  async isOwnAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
+    return zpAccounts[accountId].isOwnAddress(shieldedAddress);
+  },
+
+  async assembleAddress(accountId: string, d: string, p_d: string): Promise<string> {
+    return zpAccounts[accountId].assembleAddress(d, p_d);
+  },
+
+  async convertAddressToChainSpecific(accountId: string, oldAddress: string): Promise<string> {
+    return zpAccounts[accountId].convertAddressToChainSpecific(oldAddress);
+  },
+
+  async parseAddress(accountId: string, shieldedAddress: string): Promise<IAddressComponents> {
+    return zpAccounts[accountId].parseAddress(shieldedAddress);
   }
 };
 

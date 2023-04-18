@@ -5,10 +5,11 @@ export enum NetworkType {
   ethereum = 'ethereum',
   polygon = 'polygon',
   optimism = 'optimism',
-  goerliOptimism = 'goerli-optimism',
   // testnets
   sepolia = 'sepolia',
   goerli = 'goerli',
+  goerliOptimism = 'goerli-optimism',
+  localNode = 'local-node',
 }
 
 export namespace NetworkType {
@@ -32,6 +33,7 @@ export namespace NetworkType {
       case NetworkType.sepolia:
       case NetworkType.goerli:
       case NetworkType.goerliOptimism:
+      case NetworkType.localNode:
         return `/0'/0/${account}`;
         
       default:
@@ -51,6 +53,7 @@ export namespace NetworkType {
       case NetworkType.sepolia:
       case NetworkType.goerli:
       case NetworkType.goerliOptimism:
+      case NetworkType.localNode:
         return 1;
 
       default:
@@ -73,6 +76,9 @@ export namespace NetworkType {
         return 'goerli';
       case 420:
         return 'goerli-optimism';
+      case 1337:
+      case 31337:
+        return 'local-node';
 
       default:
         return undefined;

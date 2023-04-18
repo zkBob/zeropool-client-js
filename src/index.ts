@@ -13,5 +13,6 @@ export { PoolLimits, TreeState } from './client-provider';
 export { TreeNode } from 'libzkbob-rs-wasm-web';
 export { EvmNetwork } from './networks/evm'
 export { deriveSpendingKeyZkBob } from './utils'
+export { IAddressComponents } from 'libzkbob-rs-wasm-web';
 
 export * from './errors'
