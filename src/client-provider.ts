@@ -83,9 +83,10 @@ export class ZkBobProvider {
             }
             // TODO: implement multi-RPC NetworkBackend 
             const backend = new EvmNetwork(chain.rpcUrls[0], false);    // initialize backend in the disabled state
-            const networkName = NetworkType.networkName(Number(chainId));
+            let networkName = NetworkType.networkName(Number(chainId));
             if (!networkName) {
-                throw new InternalError(`The chain with id ${chainId} currently unsupported`);
+                console.warn(`The chain with id ${chainId} currently isn't fully supported. Unsuspectable issues may occured`);
+                networkName = 'unknown-chain';
             }
 
             this.chains[chainId] = {backend, networkName};

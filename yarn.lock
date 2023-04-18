@@ -2732,11 +2732,15 @@ levn@^0.3.0, levn@~0.3.0:
     prelude-ls "~1.1.2"
     type-check "~0.3.2"
 
-"libzkbob-rs-wasm-web-mt@file:../libzkbob-rs/libzkbob-rs-wasm/web-mt":
-  version "1.1.0"
+libzkbob-rs-wasm-web-mt@1.2.0:
+  version "1.2.0"
+  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web-mt/-/libzkbob-rs-wasm-web-mt-1.2.0.tgz#4058dfc416bca9e91e293fc3cb172eba41b0f217"
+  integrity sha512-d6TElAdXjNSdYtOlWNzzjOgtyN7YF1YUHmCfmSUnOR8VXtv3AzSRuYNjGC5PKivXqWCP8KCXI8qPpsCO535mpw==
 
-"libzkbob-rs-wasm-web@file:../libzkbob-rs/libzkbob-rs-wasm/web":
-  version "1.1.0"
+libzkbob-rs-wasm-web@1.2.0:
+  version "1.2.0"
+  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web/-/libzkbob-rs-wasm-web-1.2.0.tgz#bb2f82877ca9f8a14c33f69d33e3ab38e6b1900f"
+  integrity sha512-yTKp+dV/XXhnKQSpsC2bDZrRSXHqSRPX1jRmAUP0huI2fwFToARMz75lK/nF3ZipieU4ge5JSuV2e8/ADRrQbw==
 
 loader-runner@^4.2.0:
   version "4.3.0"
