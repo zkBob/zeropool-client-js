@@ -5,9 +5,12 @@ import { ShieldedTx, TxType } from './tx';
 import { toCanonicalSignature } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
+import { ZkBobState } from './state';
 
 const LOG_HISTORY_SYNC = false;
 const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
+
+const HISTORY_RECORD_VERSION = 3; // used to upgrade history records format in the database
 
 export enum HistoryTransactionType {
   Deposit = 1,
@@ -179,7 +182,7 @@ export class HistoryStorage {
   private db: IDBPDatabase;
   private syncIndex = -1;
   private syncAttempts = 0;
-  private worker: any;
+  private state: ZkBobState;
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
                                           //(while tx isn't processed on relayer)
@@ -202,13 +205,14 @@ export class HistoryStorage {
   private syncHistoryPromise: Promise<void> | undefined;
   private web3;
 
-  constructor(db: IDBPDatabase, rpcUrl: string, worker: any) {
+  constructor(db: IDBPDatabase, rpcUrl: string, state: ZkBobState) {
     this.db = db;
     this.web3 = new Web3(rpcUrl);
-    this.worker = worker;
+    this.state = state;
   }
 
-  static async init(db_id: string, rpcUrl: string, worker: any): Promise<HistoryStorage> {
+  static async init(db_id: string, rpcUrl: string, state: ZkBobState): Promise<HistoryStorage> {
+    let isNewDB = false;
     const db = await openDB(`zkb.${db_id}.history`, 3, {
       upgrade(db, oldVersion, newVersions) {
         if (oldVersion < 2) {
@@ -220,10 +224,51 @@ export class HistoryStorage {
         if (oldVersion < 3) {
           db.createObjectStore(TX_FAILED_TABLE, {autoIncrement: true});
         }
+
+        if (oldVersion == 0 ) {
+          isNewDB = true;
+        }
       }
     });
 
-    const storage = new HistoryStorage(db, rpcUrl, worker);
+    // Working with the internal records version
+    const savedVersion: number = await db.get(HISTORY_STATE_TABLE, 'version');
+    if (!savedVersion || savedVersion < HISTORY_RECORD_VERSION) {
+      if (!savedVersion && !isNewDB) {
+        // upgrade existig history records if needed
+        // we should make it once to prevent history scanning on the each initialization
+        let cursor = await db.transaction(TX_TABLE, "readwrite").store.openCursor();
+        let oldAddressDetected = false;
+        while (cursor && !oldAddressDetected) {
+          const curRecord: HistoryRecord = cursor.value;
+          if (curRecord.actions) {
+            for (const aRec of curRecord.actions) {
+              if (!aRec.from.startsWith('0x') && aRec.from.includes(':') == false ||
+                  !aRec.to.startsWith('0x') && aRec.to.includes(':') == false)
+              { // old address detected
+                oldAddressDetected = true;
+                break;
+              }
+            }
+            console.log(`[HistoryStorage] old history record was found! Clean deprecated records...`);
+          }
+          cursor = await cursor.continue();
+        }
+
+        if (oldAddressDetected) {
+          console.warn(`[HistoryStorage] old history record was found! Cleaning history to rebuilt it...`);
+          await db.clear(TX_TABLE);
+          await db.delete(HISTORY_STATE_TABLE, 'sync_index');
+          await db.delete(HISTORY_STATE_TABLE, 'fail_indexes');
+        } else {
+          console.info(`[HistoryStorage] history was scanned for the old addresses, no matches were found`);
+        }
+      }
+      
+      await db.put(HISTORY_STATE_TABLE, HISTORY_RECORD_VERSION, 'version');
+    }
+
+    const storage = new HistoryStorage(db, rpcUrl, state);
     await storage.preloadCache();
 
     return storage;
@@ -258,8 +303,7 @@ export class HistoryStorage {
       if (curRecord.actions === undefined) {
         console.log(`[HistoryStorage] old history record was found! Clean deprecated records...`);
         await this.db.clear(TX_TABLE);
-        await this.db.clear(HISTORY_STATE_TABLE);
-        this.syncIndex = -1;
+        await this.cleanIndexes();
         return this.preloadCache();
       }
       this.currentHistory.set(Number(cursor.primaryKey), cursor.value);
@@ -301,7 +345,7 @@ export class HistoryStorage {
     console.log(`[HistoryStorage] preload ${this.currentHistory.size} history records, ${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unparsed memos (synced from ${this.syncIndex + 1})`);
   }
 
-  public async getAllHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<HistoryRecord[]> {
+  public async getAllHistory(): Promise<HistoryRecord[]> {
     if (this.syncHistoryPromise == undefined) {
       this.syncHistoryPromise = new Promise<void>(async (resolve) => {
         this.syncAttempts = 0;
@@ -310,7 +354,7 @@ export class HistoryStorage {
           if (this.syncAttempts++ > 0) {
             console.warn(`[HistoryStorage] history retry attempt #${this.syncAttempts} (${this.unparsedMemo.size} memo were not converted yet)`);
           }
-          result = await this.syncHistory(getIsLoopback);
+          result = await this.syncHistory();
           if (result) {
             break;
           }
@@ -601,14 +645,19 @@ export class HistoryStorage {
     await this.db.clear(TX_FAILED_TABLE);
     await this.db.clear(DECRYPTED_MEMO_TABLE);
     await this.db.clear(DECRYPTED_PENDING_MEMO_TABLE);
-    await this.db.clear(HISTORY_STATE_TABLE);
+    await this.cleanIndexes();
 
     // Clean local cache
-    this.syncIndex = -1;
     this.unparsedMemo.clear();
     this.unparsedPendingMemo.clear();
     this.currentHistory.clear();
     this.failedHistory = [];
+  }
+
+  private async cleanIndexes(): Promise<void> {
+    await this.db.delete(HISTORY_STATE_TABLE, 'sync_index');
+    await this.db.delete(HISTORY_STATE_TABLE, 'fail_indexes');
+    this.syncIndex = -1;
   }
 
   // ------- Private rouutines --------
@@ -618,7 +667,7 @@ export class HistoryStorage {
   // Pending transactions are not influence on the return value (in case of error it will re-fetched in the next time)
   // The method can be throw an error in case of unrecoverable error
 
-  private async syncHistory(getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<boolean> {
+  private async syncHistory(): Promise<boolean> {
     const startTime = Date.now();
 
     if (this.unparsedMemo.size > 0 || this.unparsedPendingMemo.size > 0) {
@@ -630,7 +679,7 @@ export class HistoryStorage {
       const processedIndexes: number[] = [];
       const unprocessedIndexes: number[] = [];
       for (const oneMemo of this.unparsedMemo.values()) {
-        const hist = this.convertToHistory(oneMemo, false, getIsLoopback).then( records => {
+        const hist = this.convertToHistory(oneMemo, false).then( records => {
           if (records.length > 0) {
             processedIndexes.push(oneMemo.index);
           } else {
@@ -648,7 +697,7 @@ export class HistoryStorage {
       const processedPendingIndexes: number[] = [];
       for (const oneMemo of this.unparsedPendingMemo.values()) {
         if (this.failedHistory.find(rec => rec.txHash == oneMemo.txHash) === undefined) {
-          const hist = this.convertToHistory(oneMemo, true, getIsLoopback);
+          const hist = this.convertToHistory(oneMemo, true);
           historyPromises.push(hist);
 
           processedPendingIndexes.push(oneMemo.index);
@@ -723,7 +772,7 @@ export class HistoryStorage {
     return data;
   }
 
-  private async convertToHistory(memo: DecryptedMemo, pending: boolean, getIsLoopback: (shieldedAddress: string) => Promise<boolean>): Promise<HistoryRecordIdx[]> {
+  private async convertToHistory(memo: DecryptedMemo, pending: boolean): Promise<HistoryRecordIdx[]> {
     const txHash = memo.txHash;
     if (txHash) {
       const txData = await this.web3.eth.getTransaction(txHash).catch(() => null);
@@ -776,7 +825,7 @@ export class HistoryStorage {
                       if (memo.acc) {
                         // 1. we initiated it => outcoming tx(s)
                         const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
-                          const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                          const destAddr = await this.state.assembleAddress(note.d, note.p_d);
                           return {to: destAddr, amount: BigInt(note.b)};
                         }));
 
@@ -784,14 +833,20 @@ export class HistoryStorage {
                           const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
                           allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                         } else {
-                          const rec = await HistoryRecord.transferOut(transfers, feeAmount, ts, txHash, pending, getIsLoopback);
+                          const rec = await HistoryRecord.transferOut(
+                            transfers,
+                            feeAmount,
+                            ts, txHash,
+                            pending,
+                            async (addr) => this.state.isOwnAddress(addr)
+                          );
                           allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                         }
                       } else {
                         // 2. somebody initiated it => incoming tx(s)
 
                         const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-                          const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                          const destAddr = await this.state.assembleAddress(note.d, note.p_d);
                           return {to: destAddr, amount: BigInt(note.b)};
                         }));
 
@@ -822,7 +877,7 @@ export class HistoryStorage {
                 } else if (txSelector == PoolSelector.AppendDirectDeposit) {
                   // Direct Deposit tranaction
                   const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-                    const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                    const destAddr = await this.state.assembleAddress(note.d, note.p_d);
                     return {to: destAddr, amount: BigInt(note.b)};
                   }));
 

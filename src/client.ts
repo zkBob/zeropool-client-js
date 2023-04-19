@@ -7,7 +7,7 @@ import { TxType } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType } from './history'
 import { EphemeralAddress } from './ephemeral';
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode } from 'libzkbob-rs-wasm-web';
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
 import { 
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
@@ -334,7 +334,7 @@ export class ZkBobClient extends ZkBobProvider {
       await this.updateState();
     }
 
-    return await this.zpState().history?.getAllHistory((addr) => this.isMyAddress(addr)) ?? [];
+    return await this.zpState().history?.getAllHistory() ?? [];
   }
 
   // ------------------=========< Service Routines >=========-------------------
@@ -342,26 +342,31 @@ export class ZkBobClient extends ZkBobProvider {
   // ---------------------------------------------------------------------------
 
   // Generate shielded address to receive funds
-  public async generateAddress(): Promise<string> {
-    const state = this.zpState(this.currentPool());
-    return await state.generateAddress();
+  public async generateAddress(): Promise<string> {;
+    return this.zpState().generateAddress();
+  }
+
+  public async generateUniversalAddress(): Promise<string> {;
+    return this.zpState().generateUniversalAddress();
   }
 
   // Generate address with the specified seed
-  public async genBurnerAddress(seed: Uint8Array): Promise<string> {
-    const poolId = await this.poolId();
-    return this.worker.genBurnerAddress(poolId, seed);
+  public async generateAddressForSeed(seed: Uint8Array): Promise<string> {
+    return this.zpState().generateAddressForSeed(seed);
   }
 
-  // Returns true if shieldedAddress belogs to the user's account
-  public async isMyAddress(shieldedAddress: string): Promise<boolean> {
-    // TODO: scan over all available pools
-    const state = this.zpState();
-    return await state.isOwnAddress(shieldedAddress);
-  }
-
+  // Is address valid (correct checksum and current pool)
   public async verifyShieldedAddress(address: string): Promise<boolean> {
-    return await this.worker.verifyShieldedAddress(address);
+    return this.zpState().verifyShieldedAddress(address);
+  }
+
+  // Returns true if shieldedAddress belogs to the user's account and the current pool
+  public async isMyAddress(shieldedAddress: string): Promise<boolean> {
+    return this.zpState().isOwnAddress(shieldedAddress);
+  }
+
+  public async addressInfo(shieldedAddress: string): Promise<IAddressComponents> {
+    return this.zpState().parseAddress(shieldedAddress);
   }
 
   // Waiting while relayer process the jobs set
