@@ -7,6 +7,7 @@ import { ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/prover";
 import { LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
+import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
 
 const LIB_VERSION = require('../package.json').version;
 
@@ -14,6 +15,7 @@ const DEFAULT_DENOMINATOR = BigInt(1000000000);
 const RELAYER_FEE_LIFETIME = 3600;  // when to refetch the relayer fee (in seconds)
 const DEFAULT_RELAYER_FEE = BigInt(100000000);
 const MIN_TX_AMOUNT = BigInt(50000000);
+const GIFT_CARD_CODE_VER = 1;
 
 // relayer fee + fetching timestamp
 interface RelayerFeeFetch {
@@ -53,6 +55,13 @@ export interface TreeState {
 export interface ChainConfig {
     backend: NetworkBackend;
     networkName: string;
+}
+
+export class GiftCardProperties {
+    sk: Uint8Array;
+    birthIndex: bigint;
+    balance: bigint;
+    poolAlias: string;
 }
 
 // Provides base functionality for the zkBob solution
@@ -525,5 +534,66 @@ export class ZkBobProvider {
         }
         
         return prover.version();
+    }
+
+    // ------------------=========< Other Routines >=========----------------------
+    // | Helpers                                                                  |
+    // ----------------------------------------------------------------------------
+
+    public async codeForGiftCard(giftCard: GiftCardProperties): Promise<string> {
+        const pool = this.pools[giftCard.poolAlias];
+        if (!pool) {
+            throw new InternalError(`Unknown pool in gift-card properties: ${giftCard.poolAlias}`);
+        }
+
+        if (giftCard.sk.length != 32) {
+            throw new InternalError('The gift-card spending key should be 32 bytes length');
+        }
+
+
+        const writer = new HexStringWriter();
+        writer.writeNumber(GIFT_CARD_CODE_VER, 1);
+        writer.writeHex(bufToHex(giftCard.sk));
+        writer.writeBigInt(giftCard.birthIndex, 6);
+        writer.writeHex(pool.poolAddress.slice(-8));
+        writer.writeNumber(pool.chainId, 4);
+        writer.writeBigInt(giftCard.balance, 8);
+
+        return truncateHexPrefix(writer.toString());
+    }
+
+    public async giftCardFromCode(code: string): Promise<GiftCardProperties> {
+        const reader = new HexStringReader(code);
+        
+        const codeVer = reader.readNumber(1);
+        if (codeVer == null) {
+            throw new InternalError('Incorrect code for the gift-card');
+        }
+        if (codeVer > GIFT_CARD_CODE_VER) {
+            throw new InternalError(`The gift-card code version ${codeVer} isn't supported`);
+        }
+
+        const sk = reader.readHex(32);
+        const birthIndex = reader.readBigInt(6);
+        const poolAddrSlice = reader.readHex(4);
+        const chainId = reader.readNumber(4);
+        const balance = reader.readBigInt(8);
+        if (sk == null || birthIndex == null || poolAddrSlice == null || chainId == null || balance == null) {
+            throw new InternalError('Incorrect code for the gift-card');
+        }
+        
+        let poolAlias: string | undefined = undefined;
+        for (const [alias, pool] of Object.entries(this.pools)) {
+            if (pool.chainId == chainId && pool.poolAddress.slice(-8) == poolAddrSlice) {
+                poolAlias = alias;
+                break;
+            }
+        }
+
+        if (!poolAlias) {
+            throw new InternalError(`Uncnown pool in the gift-carg code (chainId = ${chainId}, endOfPoolAddr = ${poolAddrSlice})`);
+        }
+
+        return { sk: hexToBuf(sk), birthIndex, balance, poolAlias };
     }
 }

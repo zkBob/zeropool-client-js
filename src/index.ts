@@ -3,7 +3,7 @@ export { ClientConfig, AccountConfig, accountId,
         SnarkConfigParams,
       } from './config';
 export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount } from './client';
-export { ZkBobProvider as ZkBobAccountlessClient } from './client-provider';
+export { ZkBobProvider as ZkBobAccountlessClient, GiftCardProperties } from './client-provider';
 export { SyncStat } from './state';
 export { TxType } from './tx';
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history';
