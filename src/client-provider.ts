@@ -9,6 +9,8 @@ import { LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
 
+const bs58 = require('bs58')
+
 const LIB_VERSION = require('../package.json').version;
 
 const DEFAULT_DENOMINATOR = BigInt(1000000000);
@@ -559,11 +561,12 @@ export class ZkBobProvider {
         writer.writeNumber(pool.chainId, 4);
         writer.writeBigInt(giftCard.balance, 8);
 
-        return truncateHexPrefix(writer.toString());
+        return bs58.encode(hexToBuf(writer.toString()));
     }
 
     public async giftCardFromCode(code: string): Promise<GiftCardProperties> {
-        const reader = new HexStringReader(code);
+        const hexBuf = bufToHex(bs58.decode(code));
+        const reader = new HexStringReader(hexBuf);
         
         const codeVer = reader.readNumber(1);
         if (codeVer == null) {
@@ -584,14 +587,14 @@ export class ZkBobProvider {
         
         let poolAlias: string | undefined = undefined;
         for (const [alias, pool] of Object.entries(this.pools)) {
-            if (pool.chainId == chainId && pool.poolAddress.slice(-8) == poolAddrSlice) {
+            if (pool.chainId == chainId && pool.poolAddress.slice(-8).toLowerCase() == poolAddrSlice.toLowerCase()) {
                 poolAlias = alias;
                 break;
             }
         }
 
         if (!poolAlias) {
-            throw new InternalError(`Uncnown pool in the gift-carg code (chainId = ${chainId}, endOfPoolAddr = ${poolAddrSlice})`);
+            throw new InternalError(`Unknown pool in the gift-card code (chainId = ${chainId}, endOfPoolAddr = ${poolAddrSlice})`);
         }
 
         return { sk: hexToBuf(sk), birthIndex, balance, poolAlias };
