@@ -902,7 +902,7 @@ export class ZkBobClient extends ZkBobProvider {
     const txData = await giftCardState.createTransferOptimistic(oneTx, this.zeroOptimisticState());
 
     const startProofDate = Date.now();
-    const txProof: Proof = await this.proveTx(txData.public, txData.secret);
+    const txProof: Proof = await this.proveTx(txData.public, txData.secret, giftCardAcc.proverMode);
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -1195,8 +1195,8 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   // Universal proving routine
-  private async proveTx(pub: any, sec: any): Promise<any> {
-    const proverMode = this.getProverMode();
+  private async proveTx(pub: any, sec: any, forcedMode: ProverMode | undefined = undefined): Promise<any> {
+    const proverMode = forcedMode ?? this.getProverMode();
     const prover = this.prover()
     if ((proverMode == ProverMode.Delegated || proverMode == ProverMode.DelegatedWithFallback) && prover) {
       console.debug('Delegated Prover: proveTx');
