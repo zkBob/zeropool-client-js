@@ -61,7 +61,7 @@ export interface ChainConfig {
 
 export class GiftCardProperties {
     sk: Uint8Array;
-    birthIndex: bigint;
+    birthIndex: number;
     balance: bigint;
     poolAlias: string;
 }
@@ -556,7 +556,7 @@ export class ZkBobProvider {
         const writer = new HexStringWriter();
         writer.writeNumber(GIFT_CARD_CODE_VER, 1);
         writer.writeHex(bufToHex(giftCard.sk));
-        writer.writeBigInt(giftCard.birthIndex, 6);
+        writer.writeNumber(giftCard.birthIndex, 6);
         writer.writeHex(pool.poolAddress.slice(-8));
         writer.writeNumber(pool.chainId, 4);
         writer.writeBigInt(giftCard.balance, 8);
@@ -577,7 +577,7 @@ export class ZkBobProvider {
         }
 
         const sk = reader.readHex(32);
-        const birthIndex = reader.readBigInt(6);
+        const birthIndex = reader.readNumber(6);
         const poolAddrSlice = reader.readHex(4);
         const chainId = reader.readNumber(4);
         const balance = reader.readBigInt(8);
