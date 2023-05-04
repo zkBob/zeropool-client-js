@@ -339,7 +339,6 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Generate compliance report
   public async getComplianceReport(
-    tokenAddress: string,
     fromTimestamp: number | null,
     toTimestamp: number | null,
     updateState: boolean = true,
