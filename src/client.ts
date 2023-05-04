@@ -1,78 +1,29 @@
-import { ProverMode, Tokens } from './config';
+import { Chains, Pools, SnarkConfigParams, ClientConfig, AccountConfig, accountId, ProverMode } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
-          toTwosComplementHex, addressFromSignature,
-          isRangesIntersected, hexToNode, bufToHex
+          toTwosComplementHex, addressFromSignature, bufToHex
         } from './utils';
-import { ZkBobState } from './state';
+import { SyncStat, ZkBobState } from './state';
 import { TxType } from './tx';
-import { NetworkBackend } from './networks/network';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
-
-const LOG_STATE_HOTSYNC = false;
-
-const LIB_VERSION = require('../package.json').version;
-
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
 import { 
-  Output, Proof, DecryptedMemo, ITransferData, IWithdrawData,
-  ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, IndexedTx, TreeNode
-} from 'libzkbob-rs-wasm-web';
-
-import { 
-  InternalError, NetworkError, PoolJobError, RelayerJobError, ServiceError, SignatureError, TxDepositDeadlineExpiredError,
+  InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
 } from './errors';
 import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
 import { isAddress } from 'web3-utils';
-import { hash } from 'tweetnacl';
-//import { SyncStat, SyncStat } from '.';
+import { JobInfo } from './services/relayer';
+import { TreeState, ZkBobProvider } from './client-provider';
+import { wrap } from 'comlink';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
-
+const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
-const MIN_TX_AMOUNT = BigInt(50000000);
-const DEFAULT_TX_FEE = BigInt(100000000);
-const BATCH_SIZE = 1000;
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
-const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
-const CORRUPT_STATE_ROLLBACK_ATTEMPTS = 2; // number of state restore attempts (via rollback)
-const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via wipe)
-const DEFAULT_DENOMINATOR = BigInt(1000000000);
-const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
-const MIN_TX_COUNT_FOR_STAT = 10;
-const RELAYER_VERSION_REQUEST_THRESHOLD = 3600; // relayer's version expiration (in seconds)
-const PROVER_VERSION_REQUEST_THRESHOLD = 3600; // prover's version expiration (in seconds)
-
-export interface RelayerInfo {
-  root: string;
-  optimisticRoot: string;
-  deltaIndex: bigint;
-  optimisticDeltaIndex: bigint;
-}
-
-const isRelayerInfo = (obj: any): obj is RelayerInfo => {
-  return typeof obj === 'object' && obj !== null &&
-    obj.hasOwnProperty('root') && typeof obj.root === 'string' &&
-    obj.hasOwnProperty('optimisticRoot') && typeof obj.optimisticRoot === 'string' &&
-    obj.hasOwnProperty('deltaIndex') && typeof obj.deltaIndex === 'number' &&
-    obj.hasOwnProperty('optimisticDeltaIndex') && typeof obj.optimisticDeltaIndex === 'number';
-}
-
-export interface TreeState {
-  root: bigint;
-  index: bigint;
-}
-
-export interface BatchResult {
-  txCount: number;
-  maxMinedIndex: number;
-  maxPendingIndex: number;
-  state: Map<number, StateUpdate>;  // key: first tx index, 
-                                    // value: StateUpdate object (notes, accounts, leafs and comminments)
-}
 
 // Transfer destination + amount
 // Used as input in `transferMulti` method
@@ -100,29 +51,6 @@ export interface TransferConfig {
                          // (for future use, e.g. complex multi-tx transfers, default: 0)
 }
 
-export interface TxToRelayer {
-  txType: TxType;
-  memo: string;
-  proof: Proof;
-  depositSignature?: string
-}
-
-export interface JobInfo {
-  resolvedJobId: string;
-  state: string;
-  txHash: string | null;
-  createdOn: number;
-  finishedOn: number | null;
-  failedReason: string | null;
-}
-const isJobInfo = (obj: any): obj is JobInfo => {
-  return typeof obj === 'object' && obj !== null &&
-    obj.hasOwnProperty('state') && typeof obj.state === 'string' &&
-    obj.hasOwnProperty('txHash') && (!obj.txHash || typeof obj.state === 'string') &&
-    obj.hasOwnProperty('resolvedJobId') && typeof obj.resolvedJobId === 'string' &&
-    obj.hasOwnProperty('createdOn') && typeof obj.createdOn === 'number';
-}
-
 export interface FeeAmount { // all values are in Gwei
   total: bigint;    // total fee
   totalPerTx: bigint; // multitransfer case (== total for regular tx)
@@ -132,239 +60,210 @@ export interface FeeAmount { // all values are in Gwei
   insufficientFunds: boolean; // true when the local balance is insufficient for requested tx amount
 }
 
-export interface Limit { // all values are in Gwei
-  total: bigint;
-  available: bigint;
-}
-
-export interface PoolLimits { // all values are in Gwei
-  deposit: {
-    total: bigint;
-    components: {
-      singleOperation: bigint;
-      dailyForAddress: Limit;
-      dailyForAll: Limit;
-      poolLimit: Limit;
-    };
-  }
-  withdraw: {
-    total: bigint;
-    components: {
-      dailyForAll: Limit;
-    };
-  }
-  tier: number;
-}
-
-export interface LimitsFetch { 
-  deposit: {
-    singleOperation: bigint;
-    dailyForAddress: Limit;
-    dailyForAll: Limit;
-    poolLimit: Limit;
-  }
-  withdraw: {
-    dailyForAll: Limit;
-  }
-  tier: number;
-}
-
-export enum ServiceType {
-  Relayer = "Relayer",
-  DelegatedProver = "Delegated Prover"
-}
-
-export interface ServiceVersion {
-  ref: string;
-  commitHash: string;
-}
-
-interface ServiceVersionFetch {
-  version: ServiceVersion;
-  timestamp: number;  // when the version was fetched
-}
-
-const isServiceVersion = (obj: any): obj is ServiceVersion => {
-  return typeof obj === 'object' && obj !== null &&
-    obj.hasOwnProperty('ref') && typeof obj.ref === 'string' &&
-    obj.hasOwnProperty('commitHash') && typeof obj.commitHash === 'string';
-}
-
-// Used to collect state synchronization statistic
-// It could be helpful to monitor average sync time
-export interface SyncStat {
-  txCount: number;  // total txs count (relayer + CDN)
-  cdnTxCnt: number; // number of transactions fetched in binary format from CDN (cold storage)
-  decryptedLeafs: number; // deposit/withdrawal = 1 leaf,
-                          // transfer = 1 + notes_cnt leafs
-  fullSync: boolean;  // true in case of bulding full Merkle tree on the client
-
-  totalTime: number; // msec
-  timePerTx: number;  // msec
-}
-
-export interface PartialSyncResult {
-  txCount: number;  // total txs count (relayer + CDN)
-  decryptedLeafs: number; // deposit/withdrawal = 1 leaf,
-                          // transfer = 1 + notes_cnt leafs
-  firstIndex: number; // first index of the synced range
-  nextIndex: number;  // index after synced range
-  totalTime: number; // msec
-}
-
-export interface ClientConfig {
-  // Spending key
-  sk: Uint8Array;
-  // A map of supported tokens (token address => token params)
-  tokens: Tokens;
-  // A worker instance acquired through init() function of this package
-  worker: any;
-  // The name of the network is only used for storage
-  networkName: string | undefined;
-  // An endpoint to interact with the blockchain
-  network: NetworkBackend;
-  // Support ID - unique random string to track user's activity for support purposes
-  supportId: string | undefined;
-}
-
-export class ZkBobClient {
-  private zpStates: { [tokenAddress: string]: ZkBobState };
+export class ZkBobClient extends ZkBobProvider {
+  // States for the current account in the different pools
+  private zpStates: { [poolAlias: string]: ZkBobState } = {};
+  // Holds gift cards temporary states (id - gift card unique ID based on sk and pool)
+  private auxZpStates: { [id: string]: ZkBobState } = {};
+  // The single worker for the all pools
+  // Currently we assume parameters are the same for the all pools
   private worker: any;
-  private tokens: Tokens;
-  private config: ClientConfig;
-  private relayerFee: bigint | undefined; // in Gwei, do not use directly, use getRelayerFee method instead
-  private relayerVersions = new Map<string, ServiceVersionFetch>(); // relayer version: URL -> version
-  private proverVersions = new Map<string, ServiceVersionFetch>(); // prover version: URL -> version
-  private updateStatePromise: Promise<boolean> | undefined;
-  private syncStats: SyncStat[] = [];
-  private skipColdStorage: boolean = false;
-  private accountId: string;
+  // Active account config. It can be undefined util user isn't login
+  // If it's undefined the ZkBobClient acts as accountless client
+  // (client-oriented methods will throw error)
+  private account: AccountConfig | undefined;
 
   // Jobs monitoring
   private monitoredJobs = new Map<string, JobInfo>();
   private jobsMonitors  = new Map<string, Promise<JobInfo>>();
 
-  // State self-healing
-  private rollbackAttempts = 0;
-  private wipeAttempts = 0;
+  // ------------------------=========< Lifecycle >=========------------------------
+  // | Init and free client, login/logout, switching between pools                 |
+  // -------------------------------------------------------------------------------
 
-  public static async create(config: ClientConfig): Promise<ZkBobClient> {
-    const client = new ZkBobClient();
+  private constructor(pools: Pools, chains: Chains, initialPool: string, supportId: string | undefined) {
+    super(pools, chains, initialPool, supportId);
+    this.account = undefined;
+  }
+
+  private async workerInit(
+    snarkParams: SnarkConfigParams,
+    forcedMultithreading: boolean | undefined = undefined, // specify this parameter to override multithreading autoselection
+  ): Promise<Worker> {
+    // Get tx parameters hash from the relayer
+    // to check local params consistence
+    let txParamsHash: string | undefined = undefined;
+    try {
+      txParamsHash = await this.relayer().txParamsHash();
+    } catch (err) {
+      console.warn(`Cannot fetch tx parameters hash from the relayer (${err.message})`);
+    }
+  
+    let worker: any;
+  
+    worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
+      await worker.initWasm(
+        snarkParams.transferParamsUrl,
+        txParamsHash, 
+        snarkParams.transferVkUrl,
+        forcedMultithreading
+      );
+  
+    return worker;
+  }
+
+  public static async create(config: ClientConfig, activePoolAlias: string): Promise<ZkBobClient> {
+    if (Object.keys(config.pools).length == 0) {
+      throw new InternalError(`Cannot initialize library without pools`);
+    }
+    const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "");
+
+    const worker = await client.workerInit(config.snarkParams);
+
     client.zpStates = {};
-    client.worker = config.worker;
-    client.tokens = config.tokens;
-    client.config = config;
-    client.accountId = bufToHex(hash(config.sk));
-
-    client.relayerFee = undefined;
-
-    let networkName = config.networkName;
-    if (!networkName) {
-      networkName = config.network.defaultNetworkName();
-    }
-
-    for (const [address, token] of Object.entries(config.tokens)) {
-      if (token.birthindex == -1) {
-        // fetch current birthindex right away
-        try {
-          let curIndex = Number((await client.info(token.relayerUrl)).deltaIndex);
-          if (curIndex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE) && curIndex >= OUTPLUSONE) {
-            curIndex -= OUTPLUSONE; // we should grab almost one transaction from the regular state
-            console.log(`Retrieved account birthindex: ${curIndex}`);
-            token.birthindex = curIndex;
-          } else {
-            console.log(`Birthindex is lower than threshold (${PARTIAL_TREE_USAGE_THRESHOLD} txs). It'll be ignored`);
-            token.birthindex = undefined;
-          }
-        } catch (err) {
-          console.warn(`Cannot retrieve actual birthindex (Error: ${err.message}). The full sync will be performed`);
-          token.birthindex = undefined;
-        }
-      }
-
-      let denominator: bigint
-      try {
-        denominator = await config.network.getDenominator(token.poolAddress);
-      } catch (err) {
-        console.error(`Cannot fetch denominator value from the relayer, will using default 10^9: ${err}`);
-        denominator = DEFAULT_DENOMINATOR;
-      }
-
-      let poolId: number;
-      try {
-        poolId = await config.network.getPoolId(token.poolAddress);
-      } catch (err) {
-        console.error(`Cannot fetch pool ID, will using default (0): ${err}`);
-        poolId = 0;
-      }
-
-      try {
-        await client.setProverMode(address, token.proverMode);
-      } catch (err) {
-        console.error(err);
-      }
-
-      client.zpStates[address] = await ZkBobState.create(config.sk, networkName, config.network.getRpcUrl(), denominator, poolId, address, client.worker, token.coldStorageConfigPath);
-    }
+    client.worker = worker;
     
     return client;
   }
 
-  public async free(): Promise<void> {
-    for (const state of Object.values(this.zpStates)) {
-      await state.free();
+  private async free(): Promise<void> {
+    for (const poolName of Object.keys(this.zpStates)) {
+      this.freePoolState(poolName);
     }
+
+    for (const accId of Object.keys(this.auxZpStates)) {
+      await this.auxZpStates[accId].free();
+      delete this.auxZpStates[accId];
+    }
+  }
+
+  private async freePoolState(poolAlias: string) {
+    if (this.zpStates[poolAlias]) {
+      await this.zpStates[poolAlias].free();
+      delete this.zpStates[poolAlias];
+    }
+  }
+
+  public async login(account: AccountConfig) {
+    this.account = account;
+    await this.switchToPool(account.pool, account.birthindex);
+    try {
+      await this.setProverMode(this.account.proverMode);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  public async logout() {
+    this.free();
+    this.account = undefined;
+  }
+
+  // Swithing to the another pool without logout with the same spending key
+  // Also available before login (just switch pool to use the instance as an accoutless client)
+  public async switchToPool(poolAlias: string, birthindex?: number) {
+    // remove currently activated state if exist [to reduce memory consumption]
+    const oldPoolAlias = super.currentPool();
+    this.freePoolState(oldPoolAlias);
+
+    // set active pool for accountless mode, activate network backend
+    super.switchToPool(poolAlias);
+    const newPoolAlias = super.currentPool();
+
+    // the following values needed to initialize ZkBobState
+    const pool = this.pool();
+    const denominator = await this.denominator();
+    const poolId = await this.poolId();
+    const network = this.network();
+    const networkName = this.networkName();
+
+    if (this.account) {
+      this.monitoredJobs.clear();
+      await Promise.all(this.jobsMonitors.values());
+      this.jobsMonitors.clear();
+
+      this.account.pool = newPoolAlias;
+      this.account.birthindex = birthindex;
+      if (this.account.birthindex == -1) {  // -1 means `account born right now`
+        try { // fetch current birthindex right away
+          let curIndex = Number((await this.relayer().info()).deltaIndex);
+          if (curIndex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE) && curIndex >= OUTPLUSONE) {
+            curIndex -= OUTPLUSONE; // we should grab almost one transaction from the regular state
+            console.log(`Retrieved account birthindex: ${curIndex}`);
+            this.account.birthindex = curIndex;
+          } else {
+            console.log(`Birthindex is lower than threshold (${PARTIAL_TREE_USAGE_THRESHOLD} txs). It'll be ignored`);
+            this.account.birthindex = undefined;
+          }
+        } catch (err) {
+          console.warn(`Cannot retrieve actual birthindex (Error: ${err.message}). The full sync will be performed`);
+          this.account.birthindex = undefined;
+        }
+      }
+
+      this.zpStates[newPoolAlias] = await ZkBobState.create(
+          this.account.sk,
+          this.account.birthindex,
+          networkName,
+          network.getRpcUrl(),
+          denominator,
+          poolId,
+          pool.tokenAddress,
+          this.worker
+        );
+
+      console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
+    } else {
+      console.log(`Pool was switched to ${newPoolAlias} but account is not set yet`);
+    }
+  }
+
+  public hasAccount(): boolean {
+    return this.account && this.zpStates[this.curPool] ? true : false;
+  }
+
+  // return current state if poolAlias absent
+  private zpState(poolAlias: string | undefined = undefined): ZkBobState {
+    const requestedPool = poolAlias ?? this.curPool;
+    if (!this.zpStates[requestedPool]) {
+      throw new InternalError(`State for pool ${requestedPool} is not initialized`);
+    }
+
+    return this.zpStates[requestedPool];
   }
 
   // ------------------=========< Balances and History >=========-------------------
   // | Quering shielded balance and history records                                |
   // -------------------------------------------------------------------------------
 
-  // Pool contract using default denominator 10^9
-  // i.e. values less than 1 Gwei are supposed equals zero
-  // But this is deployable parameter so this method are using to retrieve it
-  public getDenominator(tokenAddress: string): bigint {
-    return this.zpStates[tokenAddress].denominator;
-  }
-
-  // Convert native pool amount to the base units
-  public shieldedAmountToWei(tokenAddress, amountGwei: bigint): bigint {
-    return amountGwei * this.zpStates[tokenAddress].denominator
-  }
-  
-  // Convert base units to the native pool amount
-  public weiToShieldedAmount(tokenAddress, amountWei: bigint): bigint {
-    return amountWei / this.zpStates[tokenAddress].denominator
-  }
-
   // Get account + notes balance in Gwei
   // [with optional state update]
-  public async getTotalBalance(tokenAddress: string, updateState: boolean = true): Promise<bigint> {
+  public async getTotalBalance(updateState: boolean = true): Promise<bigint> {
     if (updateState) {
-      await this.updateState(tokenAddress);
+      await this.updateState();
     }
 
-    return await this.zpStates[tokenAddress].getTotalBalance();
+    return await this.zpState().getTotalBalance();
   }
 
   // Get total balance with components: account and notes
   // [with optional state update]
   // Returns [total, account, note] in Gwei
-  public async getBalances(tokenAddress: string, updateState: boolean = true): Promise<[bigint, bigint, bigint]> {
+  public async getBalances(updateState: boolean = true): Promise<[bigint, bigint, bigint]> {
     if (updateState) {
-      await this.updateState(tokenAddress);
+      await this.updateState();
     }
 
-    return await this.zpStates[tokenAddress].getBalances();
+    return await this.zpState().getBalances();
   }
 
   // Get total balance including transactions in optimistic state [in Gwei]
   // There is no option to prevent state update here,
   // because we should always monitor optimistic state
-  public async getOptimisticTotalBalance(tokenAddress: string, updateState: boolean = true): Promise<bigint> {
+  public async getOptimisticTotalBalance(updateState: boolean = true): Promise<bigint> {
 
-    const confirmedBalance = await this.getTotalBalance(tokenAddress, updateState);
-    const historyRecords = await this.getAllHistory(tokenAddress, updateState);
+    const confirmedBalance = await this.getTotalBalance(updateState);
+    const historyRecords = await this.getAllHistory(updateState);
 
     let pendingDelta = BigInt(0);
     for (const oneRecord of historyRecords) {
@@ -395,13 +294,47 @@ export class ZkBobClient {
     return confirmedBalance + pendingDelta;
   }
 
-  // Get history records
-  public async getAllHistory(tokenAddress: string, updateState: boolean = true): Promise<HistoryRecord[]> {
-    if (updateState) {
-      await this.updateState(tokenAddress);
+  // `giftCardAccount` fields should be set with the gift card associated properties:
+  // (sk, birthIndex, pool); proverMode field doesn't affect here
+  public async giftCardBalance(giftCardAcc: AccountConfig): Promise<bigint> {
+    if (giftCardAcc.pool != this.currentPool()) {
+      throw new InternalError(`The current pool (${this.currentPool()}) doesn't match gift-card's one (${giftCardAcc.pool})`);
     }
 
-    return await this.zpStates[tokenAddress].history.getAllHistory((addr) => this.isMyAddress(tokenAddress, addr));
+    const accId = accountId(giftCardAcc);
+    if (!this.auxZpStates[accId]) {
+      // create gift-card auxiliary state if needed
+      const networkName = this.networkName();
+      const poolId = await this.poolId();
+      const giftCardState = await ZkBobState.createNaked(giftCardAcc.sk, giftCardAcc.birthindex, networkName, poolId, this.worker);
+
+      // state will be removed after gift card redemption or on logout
+      this.auxZpStates[accId] = giftCardState;
+    }
+
+    // update gift card state
+    const giftCardState = this.auxZpStates[accId];
+    const relayer = this.relayer();
+    const readyToTransact = await giftCardState.updateState(
+      relayer,
+      async (index) => (await this.getPoolState(index)).root,
+      await this.coldStorageConfig(),
+      this.coldStorageBaseURL(),
+    );
+    if (!readyToTransact) {
+      console.warn(`Gift card account isn't ready to transact right now. Most likely the gift-card is in redeeming state`);
+    }
+    
+    return giftCardState.getTotalBalance();
+  }
+
+  // Get history records
+  public async getAllHistory(updateState: boolean = true): Promise<HistoryRecord[]> {
+    if (updateState) {
+      await this.updateState();
+    }
+
+    return await this.zpState().history?.getAllHistory() ?? [];
   }
 
   // Generate compliance report
@@ -429,21 +362,37 @@ export class ZkBobClient {
   }
   
   // Generate shielded address to receive funds
-  public async generateAddress(tokenAddress: string): Promise<string> {
-    const state = this.zpStates[tokenAddress];
-    return await state.generateAddress();
+  public async generateAddress(): Promise<string> {;
+    return this.zpState().generateAddress();
   }
 
-  // Returns true if shieldedAddress belogs to the user's account
-  public async isMyAddress(tokenAddress: string, shieldedAddress: string): Promise<boolean> {
-    const state = this.zpStates[tokenAddress];
-    return await state.isOwnAddress(shieldedAddress);
+  public async generateUniversalAddress(): Promise<string> {;
+    return this.zpState().generateUniversalAddress();
+  }
+
+  // Generate address with the specified seed
+  public async generateAddressForSeed(seed: Uint8Array): Promise<string> {
+    return this.zpState().generateAddressForSeed(seed);
+  }
+
+  // Is address valid (correct checksum and current pool)
+  public async verifyShieldedAddress(address: string): Promise<boolean> {
+    return this.zpState().verifyShieldedAddress(address);
+  }
+
+  // Returns true if shieldedAddress belogs to the user's account and the current pool
+  public async isMyAddress(shieldedAddress: string): Promise<boolean> {
+    return this.zpState().isOwnAddress(shieldedAddress);
+  }
+
+  public async addressInfo(shieldedAddress: string): Promise<IAddressComponents> {
+    return this.zpState().parseAddress(shieldedAddress);
   }
 
   // Waiting while relayer process the jobs set
-  public async waitJobsTxHashes(tokenAddress: string, jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
+  public async waitJobsTxHashes(jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
     const promises = jobIds.map(async (jobId) => {
-      const txHash = await this.waitJobTxHash(tokenAddress, jobId);
+      const txHash = await this.waitJobTxHash(jobId);
       return { jobId, txHash };
     });
     
@@ -452,8 +401,8 @@ export class ZkBobClient {
 
   // Waiting while relayer process the job and send it to the Pool
   // return transaction hash on success or throw an error
-  public async waitJobTxHash(tokenAddress: string, jobId: string): Promise<string> {
-    this.startJobMonitoring(tokenAddress, jobId);
+  public async waitJobTxHash(jobId: string): Promise<string> {
+    this.startJobMonitoring(jobId);
 
     const CHECK_PERIOD_MS = 500;
     let txHash = '';
@@ -482,44 +431,12 @@ export class ZkBobClient {
     return txHash;
   }
 
-  public async setProverMode(tokenAddress: string, mode: ProverMode) {
-    if (!Object.values(ProverMode).includes(mode)) {
-      throw new InternalError("Provided mode isn't correct. Possible modes: Local, Delegated, and DelegatedWithFallback");
-    }
-
-    const token = this.tokens[tokenAddress];
-    if (mode == ProverMode.Delegated || mode == ProverMode.DelegatedWithFallback) {
-      if (token.delegatedProverUrl) {
-        try {
-          await this.getProverVersion(tokenAddress, false);
-        } catch (err) {
-          console.error(`Cannot fetch delegated prover version: ${err}`);
-          token.proverMode = ProverMode.Local;
-          throw new InternalError(`Delegated prover can't be enabled because delegated prover isn't healthy`)
-        } 
-      } else {
-        token.proverMode = ProverMode.Local;
-        throw new InternalError(`Delegated prover can't be enabled because delegated prover url wasn't provided`)
-      }
-    }
-
-    if (mode != ProverMode.Delegated) {
-      this.worker.loadTxParams();
-    }
-
-    token.proverMode = mode;
-  }
-
-  public getProverMode(tokenAddress: string): ProverMode {
-    return this.tokens[tokenAddress].proverMode;
-  }
-
   // Start monitoring job
   // Return existing promise or start new one
-  private async startJobMonitoring(tokenAddress: string, jobId: string): Promise<JobInfo> {
+  private async startJobMonitoring(jobId: string): Promise<JobInfo> {
     const existingMonitor = this.jobsMonitors.get(jobId);
     if (existingMonitor === undefined) {
-      const newMonitor = this.jobMonitoringWorker(tokenAddress, jobId).finally(() => {
+      const newMonitor = this.jobMonitoringWorker(jobId).finally(() => {
         this.jobsMonitors.delete(jobId);
       });
       this.jobsMonitors.set(jobId, newMonitor);
@@ -544,16 +461,16 @@ export class ZkBobClient {
   // The following states are terminal (means no any changes in task will happened): `failed`, `reverted`, `completed`
   // The job state can be switched from `sent` to `waiting` state - it means transaction was resent
   //
-  private async jobMonitoringWorker(tokenAddress: string, jobId: string): Promise<JobInfo> {
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
+  private async jobMonitoringWorker(jobId: string): Promise<JobInfo> {
+    const relayer = this.relayer();
+    const state = this.zpState();
 
     const INTERVAL_MS = 1000;
     let job: JobInfo;
     let lastTxHash = '';
     let lastJobState = '';
     while (true) {
-      const jobInfo = await this.getJob(token.relayerUrl, jobId).catch(() => null);
+      const jobInfo = await relayer.getJob(jobId).catch(() => null);
 
       if (jobInfo === null) {
         throw new RelayerJobError(Number(jobId), 'not found');
@@ -572,14 +489,14 @@ export class ZkBobClient {
         } else if (job.state === 'failed')  {
           // [TERMINAL STATE] Transaction was failed during relayer's verification
           const relayerReason = job.failedReason ?? 'unknown reason';
-          state.history.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
+          state.history?.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
           console.info(`JobMonitoring: ${jobDescr} was discarded by relayer with reason '${relayerReason}'`);
           break;
         } else if (job.state === 'sent') {
           // Tx should appear in the optimistic state with current txHash
           if (job.txHash) {
             if (lastTxHash != job.txHash) {
-              state.history.setTxHashForQueuedTransactions(jobId, job.txHash);
+              state.history?.setTxHashForQueuedTransactions(jobId, job.txHash);
               console.info(`JobMonitoring: ${jobDescr} was ${job.resolvedJobId != jobId ? 'RE' : ''}sent to the pool: ${job.txHash}`);   
             }
           } else {
@@ -593,18 +510,18 @@ export class ZkBobClient {
             revertReason = job.failedReason;  // reason from the relayer
           } else if (job.txHash) {
             // the relayer doesn't provide failure reason - fetch it directly
-            const retrievedReason = (await this.config.network.getTxRevertReason(job.txHash));
+            const retrievedReason = (await this.network().getTxRevertReason(job.txHash));
             revertReason = retrievedReason ?? 'transaction was not found\\reverted'
           } else {
             console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
           }
 
-          state.history.setSentTransactionFailedByPool(jobId, job.txHash ?? '', revertReason);
+          state.history?.setSentTransactionFailedByPool(jobId, job.txHash ?? '', revertReason);
           console.info(`JobMonitoring: ${jobDescr} was reverted on pool with reason '${revertReason}': ${job.txHash}`);
           break;
         } else if (job.state === 'completed') {
           // [TERMINAL STATE] Transaction has been mined successfully and should appear in the regular state
-          state.history.setQueuedTransactionsCompleted(jobId, job.txHash ?? '');
+          state.history?.setQueuedTransactionsCompleted(jobId, job.txHash ?? '');
           if (job.txHash) {
             console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
           } else {
@@ -624,43 +541,6 @@ export class ZkBobClient {
     return job;
   }
 
-  public async getRelayerVersion(tokenAddress: string): Promise<ServiceVersion> {
-    const relayerUrl = this.tokens[tokenAddress].relayerUrl;
-    let cachedVer = this.relayerVersions.get(relayerUrl);
-    if (cachedVer === undefined || cachedVer.timestamp + RELAYER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
-      const version = await this.fetchVersion(relayerUrl, ServiceType.Relayer);
-      cachedVer = {version, timestamp: Date.now()};  
-      this.relayerVersions.set(relayerUrl, cachedVer);
-    }
-
-    return cachedVer.version;
-  }
-
-  public async getProverVersion(tokenAddress: string, cached: boolean = true): Promise<ServiceVersion> {
-    const proverUrl = this.tokens[tokenAddress].delegatedProverUrl;
-    if (!proverUrl) {
-      throw new InternalError("Cannot fetch prover version because delegated prover url wasn't provided");
-    }
-
-    let cachedVer: ServiceVersionFetch | undefined = undefined;
-    if (cached) {
-      cachedVer = this.proverVersions.get(proverUrl);
-    }
-
-    if (cachedVer === undefined || cachedVer.timestamp + PROVER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
-      const version = await this.fetchVersion(proverUrl, ServiceType.DelegatedProver);
-      cachedVer = {version, timestamp: Date.now()};
-      this.proverVersions.set(proverUrl, cachedVer);
-    }
-
-    return cachedVer.version;
-  }
-
-  // Each zkBob pool should have his unique identifier
-  public getPoolId(tokenAddress: string): number {
-    return this.zpStates[tokenAddress].poolId;
-  }
-
   // ------------------=========< Making Transactions >=========-------------------
   // | Methods for creating and sending transactions in different modes           |
   // ------------------------------------------------------------------------------
@@ -669,25 +549,26 @@ export class ZkBobClient {
   // contract receive his tokens
   // Returns jobId from the relayer or throw an Error
   public async depositPermittable(
-    tokenAddress: string,
     amountGwei: bigint,
     signTypedData: (deadline: bigint, value: bigint, salt: string) => Promise<string>,
     fromAddress: string | null = null,
     feeGwei: bigint = BigInt(0),
   ): Promise<string> {
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
+    const pool = this.pool();
+    const relayer = this.relayer();
+    const state = this.zpState();
 
-    if (amountGwei < MIN_TX_AMOUNT) {
-      throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
+    const minTx = await this.minTxAmount();
+    if (amountGwei < minTx) {
+      throw new TxSmallAmount(amountGwei, minTx);
     }
 
-    const limits = await this.getLimits(tokenAddress, (fromAddress !== null) ? fromAddress : undefined);
+    const limits = await this.getLimits((fromAddress !== null) ? fromAddress : undefined);
     if (amountGwei > limits.deposit.total) {
       throw new TxLimitError(amountGwei, limits.deposit.total);
     }
 
-    await this.updateState(tokenAddress);
+    await this.updateState();
 
     let txData;
     if (fromAddress) {
@@ -701,10 +582,10 @@ export class ZkBobClient {
       });
 
       // permittable deposit signature should be calculated for the typed data
-      const value = (amountGwei + feeGwei) * state.denominator;
+      const value = await this.shieldedAmountToWei(amountGwei + feeGwei);
       const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
       let signature = truncateHexPrefix(await signTypedData(BigInt(deadline), value, salt));
-      if (this.config.network.isSignatureCompact()) {
+      if (this.network().isSignatureCompact()) {
         signature = toCompactSignature(signature);
       }
 
@@ -712,7 +593,7 @@ export class ZkBobClient {
       const claimedAddr = `0x${bufToHex(holder)}`;
       let recoveredAddr;
       try {
-        const dataToSign: any = await this.createPermittableDepositData(tokenAddress, '1', claimedAddr, token.poolAddress, value, BigInt(deadline), salt);
+        const dataToSign: any = await this.createPermittableDepositData('1', claimedAddr, pool.poolAddress, value, BigInt(deadline), salt);
         recoveredAddr = recoverTypedSignature({data: dataToSign, signature: `0x${signature}`, version: SignTypedDataVersion.V4});
       } catch (err) {
         throw new SignatureError(`Cannot recover address from the provided signature. Error: ${err.message}`);
@@ -727,14 +608,15 @@ export class ZkBobClient {
       }
 
       const startProofDate = Date.now();
-      const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
+      const txProof = await this.proveTx(txData.public, txData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
       // Checking the depositor's token balance before sending tx
-      let balance;
+      let balance: bigint;
       try {
-        balance = (await this.config.network.getTokenBalance(tokenAddress, claimedAddr)) / state.denominator;
+        const balanceWei = await this.network().getTokenBalance(pool.tokenAddress, claimedAddr);
+        balance = await this.weiToShieldedAmount(balanceWei);
       } catch (err) {
         throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
       }
@@ -743,13 +625,13 @@ export class ZkBobClient {
       }
 
       const tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
-      const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
-      this.startJobMonitoring(tokenAddress, jobId);
+      const jobId = await relayer.sendTransactions([tx]);
+      this.startJobMonitoring(jobId);
 
       // Temporary save transaction in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
       const rec = await HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, '0', true);
-      state.history.keepQueuedTransactions([rec], jobId);
+      state.history?.keepQueuedTransactions([rec], jobId);
 
       return jobId;
 
@@ -759,7 +641,6 @@ export class ZkBobClient {
   }
 
   private async createPermittableDepositData(
-    tokenAddress: string,
     version: string,
     owner: string,
     spender: string,
@@ -767,9 +648,10 @@ export class ZkBobClient {
     deadline: bigint,
     salt: string): Promise<object>
   {
-    const tokenName = await this.config.network.getTokenName(tokenAddress);
-    const chainId = await this.config.network.getChainId();
-    const nonce = await this.config.network.getTokenNonce(tokenAddress, owner);
+    const tokenAddress = this.pool().tokenAddress;
+    const tokenName = await this.network().getTokenName(tokenAddress);
+    const chainId = await this.network().getChainId();
+    const nonce = await this.network().getTokenNonce(tokenAddress, owner);
 
     const domain = {
         name: tokenName,
@@ -803,65 +685,60 @@ export class ZkBobClient {
 }
 
   public async depositPermittableEphemeral(
-    tokenAddress: string,
     amountGwei: bigint,
     ephemeralIndex: number,
     feeGwei: bigint = BigInt(0),
   ): Promise<string> {
-    const state = this.zpStates[tokenAddress];
-    const fromAddress = await state.ephemeralPool.getEphemeralAddress(ephemeralIndex);
+    const state = this.zpState();
+    const fromAddress = await state.ephemeralPool().getEphemeralAddress(ephemeralIndex);
 
-    return this.depositPermittable(tokenAddress, amountGwei, async (deadline, value, salt) => {
-      const token = this.tokens[tokenAddress];
-      const state = this.zpStates[tokenAddress];
+    return this.depositPermittable(amountGwei, async (deadline, value, salt) => {
+      const pool = this.pool();
+      const state = this.zpState();
 
       // we should check token balance here since the library is fully responsible
       // for ephemeral address in contrast to depositing from external user's address
-      const neededGwei = value / state.denominator;
+      const neededGwei = await this.weiToShieldedAmount(value);
       if(fromAddress.tokenBalance < neededGwei) {
         throw new TxInsufficientFundsError(neededGwei, fromAddress.tokenBalance);
       }
 
-      let ephemeralAddress = await state.ephemeralPool.getAddress(ephemeralIndex);
-      const dataToSign = await this.createPermittableDepositData(tokenAddress, '1', ephemeralAddress, token.poolAddress, value, deadline, salt);
-      return await state.ephemeralPool.signTypedData(dataToSign, ephemeralIndex);
+      let ephemeralAddress = await state.ephemeralPool().getAddress(ephemeralIndex);
+      const dataToSign = await this.createPermittableDepositData('1', ephemeralAddress, pool.poolAddress, value, deadline, salt);
+      return await state.ephemeralPool().signTypedData(dataToSign, ephemeralIndex);
     }, fromAddress.address, feeGwei);
   }
 
   // Transfer shielded funds to the shielded address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // Returns jobIds from the relayer or throw an Error
-  public async transferMulti(tokenAddress: string, transfers: TransferRequest[], feeGwei: bigint = BigInt(0)): Promise<string[]> {
-    const state = this.zpStates[tokenAddress];
-    const token = this.tokens[tokenAddress];
+  public async transferMulti(transfers: TransferRequest[], feeGwei: bigint = BigInt(0)): Promise<string[]> {
+    const state = this.zpState();
+    const relayer = this.relayer();
 
     await Promise.all(transfers.map(async (aTx) => {
       if (!await this.verifyShieldedAddress(aTx.destination)) {
         throw new TxInvalidArgumentError('Invalid address. Expected a shielded address.');
       }
 
-      if (aTx.amountGwei < MIN_TX_AMOUNT) {
-        throw new TxSmallAmount(aTx.amountGwei, MIN_TX_AMOUNT);
+      const minTx = await this.minTxAmount();
+      if (aTx.amountGwei < minTx) {
+        throw new TxSmallAmount(aTx.amountGwei, minTx);
       }
     }));
 
-    const txParts = await this.getTransactionParts(tokenAddress, transfers, feeGwei);
+    const txParts = await this.getTransactionParts(transfers, feeGwei);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(tokenAddress, false);
+      const available = await this.calcMaxAvailableTransfer(false);
       const amounts = transfers.map((aTx) => aTx.amountGwei);
       const totalAmount = amounts.reduce((acc, cur) => acc + cur, BigInt(0));
-      const feeEst = await this.feeEstimate(tokenAddress, amounts, TxType.Transfer, false);
+      const feeEst = await this.feeEstimate(amounts, TxType.Transfer, false);
       throw new TxInsufficientFundsError(totalAmount + feeEst.total, available);
     }
 
-    var jobsIds: string[] = [];
-    var optimisticState: StateUpdate = {
-      newLeafs: [],
-      newCommitments: [],
-      newAccounts: [],
-      newNotes: [],
-    }
+    let jobsIds: string[] = [];
+    let optimisticState = this.zeroOptimisticState();
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       const outputs = onePart.outNotes.map((aNote) => { return {to: aNote.destination, amount: `${aNote.amountGwei}`} });
@@ -874,14 +751,14 @@ export class ZkBobClient {
       console.log(`Transaction created: delta_index = ${oneTxData.parsed_delta.index}, root = ${oneTxData.public.root}`);
 
       const startProofDate = Date.now();
-      const txProof: Proof = await this.proveTx(tokenAddress, oneTxData.public, oneTxData.secret);
+      const txProof: Proof = await this.proveTx(oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Transfer};
 
-      const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
-      this.startJobMonitoring(tokenAddress, jobId);
+      const jobId = await relayer.sendTransactions([transaction]);
+      this.startJobMonitoring(jobId);
       jobsIds.push(jobId);
 
       // Temporary save transaction parts in the history module (to prevent history delays)
@@ -889,31 +766,42 @@ export class ZkBobClient {
       const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
       if (transfers.length == 0) {
         const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
-        state.history.keepQueuedTransactions([record], jobId);
+        state.history?.keepQueuedTransactions([record], jobId);
       } else {
-        const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
-        state.history.keepQueuedTransactions([record], jobId);
+        const record = await HistoryRecord.transferOut(transfers, onePart.fee, ts, '0', true, (addr) => this.isMyAddress(addr));
+        state.history?.keepQueuedTransactions([record], jobId);
       }
 
       if (index < (txParts.length - 1)) {
         console.log(`Waiting for the job ${jobId} joining the optimistic state`);
         // if there are few additional tx, we should collect the optimistic state before processing them
-        await this.waitJobTxHash(tokenAddress, jobId);
+        await this.waitJobTxHash(jobId);
 
-        optimisticState = await this.getNewState(tokenAddress);
+        optimisticState = await this.zpState().getNewState(this.relayer(), this.account?.birthindex ?? 0);
       }
     }
 
     return jobsIds;
   }
 
+  private zeroOptimisticState(): StateUpdate {
+    const optimisticState: StateUpdate = {
+      newLeafs: [],
+      newCommitments: [],
+      newAccounts: [],
+      newNotes: [],
+    }
+
+    return optimisticState;
+  }
+
   // Withdraw shielded funds to the specified native chain address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // feeGwei - fee per single transaction (request it with atomicTxFee method)
   // Returns jobId from the relayer or throw an Error
-  public async withdrawMulti(tokenAddress: string, address: string, amountGwei: bigint, feeGwei: bigint = BigInt(0)): Promise<string[]> {
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
+  public async withdrawMulti(address: string, amountGwei: bigint, feeGwei: bigint = BigInt(0)): Promise<string[]> {
+    const relayer = this.relayer();
+    const state = this.zpState();
 
     // Validate withdrawal address:
     //  - it should starts with '0x' prefix
@@ -925,30 +813,26 @@ export class ZkBobClient {
     }
     const addressBin = ethAddrToBuf(address);
 
-    if (amountGwei < MIN_TX_AMOUNT) {
-      throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
+    const minTx = await this.minTxAmount();
+    if (amountGwei < minTx) {
+      throw new TxSmallAmount(amountGwei, minTx);
     }
 
-    const limits = await this.getLimits(tokenAddress, address);
+    const limits = await this.getLimits(address);
     if (amountGwei > limits.withdraw.total) {
       throw new TxLimitError(amountGwei, limits.withdraw.total);
     }
 
-    const txParts = await this.getTransactionParts(tokenAddress, [{amountGwei, destination: address}], feeGwei);
+    const txParts = await this.getTransactionParts([{amountGwei, destination: address}], feeGwei);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(tokenAddress, false);
-      const feeEst = await this.feeEstimate(tokenAddress, [amountGwei], TxType.Withdraw, false);
+      const available = await this.calcMaxAvailableTransfer(false);
+      const feeEst = await this.feeEstimate([amountGwei], TxType.Withdraw, false);
       throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
 
-    var jobsIds: string[] = [];
-    var optimisticState: StateUpdate = {
-      newLeafs: [],
-      newCommitments: [],
-      newAccounts: [],
-      newNotes: [],
-    }
+    let jobsIds: string[] = [];
+    let optimisticState = this.zeroOptimisticState();
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       
@@ -976,36 +860,88 @@ export class ZkBobClient {
       }
 
       const startProofDate = Date.now();
-      const txProof: Proof = await this.proveTx(tokenAddress, oneTxData.public, oneTxData.secret);
+      const txProof: Proof = await this.proveTx(oneTxData.public, oneTxData.secret);
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType};
 
-      const jobId = await this.sendTransactions(token.relayerUrl, [transaction]);
-      this.startJobMonitoring(tokenAddress, jobId);
+      const jobId = await relayer.sendTransactions([transaction]);
+      this.startJobMonitoring(jobId);
       jobsIds.push(jobId);
 
       // Temporary save transaction part in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
       if (txType == TxType.Transfer) {
         const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
-        state.history.keepQueuedTransactions([record], jobId);
+        state.history?.keepQueuedTransactions([record], jobId);
       } else {
         const record = await HistoryRecord.withdraw(address, onePart.outNotes[0].amountGwei, onePart.fee, ts, '0', true);
-        state.history.keepQueuedTransactions([record], jobId);
+        state.history?.keepQueuedTransactions([record], jobId);
       }
 
       if (index < (txParts.length - 1)) {
         console.log(`Waiting for the job ${jobId} joining the optimistic state`);
         // if there are few additional tx, we should collect the optimistic state before processing them
-        await this.waitJobTxHash(tokenAddress, jobId);
+        await this.waitJobTxHash(jobId);
 
-        optimisticState = await this.getNewState(tokenAddress);
+        optimisticState = await this.zpState().getNewState(this.relayer(), this.account?.birthindex ?? 0);
       }
     }
 
     return jobsIds;
+  }
+
+  // Transfer shielded tokens from the another account to the current account
+  // It's suitable for gift-cards redeeming
+  // NOTE: for simplicity we assume the multitransfer doesn't applicable for gift-cards
+  // (i.e. any redemption can be done in a single transaction)
+  public async redeemGiftCard(giftCardAcc: AccountConfig): Promise<string> {
+    if (!this.account) {
+      throw new InternalError(`Cannot redeem gift card to the uninitialized account`);
+    }
+    if (giftCardAcc.pool != this.curPool) {
+      throw new InternalError(`Cannot redeem gift card due to unsuitable pool (gift-card pool: ${giftCardAcc.pool}, current pool: ${this.curPool})`);
+    }
+    
+    const accId = accountId(giftCardAcc);
+    const giftCardBalance = await this.giftCardBalance(giftCardAcc);
+    const fee = await this.atomicTxFee();
+    const minTxAmount = await this.minTxAmount();
+    if (giftCardBalance - fee < minTxAmount) {
+      throw new TxInsufficientFundsError(minTxAmount + fee, giftCardBalance)
+    }
+
+    const redeemAmount = giftCardBalance - fee; // full redemption
+    const dstAddr = await this.generateAddress(); // getting address from the current account
+    const oneTx: ITransferData = {
+      outputs: [{to: dstAddr, amount: `${redeemAmount}`}],
+      fee: fee.toString(),
+    };
+    const giftCardState = this.auxZpStates[accId];
+    const txData = await giftCardState.createTransferOptimistic(oneTx, this.zeroOptimisticState());
+
+    const startProofDate = Date.now();
+    const txProof: Proof = await this.proveTx(txData.public, txData.secret, giftCardAcc.proverMode);
+    const proofTime = (Date.now() - startProofDate) / 1000;
+    console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
+
+    const transaction = {memo: txData.memo, proof: txProof, txType: TxType.Transfer};
+
+    const relayer = this.relayer();
+    const jobId = await relayer.sendTransactions([transaction]);
+    this.startJobMonitoring(jobId);
+
+    // Temporary save transaction in the history module for the current account
+    const ts = Math.floor(Date.now() / 1000);
+    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], fee, ts, '0', true);
+    this.zpState().history?.keepQueuedTransactions([rec], jobId);
+
+    // forget the gift card state 
+    this.auxZpStates[accId].free();
+    delete this.auxZpStates[accId];
+
+    return jobId;
   }
 
   // DEPRECATED. Please use depositPermittableV2 method instead
@@ -1014,21 +950,22 @@ export class ZkBobClient {
   // (amountGwei + feeGwei) tokens before calling this method
   // Returns jobId
   public async deposit(
-    tokenAddress: string,
     amountGwei: bigint,
     sign: (data: string) => Promise<string>,
     fromAddress: string | null = null,  // this field is only for substrate-based network,
                                         // it should be null for EVM
     feeGwei: bigint = BigInt(0),
   ): Promise<string> {
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
+    const pool = this.pool();
+    const state = this.zpState();
+    const relayer = this.relayer();
 
-    if (amountGwei < MIN_TX_AMOUNT) {
-      throw new TxSmallAmount(amountGwei, MIN_TX_AMOUNT);
+    const minTx = await this.minTxAmount();
+    if (amountGwei < minTx) {
+      throw new TxSmallAmount(amountGwei, minTx);
     }
 
-    await this.updateState(tokenAddress);
+    await this.updateState();
 
     const txData = await state.createDeposit({
       amount: (amountGwei + feeGwei).toString(),
@@ -1036,7 +973,7 @@ export class ZkBobClient {
     });
 
     const startProofDate = Date.now();
-    const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
+    const txProof = await this.proveTx(txData.public, txData.secret);
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
@@ -1048,7 +985,7 @@ export class ZkBobClient {
     
     // now we can restore actual depositer address and check it for limits
     const addrFromSig = addressFromSignature(signature, dataToSign);
-    const limits = await this.getLimits(tokenAddress, addrFromSig);
+    const limits = await this.getLimits(addrFromSig);
     if (amountGwei > limits.deposit.total) {
       throw new TxLimitError(amountGwei, limits.deposit.total);
     }
@@ -1059,14 +996,15 @@ export class ZkBobClient {
       fullSignature = addr + signature;
     }
 
-    if (this.config.network.isSignatureCompact()) {
+    if (this.network().isSignatureCompact()) {
       fullSignature = toCompactSignature(fullSignature);
     }
 
     // Checking the depositor's token balance before sending tx
-    let balance;
+    let balance: bigint;
     try {
-      balance = (await this.config.network.getTokenBalance(tokenAddress, addrFromSig)) / state.denominator;
+      const balanceWei = await this.network().getTokenBalance(pool.tokenAddress, addrFromSig);
+      balance = await this.weiToShieldedAmount(balanceWei);
     } catch (err) {
       throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
     }
@@ -1076,112 +1014,21 @@ export class ZkBobClient {
 
 
     const tx = { txType: TxType.Deposit, memo: txData.memo, proof: txProof, depositSignature: fullSignature };
-    const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
-    this.startJobMonitoring(tokenAddress, jobId);
+    const jobId = await relayer.sendTransactions([tx]);
+    this.startJobMonitoring(jobId);
 
     // Temporary save transaction in the history module (to prevent history delays)
     const ts = Math.floor(Date.now() / 1000);
     const rec = await HistoryRecord.deposit(addrFromSig, amountGwei, feeGwei, ts, '0', true);
-    state.history.keepQueuedTransactions([rec], jobId);
+    state.history?.keepQueuedTransactions([rec], jobId);
 
     return jobId;
-  }
-
-  // DEPRECATED. Please use transferMulti method instead
-  // Simple transfer to the shielded address. Supports several output addresses
-  // This method will fail when insufficent input notes (constants::IN) for transfer
-  public async transferSingle(tokenAddress: string, outsGwei: Output[], feeGwei: bigint = BigInt(0)): Promise<string> {
-    await this.updateState(tokenAddress);
-
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
-
-    const outGwei = await Promise.all(outsGwei.map(async ({ to, amount }) => {
-      if (!await this.verifyShieldedAddress(to)) {
-        throw new TxInvalidArgumentError('Invalid address. Expected a shielded address.');
-      }
-
-      if (BigInt(amount) < MIN_TX_AMOUNT) {
-        throw new TxSmallAmount(amount, MIN_TX_AMOUNT);
-      }
-
-      return { to, amount };
-    }));
-
-    const txData = await state.createTransfer({ outputs: outGwei, fee: feeGwei.toString() });
-
-    const startProofDate = Date.now();
-    const txProof = await this.proveTx(tokenAddress, txData.public, txData.secret);
-    const proofTime = (Date.now() - startProofDate) / 1000;
-    console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-
-    const tx = { txType: TxType.Transfer, memo: txData.memo, proof: txProof };
-    const jobId = await this.sendTransactions(token.relayerUrl, [tx]);
-    this.startJobMonitoring(tokenAddress, jobId);
-
-    // Temporary save transactions in the history module (to prevent history delays)
-    const feePerOut = feeGwei / BigInt(outGwei.length);
-    const recs = await Promise.all(outGwei.map(({to, amount}) => {
-      const ts = Math.floor(Date.now() / 1000);
-      return HistoryRecord.transferOut([{to, amount: BigInt(amount)}], feePerOut, ts, '0', true, (addr) => this.isMyAddress(tokenAddress, addr));
-    }));
-
-    state.history.keepQueuedTransactions(recs, jobId);
-
-    return jobId;
-  }
-
-  private async proveTx(tokenAddress: string, pub: any, sec: any): Promise<any> {
-    const token = this.tokens[tokenAddress];
-    if ((token.proverMode == ProverMode.Delegated || token.proverMode == ProverMode.DelegatedWithFallback) && token.delegatedProverUrl) {
-      console.debug('Delegated Prover: proveTx');
-      try {
-        const url = new URL('/proveTx', token.delegatedProverUrl);
-        let headers = this.defaultHeaders();
-        headers["zkbob-nullifier"] = pub.nullifier;
-
-        const proof = await this.fetchJson(
-          url.toString(), 
-          { method: 'POST', headers, body: JSON.stringify({ public: pub, secret: sec }) },
-          ServiceType.DelegatedProver  
-        );
-        const inputs = Object.values(pub);
-        const txValid = await this.worker.verifyTxProof(inputs, proof);
-        if (!txValid) {
-          throw new TxProofError();
-        }
-        return {inputs, proof};
-      } catch (e) {
-        if (token.proverMode == ProverMode.Delegated) {
-          console.error(`Failed to prove tx using delegated prover: ${e}`);
-          throw new TxProofError();
-        } else {
-          console.warn(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
-        }
-      }
-    }
-
-    const txProof = await this.worker.proveTx(pub, sec);
-    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
-    if (!txValid) {
-      throw new TxProofError();
-    }
-    return txProof;
   }
 
   // ------------------=========< Transaction configuration >=========-------------------
   // | These methods includes fee estimation, multitransfer estimation and other inform |
   // | functions.                                                                       |
   // ------------------------------------------------------------------------------------
-
-  // Min trensaction fee in Gwei (e.g. deposit or single transfer)
-  // To estimate fee in the common case please use feeEstimate instead
-  public async atomicTxFee(tokenAddress: string): Promise<bigint> {
-    const relayer = await this.getRelayerFee(tokenAddress);
-    const l1 = BigInt(0);
-
-    return relayer + l1;
-  }
 
   // Fee can depends on tx amount for multitransfer transactions,
   // that's why you should specify it here for general case
@@ -1190,8 +1037,8 @@ export class ZkBobClient {
   // There are two extra states in case of insufficient funds for requested token amount:
   //  1. txCnt contains number of transactions for maximum available transfer
   //  2. txCnt can't be less than 1 (e.g. when balance is less than atomic fee)
-  public async feeEstimate(tokenAddress: string, transfersGwei: bigint[], txType: TxType, updateState: boolean = true): Promise<FeeAmount> {
-    const relayer = await this.getRelayerFee(tokenAddress);
+  public async feeEstimate(transfersGwei: bigint[], txType: TxType, updateState: boolean = true): Promise<FeeAmount> {
+    const relayer = await this.getRelayerFee();
     const l1 = BigInt(0);
     let txCnt = 1;
     const totalPerTx = relayer + l1;
@@ -1201,8 +1048,8 @@ export class ZkBobClient {
     if (txType === TxType.Transfer || txType === TxType.Withdraw) {
       // we set allowPartial flag here to get parts anywhere
       const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: NULL_ADDRESS} });  // destination address is ignored for estimation purposes
-      const parts = await this.getTransactionParts(tokenAddress, requests, totalPerTx, updateState, true);
-      const totalBalance = await this.getTotalBalance(tokenAddress, false);
+      const parts = await this.getTransactionParts(requests, totalPerTx, updateState, true);
+      const totalBalance = await this.getTotalBalance(false);
 
       const totalSumm = parts
         .map((p) => p.outNotes.reduce((acc, cur) => acc + cur.amountGwei, BigInt(0)))
@@ -1222,36 +1069,16 @@ export class ZkBobClient {
     return {total, totalPerTx, txCnt, relayer, l1, insufficientFunds};
   }
 
-  // Relayer fee component. Do not use it directly
-  private async getRelayerFee(tokenAddress: string): Promise<bigint> {
-    if (this.relayerFee === undefined) {
-      // fetch actual fee from the relayer
-      const token = this.tokens[tokenAddress];
-      this.relayerFee = await this.fee(token.relayerUrl);
-    }
-
-    return this.relayerFee;
-  }
-
-  public async directDepositFee(tokenAddress: string): Promise<bigint> {
-    const token = this.tokens[tokenAddress];
-    return await this.config.network.getDirectDepositFee(token.poolAddress);
-  }
-
-  public async minTxAmount(): Promise<bigint> {
-    return MIN_TX_AMOUNT;
-  }
-
   // Account + notes balance excluding fee needed to transfer or withdraw it
   // TODO: need to optimize for edge cases (account limit calculating)
-  public async calcMaxAvailableTransfer(tokenAddress: string, updateState: boolean = true): Promise<bigint> {
-    const state = this.zpStates[tokenAddress];
+  public async calcMaxAvailableTransfer(updateState: boolean = true): Promise<bigint> {
+    const state = this.zpState();
     if (updateState) {
-      await this.updateState(tokenAddress);
+      await this.updateState();
     }
 
-    const txFee = await this.atomicTxFee(tokenAddress);
-    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
+    const txFee = await this.atomicTxFee();
+    const groupedNotesBalances = await this.getGroupedNotes();
     let accountBalance = await state.accountBalance();
 
     let maxAmount = accountBalance > txFee ? accountBalance - txFee : BigInt(0);
@@ -1274,16 +1101,15 @@ export class ZkBobClient {
   // (otherwise the void array will be returned in case of insufficient funds)
   // This method ALLOWS creating transaction parts less than MIN_TX_AMOUNT (check it before tx creating)
   public async getTransactionParts(
-    tokenAddress: string,
     transfers: TransferRequest[],
     feeGwei: bigint,
     updateState: boolean = true,
     allowPartial: boolean = false,
   ): Promise<Array<TransferConfig>> {
 
-    const state = this.zpStates[tokenAddress];
+    const state = this.zpState();
     if (updateState) {
-      await this.updateState(tokenAddress);
+      await this.updateState();
     }
 
     // no parts when no requests
@@ -1300,7 +1126,7 @@ export class ZkBobClient {
     }
 
     let accountBalance: bigint = await state.accountBalance();
-    const groupedNotesBalances = await this.getGroupedNotes(tokenAddress);
+    const groupedNotesBalances = await this.getGroupedNotes();
 
     let aggregationParts: Array<TransferConfig> = [];
     let txParts: Array<TransferConfig> = [];
@@ -1363,8 +1189,8 @@ export class ZkBobClient {
   }
 
   // calculate summ of notes grouped by CONSTANTS::IN
-  private async getGroupedNotes(tokenAddress: string): Promise<Array<bigint>> {
-    const state = this.zpStates[tokenAddress];
+  private async getGroupedNotes(): Promise<Array<bigint>> {
+    const state = this.zpState();
     const usableNotes = await state.usableNotes();
 
     const notesParts: Array<bigint> = [];
@@ -1378,143 +1204,89 @@ export class ZkBobClient {
     return notesParts;
   }
 
-  // The deposit and withdraw amount is limited by few factors:
-  // https://docs.zkbob.com/bob-protocol/deposit-and-withdrawal-limits
-  // Global limits are fetched from the relayer (except personal deposit limit from the specified address)
-  public async getLimits(tokenAddress: string, address: string | undefined = undefined, directRequest: boolean = false): Promise<PoolLimits> {
-    const token = this.tokens[tokenAddress];
-
-    async function fetchLimitsFromContract(network: NetworkBackend): Promise<LimitsFetch> {
-      const poolLimits = await network.poolLimits(token.poolAddress, address);
-      return {
-        deposit: {
-          singleOperation: BigInt(poolLimits.depositCap),
-          dailyForAddress: {
-            total: BigInt(poolLimits.dailyUserDepositCap),
-            available: BigInt(poolLimits.dailyUserDepositCap) - BigInt(poolLimits.dailyUserDepositCapUsage),
-          },
-          dailyForAll: {
-            total:      BigInt(poolLimits.dailyDepositCap),
-            available:  BigInt(poolLimits.dailyDepositCap) - BigInt(poolLimits.dailyDepositCapUsage),
-          },
-          poolLimit: {
-            total:      BigInt(poolLimits.tvlCap),
-            available:  BigInt(poolLimits.tvlCap) - BigInt(poolLimits.tvl),
-          },
-        },
-        withdraw: {
-          dailyForAll: {
-            total:      BigInt(poolLimits.dailyWithdrawalCap),
-            available:  BigInt(poolLimits.dailyWithdrawalCap) - BigInt(poolLimits.dailyWithdrawalCapUsage),
-          },
-        },
-        tier: poolLimits.tier === undefined ? 0 : Number(poolLimits.tier)
-      };
+  // -------------------=========< Prover routines >=========--------------------
+  // | Local and delegated prover support                                       |
+  // ----------------------------------------------------------------------------
+  public async setProverMode(mode: ProverMode) {
+    if (mode != ProverMode.Delegated) {
+        this.worker.loadTxParams();
     }
+    await super.setProverMode(mode);
+  }
 
-    function defaultLimits(): LimitsFetch {
-      // hardcoded values
-      return {
-        deposit: {
-          singleOperation: BigInt(10000000000000),  // 10k tokens
-          dailyForAddress: {
-            total: BigInt(10000000000000),  // 10k tokens
-            available: BigInt(10000000000000),  // 10k tokens
-          },
-          dailyForAll: {
-            total:      BigInt(100000000000000),  // 100k tokens
-            available:  BigInt(100000000000000),  // 100k tokens
-          },
-          poolLimit: {
-            total:      BigInt(1000000000000000), // 1kk tokens
-            available:  BigInt(1000000000000000), // 1kk tokens
-          },
-        },
-        withdraw: {
-          dailyForAll: {
-            total:      BigInt(100000000000000),  // 100k tokens
-            available:  BigInt(100000000000000),  // 100k tokens
-          },
-        },
-        tier: 0
-      };
-    }
-
-    // Fetch limits in the requested order
-    let currentLimits: LimitsFetch;
-    if (directRequest) {
+  // Universal proving routine
+  private async proveTx(pub: any, sec: any, forcedMode: ProverMode | undefined = undefined): Promise<any> {
+    const proverMode = forcedMode ?? this.getProverMode();
+    const prover = this.prover()
+    if ((proverMode == ProverMode.Delegated || proverMode == ProverMode.DelegatedWithFallback) && prover) {
+      console.debug('Delegated Prover: proveTx');
       try {
-        currentLimits = await fetchLimitsFromContract(this.config.network);
+        const proof = await prover.proveTx(pub, sec);
+        const inputs = Object.values(pub);
+        const txValid = await this.worker.verifyTxProof(inputs, proof);
+        if (!txValid) {
+          throw new TxProofError();
+        }
+        return {inputs, proof};
       } catch (e) {
-        console.warn(`Cannot fetch limits from the contract (${e}). Try to get them from relayer`);
-        try {
-          currentLimits = await this.limits(token.relayerUrl, address)
-        } catch (err) {
-          console.warn(`Cannot fetch limits from the relayer (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
-          currentLimits = defaultLimits();
+        if (proverMode == ProverMode.Delegated) {
+          console.error(`Failed to prove tx using delegated prover: ${e}`);
+          throw new TxProofError();
+        } else {
+          console.warn(`Failed to prove tx using delegated prover: ${e}. Trying to prove with local prover...`);
         }
       }
+    }
+
+    const txProof = await this.worker.proveTx(pub, sec);
+    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+    if (!txValid) {
+      throw new TxProofError();
+    }
+    return txProof;
+  }
+
+  // ------------------=========< State Processing >=========--------------------
+  // | Updating and monitoring local state                                      |
+  // ----------------------------------------------------------------------------
+
+  // Get the local Merkle tree root & index
+  // Retuned the latest root when the index is undefined
+  public async getLocalState(index?: bigint): Promise<TreeState> {
+    const state = this.zpState();
+    if (index === undefined) {
+      const index = await state.getNextIndex();
+      const root = await state.getRoot();
+
+      return {root, index};
     } else {
-      try {
-        currentLimits = await this.limits(token.relayerUrl, address)
-      } catch (e) {
-        console.warn(`Cannot fetch deposit limits from the relayer (${e}). Try to get them from contract directly`);
-        try {
-          currentLimits = await fetchLimitsFromContract(this.config.network);
-        } catch (err) {
-          console.warn(`Cannot fetch deposit limits from contract (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
-          currentLimits = defaultLimits();
-        }
-      }
-    }
+      const root = await state.getRootAt(index);
 
-    // helper
-    const bigIntMin = (...args: bigint[]) => args.reduce((m, e) => e < m ? e : m);
-
-    // Calculate deposit limits
-    const allDepositLimits = [
-      currentLimits.deposit.singleOperation,
-      currentLimits.deposit.dailyForAddress.available,
-      currentLimits.deposit.dailyForAll.available,
-      currentLimits.deposit.poolLimit.available,
-    ];
-    const totalDepositLimit = bigIntMin(...allDepositLimits);
-
-    // Calculate withdraw limits
-    const allWithdrawLimits = [ currentLimits.withdraw.dailyForAll.available ];
-    const totalWithdrawLimit = bigIntMin(...allWithdrawLimits);
-
-    return {
-      deposit: {
-        total: totalDepositLimit >= 0 ? totalDepositLimit : BigInt(0),
-        components: currentLimits.deposit,
-      },
-      withdraw: {
-        total: totalWithdrawLimit >= 0 ? totalWithdrawLimit : BigInt(0),
-        components: currentLimits.withdraw,
-      },
-      tier: currentLimits.tier
+      return {root, index};
     }
   }
 
-  // ------------------=========< State Processing >=========-------------------
-  // | Updating and monitoring state                                            |
-  // ----------------------------------------------------------------------------
+  // Just informal method needed for the debug purposes
+  public async getTreeStartIndex(): Promise<bigint | undefined> {
+    const index = await this.zpState().getFirstIndex();
+
+    return index;
+  }
 
   // The library can't make any transfers when there are outcoming
   // transactions in the optimistic state
-  public async isReadyToTransact(tokenAddress: string): Promise<boolean> {
-    return await this.updateState(tokenAddress);
+  public async isReadyToTransact(): Promise<boolean> {
+    return await this.updateState();
   }
 
   // Wait while state becomes ready to make new transactions
-  public async waitReadyToTransact(tokenAddress: string): Promise<boolean> {
+  public async waitReadyToTransact(): Promise<boolean> {
 
     const INTERVAL_MS = 1000;
     const MAX_ATTEMPTS = 300;
     let attepts = 0;
     while (true) {
-      const ready = await this.updateState(tokenAddress);
+      const ready = await this.updateState();
 
       if (ready) {
         break;
@@ -1531,743 +1303,67 @@ export class ZkBobClient {
     return true;
   }
 
-  // Get the local Merkle tree root & index
-  // Retuned the latest root when the index is undefined
-  public async getLocalState(tokenAddress: string, index?: bigint): Promise<TreeState> {
-    if (index === undefined) {
-      const index = await this.zpStates[tokenAddress].getNextIndex();
-      const root = await this.zpStates[tokenAddress].getRoot();
-
-      return {root, index};
-    } else {
-      const root = await this.zpStates[tokenAddress].getRootAt(index);
-
-      return {root, index};
-    }
-  }
-
-  // Get relayer regular root & index
-  public async getRelayerState(tokenAddress: string): Promise<TreeState> {
-    const token = this.tokens[tokenAddress];
-    const info = await this.info(token.relayerUrl);
-
-    return {root: BigInt(info.root), index: info.deltaIndex};
-  }
-
-  // Get relayer optimistic root & index
-  public async getRelayerOptimisticState(tokenAddress: string): Promise<TreeState> {
-    const token = this.tokens[tokenAddress];
-    const info = await this.info(token.relayerUrl);
-
-    return {root: BigInt(info.optimisticRoot), index: info.optimisticDeltaIndex};
-  }
-
-  // Get pool info (direct web3 request)
-  public async getPoolState(tokenAddress: string, index?: bigint): Promise<TreeState> {
-    const token = this.tokens[tokenAddress];
-    const res = await this.config.network.poolState(token.poolAddress, index);
-
-    return {index: res.index, root: res.root};
-  }
-
   // Just for testing purposes. This method do not need for client
-  public async getLeftSiblings(tokenAddress: string, index: bigint): Promise<TreeNode[]> {
-    const siblings = await this.zpStates[tokenAddress].getLeftSiblings(index);
+  public async getLeftSiblings(index: bigint): Promise<TreeNode[]> {
+    const siblings = await this.zpState().getLeftSiblings(index);
 
     return siblings;
   }
 
-  // Just informal method needed for the debug purposes
-  public async getTreeStartIndex(tokenAddress: string): Promise<bigint | undefined> {
-    const index = await this.zpStates[tokenAddress].getFirstIndex();
-
-    return index;
-  }
-
   // Getting array of accounts and notes for the current account
-  public async rawState(tokenAddress: string): Promise<any> {
-    return await this.zpStates[tokenAddress].rawState();
+  public async rawState(): Promise<any> {
+    return await this.zpState().rawState();
   }
   
-  public async rollbackState(tokenAddress: string, index: bigint): Promise<bigint> {
-    return await this.zpStates[tokenAddress].rollback(index);
+  public async rollbackState(index: bigint): Promise<bigint> {
+    return await this.zpState().rollback(index);
   }
   
-  public async cleanState(tokenAddress: string): Promise<void> {
-    await this.zpStates[tokenAddress].clean();
+  public async cleanState(): Promise<void> {
+    await this.zpState().clean();
   }
 
   // Request the latest state from the relayer
   // Returns isReadyToTransact flag
-  public async updateState(tokenAddress: string): Promise<boolean> {
-    if (this.updateStatePromise == undefined) {
-      this.updateStatePromise = this.updateStateOptimisticWorker(tokenAddress).finally(() => {
-        this.updateStatePromise = undefined;
-      });
-    } else {
-      console.info(`The state currently updating, waiting for finish...`);
-    }
-
-    return this.updateStatePromise;
-  }
-
-  // ---===< TODO >===---
-  // The optimistic state currently processed only in the client library
-  // Wasm package holds only the mined transactions
-  // Currently it's just a workaround
-  private async updateStateOptimisticWorker(tokenAddress: string): Promise<boolean> {
-    const zpState = this.zpStates[tokenAddress];
-    const token = this.tokens[tokenAddress];
-
-    let startIndex = Number(await zpState.getNextIndex());
-
-    const stateInfo = await this.info(token.relayerUrl);
-    const nextIndex = Number(stateInfo.deltaIndex);
-    const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
-
-    let readyToTransact = true;
-
-    if (optimisticIndex > startIndex) {
-      // Use partial tree loading if possible
-      let birthindex = token.birthindex ?? 0;
-      if (birthindex >= Number(stateInfo.deltaIndex)) {
-        // we should grab almost one transaction from the regular state
-        birthindex = Number(stateInfo.deltaIndex) - OUTPLUSONE;
-      }
-      let siblings: TreeNode[] | undefined;
-      if (startIndex == 0 && birthindex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE)) {
-        try {
-          siblings = await this.siblings(token.relayerUrl, birthindex);
-          console.log(`🍰[PartialSync] got ${siblings.length} sibling(s) for index ${birthindex}`);
-          startIndex = birthindex;
-        } catch (err) {
-          console.warn(`🍰[PartialSync] cannot retrieve siblings: ${err}`);
-        }
-      }
-
-      // Try to using the cold storage
-      const coldResult = await this.loadColdStorageTxs(tokenAddress, startIndex);
-
-      const curStat: SyncStat = {
-        txCount: (optimisticIndex - startIndex) / OUTPLUSONE,
-        cdnTxCnt: coldResult.txCount,
-        decryptedLeafs: coldResult.decryptedLeafs,
-        fullSync: startIndex == 0 ? true : false,
-        totalTime: coldResult.totalTime,
-        timePerTx: 0,
-      };
-
-      // change hot sync position
-      startIndex = coldResult.nextIndex;
-      console.log(`🔥[HotSync] fetching transactions between ${startIndex} and ${optimisticIndex}...`);
-      const startTime = Date.now();
-
-      const batches: Promise<BatchResult>[] = [];
-      for (let i = startIndex; i <= optimisticIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
-        const oneBatch = this.fetchTransactionsOptimistic(token.relayerUrl, BigInt(i), BATCH_SIZE).then( async txs => {
-          console.log(`🔥[HotSync] got ${txs.length} transactions from index ${i}`);
-
-          const batchState = new Map<number, StateUpdate>();
-          
-          const txHashes: Record<number, string> = {};
-          const indexedTxs: IndexedTx[] = [];
-
-          const txHashesPending: Record<number, string> = {};
-          const indexedTxsPending: IndexedTx[] = [];
-
-          let maxMinedIndex = -1;
-          let maxPendingIndex = -1;
-
-          for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-            const tx = txs[txIdx];
-            // Get the first leaf index in the tree
-            const memo_idx = i + txIdx * OUTPLUSONE;
-            
-            // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
-            // 1. Extract memo block
-            const memo = tx.slice(129); // Skip mined flag, txHash and commitment
-
-            // 2. Get transaction commitment
-            const commitment = tx.substr(65, 64)
-
-            const indexedTx: IndexedTx = {
-              index: memo_idx,
-              memo: memo,
-              commitment: commitment,
-            }
-
-            // 3. Get txHash
-            const txHash = tx.substr(1, 64);
-
-            // 4. Get mined flag
-            if (tx.substr(0, 1) === '1') {
-              indexedTxs.push(indexedTx);
-              txHashes[memo_idx] = '0x' + txHash;
-              maxMinedIndex = Math.max(maxMinedIndex, memo_idx);
-            } else {
-              indexedTxsPending.push(indexedTx);
-              txHashesPending[memo_idx] = '0x' + txHash;
-              maxPendingIndex = Math.max(maxPendingIndex, memo_idx);
-            }
-          }
-
-          if (indexedTxs.length > 0) {
-            const parseResult: ParseTxsResult = await this.worker.parseTxs(this.config.sk, indexedTxs);
-            const decryptedMemos = parseResult.decryptedMemos;
-            batchState.set(i, parseResult.stateUpdate);
-            if (LOG_STATE_HOTSYNC) {
-              this.logStateSync(i, i + txs.length * OUTPLUSONE, decryptedMemos);
-            }
-            for (let decryptedMemoIndex = 0; decryptedMemoIndex < decryptedMemos.length; ++decryptedMemoIndex) {
-              // save memos corresponding to the our account to restore history
-              const myMemo = decryptedMemos[decryptedMemoIndex];
-              myMemo.txHash = txHashes[myMemo.index];
-              zpState.history.saveDecryptedMemo(myMemo, false);
-            }
-          }
-
-          if (indexedTxsPending.length > 0) {
-            const parseResult: ParseTxsResult = await this.worker.parseTxs(this.config.sk, indexedTxsPending);
-            const decryptedPendingMemos = parseResult.decryptedMemos;
-            for (let idx = 0; idx < decryptedPendingMemos.length; ++idx) {
-              // save memos corresponding to the our account to restore history
-              const myMemo = decryptedPendingMemos[idx];
-              myMemo.txHash = txHashesPending[myMemo.index];
-              zpState.history.saveDecryptedMemo(myMemo, true);
-
-              if (myMemo.acc != undefined) {
-                // There is a pending transaction initiated by ourselfs
-                // So we cannot create new transactions in that case
-                readyToTransact = false;
-              }
-            }
-          }
-
-          return {txCount: txs.length, maxMinedIndex, maxPendingIndex, state: batchState} ;
-        });
-        batches.push(oneBatch);
-      };
-
-      const totalState = new Map<number, StateUpdate>();
-      const initRes: BatchResult = {txCount: 0, maxMinedIndex: -1, maxPendingIndex: -1, state: totalState};
-      const totalRes = (await Promise.all(batches)).reduce((acc, cur) => {
-        return {
-          txCount: acc.txCount + cur.txCount,
-          maxMinedIndex: Math.max(acc.maxMinedIndex, cur.maxMinedIndex),
-          maxPendingIndex: Math.max(acc.maxPendingIndex, cur.maxPendingIndex),
-          state: new Map([...Array.from(acc.state.entries()), ...Array.from(cur.state.entries())]),
-        }
-      }, initRes);
-
-      const idxs = [...totalRes.state.keys()].sort((i1, i2) => i1 - i2);
-      for (const idx of idxs) {
-        const oneStateUpdate = totalRes.state.get(idx);
-        if (oneStateUpdate !== undefined) {
-          try {
-            await zpState.updateState(oneStateUpdate, siblings);
-          } catch (err) {
-            const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
-            console.warn(`🔥[HotSync] cannot update state from index ${idx}${siblingsDescr}`);
-            if (siblings != undefined) {
-              // if we try to update state with siblings and got an error - do not use partial sync again
-              token.birthindex = undefined;
-            }
-            throw new InternalError(`Unable to synchronize pool state`);
-          }
-
-          curStat.decryptedLeafs += oneStateUpdate.newLeafs.length;
-        } else {
-          throw new InternalError(`Cannot find state batch at index ${idx}`);
-        }
-      }
-
-      // remove unneeded pending records
-      zpState.history.setLastMinedTxIndex(totalRes.maxMinedIndex);
-      zpState.history.setLastPendingTxIndex(totalRes.maxPendingIndex);
-
-
-      const hotSyncTime = Date.now() - startTime;
-      const hotSyncTimePerTx = hotSyncTime / totalRes.txCount;
-
-      curStat.txCount = totalRes.txCount + coldResult.txCount;
-      curStat.cdnTxCnt = coldResult.txCount;
-      curStat.totalTime = hotSyncTime + coldResult.totalTime;
-      curStat.timePerTx = curStat.totalTime / curStat.txCount;
-
-      // save relevant stats only
-      if (curStat.txCount >= MIN_TX_COUNT_FOR_STAT) {
-        this.syncStats.push(curStat);
-      }
-
-
-      console.log(`🔥[HotSync] finished in ${hotSyncTime / 1000} sec | ${totalRes.txCount} tx, avg speed ${hotSyncTimePerTx.toFixed(1)} ms/tx`);
-      if (coldResult.txCount > 0) {
-        console.log(`🧊🔥[TotalSync] finished in ${curStat.totalTime / 1000} sec | ${curStat.txCount} tx, avg speed ${curStat.timePerTx.toFixed(1)} ms/tx`);
-      }
-    } else {
-      zpState.history.setLastMinedTxIndex(nextIndex - OUTPLUSONE);
-      zpState.history.setLastPendingTxIndex(-1);
-
-      console.log(`Local state is up to date @${startIndex}`);
-    }
-
-    // Self-healing code
-    const checkIndex = await zpState.getNextIndex();
-    const stableIndex = await zpState.lastVerifiedIndex();
-    if (checkIndex != stableIndex) {
-      const isStateCorrect = await this.verifyState(tokenAddress);
-      if (!isStateCorrect) {
-        console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
-        if (stableIndex > 0 && stableIndex < checkIndex &&
-          this.rollbackAttempts < CORRUPT_STATE_ROLLBACK_ATTEMPTS
-        ) {
-          let realRollbackIndex = await zpState.rollback(stableIndex);
-          console.log(`🚑[StateVerify] The user state was rollbacked to index ${realRollbackIndex} [attempt ${this.rollbackAttempts + 1}]`);
-          this.rollbackAttempts++;
-        } else if (this.wipeAttempts < CORRUPT_STATE_WIPE_ATTEMPTS) {
-          await zpState.clean();
-          console.log(`🚑[StateVerify] Full user state was wiped [attempt ${this.wipeAttempts + 1}]...`);
-
-          if(this.rollbackAttempts > 0) {
-            // If the first wipe has no effect
-            // reset account birthday if presented
-            token.birthindex = undefined;
-          }
-
-          this.wipeAttempts++;
-        } else {
-          throw new InternalError(`Unable to synchronize pool state`);
-        }
-
-        // resync the state
-        return await this.updateStateOptimisticWorker(tokenAddress);
-      } else {
-        this.rollbackAttempts = 0;
-        this.wipeAttempts = 0;
-      }
-    }
-
-    return readyToTransact;
-  }
-
-  // Just fetch and process the new state without local state updating
-  // Return StateUpdate object
-  // This method used for multi-tx
-  public async getNewState(tokenAddress: string): Promise<StateUpdate> {
-    const token = this.tokens[tokenAddress];
-    const zpState = this.zpStates[tokenAddress];
-
-    const startIndex = await zpState.getNextIndex();
-
-    const stateInfo = await this.info(token.relayerUrl);
-    const optimisticIndex = BigInt(stateInfo.optimisticDeltaIndex);
-
-    if (optimisticIndex > startIndex) {
-      const startTime = Date.now();
-      
-      console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
-
-      const numOfTx = Number((optimisticIndex - startIndex) / BigInt(OUTPLUSONE));
-      const stateUpdate = this.fetchTransactionsOptimistic(token.relayerUrl, startIndex, numOfTx).then( async txs => {
-        console.log(`Getting ${txs.length} transactions from index ${startIndex}`);
-        
-        const indexedTxs: IndexedTx[] = [];
-
-        for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-          const tx = txs[txIdx];
-          // Get the first leaf index in the tree
-          const memo_idx = Number(startIndex) + txIdx * OUTPLUSONE;
-          
-          // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
-          // 1. Extract memo block
-          const memo = tx.slice(129); // Skip mined flag, txHash and commitment
-
-          // 2. Get transaction commitment
-          const commitment = tx.substr(65, 64)
-          
-          const indexedTx: IndexedTx = {
-            index: memo_idx,
-            memo: memo,
-            commitment: commitment,
-          }
-
-          // 3. add indexed tx
-          indexedTxs.push(indexedTx);
-        }
-
-        const parseResult: ParseTxsResult = await this.worker.parseTxs(this.config.sk, indexedTxs);
-
-        return parseResult.stateUpdate;
-      });
-
-      const msElapsed = Date.now() - startTime;
-      const avgSpeed = msElapsed / numOfTx;
-
-      console.log(`Fetch finished in ${msElapsed / 1000} sec | ${numOfTx} tx, avg speed ${avgSpeed.toFixed(1)} ms/tx`);
-
-      return stateUpdate;
-    } else {
-      console.log(`Do not need to fetch @${startIndex}`);
-
-      return {newLeafs: [], newCommitments: [], newAccounts: [], newNotes: []};
-    }
-  }
-
-  public async logStateSync(startIndex: number, endIndex: number, decryptedMemos: DecryptedMemo[]) {
-    for (const decryptedMemo of decryptedMemos) {
-      if (decryptedMemo.index > startIndex) {
-        console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${decryptedMemo.index - OUTPLUSONE})`);
-      }
-      startIndex = decryptedMemo.index + OUTPLUSONE; 
-
-      if (decryptedMemo.acc) {
-        console.info(`📝 Adding account, notes, and hashes to state (at index ${decryptedMemo.index})`);
-      } else {
-        console.info(`📝 Adding notes and hashes to state (at index ${decryptedMemo.index})`);
-      }
-    }
-
-    if (startIndex < endIndex) {
-      console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${endIndex - OUTPLUSONE})`);
-    }
-  }
-
-  // returns false when the local state is inconsistent
-  private async verifyState(tokenAddress: string): Promise<boolean> {
-    const zpState = this.zpStates[tokenAddress];
-    const token = this.tokens[tokenAddress];
-    const state = this.zpStates[tokenAddress];
-
-    const checkIndex = await zpState.getNextIndex();
-    const localRoot = await zpState.getRoot();
-    const poolRoot =  (await this.config.network.poolState(token.poolAddress, checkIndex)).root;
-
-    if (localRoot == poolRoot) {
-      await zpState.setLastVerifiedIndex(checkIndex);
-      
-      return true;
-    }
-
-    return false;
-  }
-
-  private async loadColdStorageTxs(tokenAddress: string, fromIndex?: number, toIndex?: number): Promise<PartialSyncResult> {
-    const token = this.tokens[tokenAddress];
-    const zpState = this.zpStates[tokenAddress];
-
-    const startRange = fromIndex ?? 0;  // inclusively
-    const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
-
-    const syncResult: PartialSyncResult = {
-      txCount: 0,
-      decryptedLeafs: 0,
-      firstIndex: startRange,
-      nextIndex: startRange,
-      totalTime: 0,
-    };
-
-    const coldConfig = zpState.coldStorageConfig;
-    if (coldConfig) {
-      const actualRangeStart = Math.max(startRange, Number(coldConfig.index_from));
-      const actualRangeEnd = Math.min(endRange, Number(coldConfig.next_index));
-
-      if (this.skipColdStorage == false &&
-          (startRange % OUTPLUSONE) == 0 && 
-          (endRange % OUTPLUSONE) == 0 &&
-          isRangesIntersected(startRange, endRange, Number(coldConfig.index_from), Number(coldConfig.next_index)) &&
-          ((actualRangeEnd - actualRangeStart) / OUTPLUSONE) >= COLD_STORAGE_USAGE_THRESHOLD
-      ) {
-        const startTime = Date.now();
-
-        // try get txs from the cold storage
-        try {
-          console.log(`🧊[ColdSync] loading txs up to index ${zpState.coldStorageConfig.next_index}...`);
-          const coldStorageBaseAddr = token.coldStorageConfigPath.substring(0, token.coldStorageConfigPath.lastIndexOf('/'));
-          const promises = zpState.coldStorageConfig.bulks
-            .filter(aBulk => {
-              return isRangesIntersected(actualRangeStart, actualRangeEnd, Number(aBulk.index_from), Number(aBulk.next_index))
-            })
-            .map(async (bulkInfo) => {
-              let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
-              if (response.ok) {
-                let aBulk = await response.arrayBuffer();
-                if (aBulk.byteLength == bulkInfo.bytes) {
-                  console.log(`🧊[ColdSync] got bulk ${bulkInfo.filename} with ${bulkInfo.tx_count} txs (${bulkInfo.bytes} bytes)`);
-
-                  return new Uint8Array(aBulk);
-                }
-
-                //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: got ${aBulk.byteLength} bytes, expected ${bulkInfo.bytes} bytes`);
-                //return new Uint8Array();
-                throw new InternalError(`Cold storage corrupted (invalid file size: ${aBulk.byteLength})`)
-              } else {
-                //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: response code ${response.status} (${response.statusText})`);
-                //return new Uint8Array();
-                throw new InternalError(`Couldn't load cold storage (invalid response code: ${response.status})`)
-              }
-            });
-          
-          let bulksData = (await Promise.all(promises)).filter(data => data.length > 0);
-          
-
-          let result: ParseTxsColdStorageResult = await zpState.updateStateColdStorage(bulksData, BigInt(actualRangeStart), BigInt(actualRangeEnd));
-          result.decryptedMemos.forEach((aMemo) => {
-            zpState.history.saveDecryptedMemo(aMemo, false);
-          });
-
-
-          syncResult.txCount = result.txCnt;
-          syncResult.decryptedLeafs = result.decryptedLeafsCnt;
-          syncResult.firstIndex = actualRangeStart;
-          syncResult.nextIndex = actualRangeEnd;
-          syncResult.totalTime = Date.now() - startTime;
-          
-          const isStateCorrect = await this.verifyState(tokenAddress);
-          if (!isStateCorrect) {
-            console.warn(`🧊[ColdSync] Merkle tree root at index ${await zpState.getNextIndex()} mistmatch! Wiping the state...`);
-            await zpState.clean();  // rollback to 0
-            this.skipColdStorage = true;  // prevent cold storage usage
-
-            syncResult.txCount = 0;
-            syncResult.decryptedLeafs = 0;
-            syncResult.firstIndex = 0;
-            syncResult.nextIndex = 0;
-          } else {
-            console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
-            console.log(`🧊[ColdSync] Merkle root after tree update: ${await zpState.getRoot()} @ ${await zpState.getNextIndex()}`);
-          }
-          
-        } catch (err) {
-          console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
-        }
-      }
-    }
-
-    return syncResult;
-  }
-
-  public async verifyShieldedAddress(address: string): Promise<boolean> {
-    return await this.worker.verifyShieldedAddress(address);
-  }
-
-  // ------------------=========< Relayer interactions >=========-------------------
-  // | Methods to interact with the relayer                                        |
-  // -------------------------------------------------------------------------------
-
-  private defaultHeaders(supportId: boolean = true): Record<string, string> {
-    if (supportId && this.config.supportId) {
-      return {'content-type': 'application/json;charset=UTF-8',
-              'zkbob-libjs-version': LIB_VERSION,
-              'zkbob-support-id': this.config.supportId};
-    }
-
-    return {'content-type': 'application/json;charset=UTF-8',
-            'zkbob-libjs-version': LIB_VERSION};
-  }
-  
-  private async fetchTransactionsOptimistic(relayerUrl: string, offset: BigInt, limit: number = 100): Promise<string[]> {
-    const url = new URL(`/transactions/v2`, relayerUrl);
-    url.searchParams.set('limit', limit.toString());
-    url.searchParams.set('offset', offset.toString());
-    const headers = this.defaultHeaders();
-
-    const txs = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
-    if (!Array.isArray(txs)) {
-      throw new ServiceError(ServiceType.Relayer, 200, `Response should be an array`);
-    }
-  
-    return txs;
-  }
-  
-  // returns transaction job ID
-  private async sendTransactions(relayerUrl: string, txs: TxToRelayer[]): Promise<string> {
-    const url = new URL('/sendTransactions', relayerUrl);
-    const headers = this.defaultHeaders();
-
-    const res = await this.fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify(txs) }, ServiceType.Relayer);
-    if (typeof res.jobId !== 'string') {
-      throw new ServiceError(ServiceType.Relayer, 200, `Cannot get jobId for transaction (response: ${res})`);
-    }
-
-    return res.jobId;
-  }
-  
-  private async getJob(relayerUrl: string, id: string): Promise<JobInfo | null> {
-    const url = new URL(`/job/${id}`, relayerUrl);
-    const headers = this.defaultHeaders();
-    const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
-  
-    if (isJobInfo(res)) {
-      return res;
-    }
-
-    return null;
-  }
-  
-  private async info(relayerUrl: string): Promise<RelayerInfo> {
-    const url = new URL('/info', relayerUrl);
-    const headers = this.defaultHeaders(false);
-    const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
-
-    if (isRelayerInfo(res)) {
-      return res;
-    }
-
-    throw new ServiceError(ServiceType.Relayer, 200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
-  }
-  
-  private async fee(relayerUrl: string): Promise<bigint> {
-    try {
-      const url = new URL('/fee', relayerUrl);
-      const headers = this.defaultHeaders();
-      const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
-      return BigInt(res.fee);
-    } catch {
-      return DEFAULT_TX_FEE;
-    }
-  }
-  
-  private async limits(relayerUrl: string, address: string | undefined): Promise<LimitsFetch> {
-    const url = new URL('/limits', relayerUrl);
-    if (address !== undefined) {
-      url.searchParams.set('address', address);
-    }
-    const headers = this.defaultHeaders();
-    const res = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
-
-    return {
-      deposit: {
-        singleOperation: BigInt(res.deposit.singleOperation),
-        dailyForAddress: {
-          total:     BigInt(res.deposit.dailyForAddress.total),
-          available: BigInt(res.deposit.dailyForAddress.available),
-        },
-        dailyForAll: {
-          total:      BigInt(res.deposit.dailyForAll.total),
-          available:  BigInt(res.deposit.dailyForAll.available),
-        },
-        poolLimit: {
-          total:      BigInt(res.deposit.poolLimit.total),
-          available:  BigInt(res.deposit.poolLimit.available),
-        },
-      },
-      withdraw: {
-        dailyForAll: {
-          total:      BigInt(res.withdraw.dailyForAll.total),
-          available:  BigInt(res.withdraw.dailyForAll.available),
-        },
-      },
-      tier: res.tier === undefined ? 0 : Number(res.tier)
-    };
-  }
-
-  private async siblings(relayerUrl: string, index: number): Promise<TreeNode[]> {
-    const url = new URL(`/siblings`, relayerUrl);
-    url.searchParams.set('index', index.toString());
-    const headers = this.defaultHeaders();
-
-    const siblings = await this.fetchJson(url.toString(), {headers}, ServiceType.Relayer);
-    if (!Array.isArray(siblings)) {
-      throw new ServiceError(ServiceType.Relayer, 200, `Response should be an array`);
-    }
-  
-    return siblings.map((aNode) => {
-      let node = hexToNode(aNode)
-      if (!node) {
-        throw new ServiceError(ServiceType.Relayer, 200, `Cannot convert \'${aNode}\' to a TreeNode`);
-      }
-      return node;
-    });
-  }
-
-  private async fetchVersion(serviceUrl: string, service: ServiceType): Promise<ServiceVersion> {
-    const url = new URL(`/version`, serviceUrl);
-    const headers = this.defaultHeaders(false);
-
-    const version = await this.fetchJson(url.toString(), {headers}, service);
-    if (isServiceVersion(version)) {
-      return version;
-    }
-
-    throw new ServiceError(service, 200, `Incorrect response (expected ServiceVersion, got \'${version}\')`)
-  }
-
-  // Universal response parser
-  private async fetchJson(url: string, headers: RequestInit, service: ServiceType): Promise<any> {
-    let response: Response;
-    try {
-      response = await fetch(url, headers);
-    } catch(err) {
-      // server is unreachable
-      throw new NetworkError(err, url);
-    }
-
-    // Extract response body: json | string | null
-    let responseBody: any = null;
-    const contentType = response.headers.get('content-type')!;
-    if (contentType === null) responseBody = null;
-    else if (contentType.startsWith('application/json;')) responseBody = await response.json();
-    else if (contentType.startsWith('text/plain;')) responseBody = await response.text();
-    else if (contentType.startsWith('text/html;')) responseBody = (await response.text()).replace(/<[^>]+>/g, '').replace(/(?:\r\n|\r|\n)/g, ' ').replace(/^\s+|\s+$/gm,'');
-    else console.warn(`Unsupported response content-type in response: ${contentType}`);
-
-    // Unsuccess error code case (not in range 200-299)
-    if (!response.ok) {
-      if (responseBody === null) {
-        throw new ServiceError(service, response.status, 'no description provided');  
-      }
-
-      // process string error response
-      if (typeof responseBody === 'string') {
-        throw new ServiceError(service, response.status, responseBody);
-      }
-
-      // process 'errors' json response
-      if (Array.isArray(responseBody.errors)) {
-        const errorsText = responseBody.errors.map((oneError) => {
-          return `[${oneError.path}]: ${oneError.message}`;
-        }).join(', ');
-
-        throw new ServiceError(service, response.status, errorsText);
-      }
-
-      // unknown error format
-      throw new ServiceError(service, response.status, contentType);
-    } 
-
-    return responseBody;
+  public async updateState(): Promise<boolean> {
+    return await this.zpState().updateState(
+      this.relayer(),
+      async (index) => (await this.getPoolState(index)).root,
+      await this.coldStorageConfig(),
+      this.coldStorageBaseURL(),
+    );
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------
   // | Getting internal native accounts (for multisig implementation)              |
   // -------------------------------------------------------------------------------
-  public async getEphemeralAddress(tokenAddress: string, index: number): Promise<EphemeralAddress> {
-    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+  public async getEphemeralAddress(index: number): Promise<EphemeralAddress> {
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getEphemeralAddress(index);
   }
 
-  public async getNonusedEphemeralIndex(tokenAddress: string): Promise<number> {
-    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+  public async getNonusedEphemeralIndex(): Promise<number> {
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getNonusedEphemeralIndex();
   }
 
-  public async getUsedEphemeralAddresses(tokenAddress: string): Promise<EphemeralAddress[]> {
-    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+  public async getUsedEphemeralAddresses(): Promise<EphemeralAddress[]> {
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getUsedEphemeralAddresses();
   }
 
-  public async getEphemeralAddressInTxCount(tokenAddress: string, index: number): Promise<number> {
-    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+  public async getEphemeralAddressInTxCount(index: number): Promise<number> {
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getEphemeralAddressInTxCount(index);
   }
 
-  public async getEphemeralAddressOutTxCount(tokenAddress: string, index: number): Promise<number> {
-    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+  public async getEphemeralAddressOutTxCount(index: number): Promise<number> {
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getEphemeralAddressOutTxCount(index);
   }
 
-  public getEphemeralAddressPrivateKey(tokenAddress: string, index: number): string {
-    const ephPool = this.zpStates[tokenAddress].ephemeralPool;
+  public getEphemeralAddressPrivateKey(index: number): string {
+    const ephPool = this.zpState().ephemeralPool();
     return ephPool.getEphemeralAddressPrivateKey(index);
   }
 
@@ -2275,7 +1371,8 @@ export class ZkBobClient {
   // | Calculating sync time                                                 |
   // -------------------------------------------------------------------------
   public getStatFullSync(): SyncStat | undefined {
-    for (const aStat of this.syncStats) {
+    const stats = this.zpState().syncStatistics();
+    for (const aStat of stats) {
       if (aStat.fullSync) {
         return aStat;
       }
@@ -2284,10 +1381,11 @@ export class ZkBobClient {
     return undefined; // relevant stat doesn't found
   }
 
-  // milliseconds
+  // in milliseconds
   public getAverageTimePerTx(): number | undefined {
-    if (this.syncStats.length > 0) {
-      return this.syncStats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / this.syncStats.length;
+    const stats = this.zpState().syncStatistics();
+    if (stats.length > 0) {
+      return stats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / stats.length;
     }
 
     return undefined; // relevant stat doesn't found

@@ -1,4 +1,4 @@
-import { ServiceType } from "./client";
+import { ServiceType } from "./services/common";
 
 export class BobError extends Error {
     constructor(message: string) {

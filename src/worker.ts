@@ -1,25 +1,24 @@
 import { expose } from 'comlink';
-import { IndexedTx, ParseTxsResult, ParseTxsColdStorageResult, StateUpdate, SnarkProof, TreeNode,
-          ITransferData, IDepositData, IWithdrawData, IDepositPermittableData, TxMemoChunk, TxInput,
-          Account, Note,
+import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
+          ParseTxsResult, ParseTxsColdStorageResult, StateUpdate,
+          IndexedTx, TreeNode, SnarkProof, IAddressComponents,
+          TxMemoChunk, TxInput, Account, Note,
         } from 'libzkbob-rs-wasm-web';
 import { threads } from 'wasm-feature-detect';
 import { SnarkParams } from './params';
+import { InternalError } from './errors';
 
 let txParams: SnarkParams;
-let treeParams: any;
 let txParser: any;
-let zpAccounts: { [tokenAddress: string]: any } = {};
-let transferVk: any;
-let treeVk: any;
+let zpAccounts: { [accountId: string]: any } = {};
 
 let wasm: any;
 
 const obj = {
   async initWasm(
-    paramUrls: { txParams: string; treeParams: string },
+    txParamsUrl: string,
     txParamsHash: string | undefined = undefined,  // skip hash checking when undefined
-    vkUrls: {transferVkUrl: string, treeVkUrl: string},
+    txVkUrl: string,
     forcedMultithreading: boolean | undefined = undefined,
   ) {
     console.info('Initializing web worker...');
@@ -40,31 +39,25 @@ const obj = {
       await wasm.default()
     }
 
-    txParams = new SnarkParams(paramUrls.txParams, txParamsHash);
-    txParser = wasm.TxParser._new()
+    txParams = new SnarkParams(txParamsUrl, txVkUrl, txParamsHash);
+    // VK is always needed to transact, so initiate its loading right now
+    txParams.getVk().catch((err) => {
+      console.warn(`Unable to fetch tx verification key (don't worry, it will refetched when needed): ${err.message}`);
+    });
 
-    console.time(`VK initializing`);
-    const noCacheHeader = { method: 'GET', headers: { 'Cache-Control': 'no-cache' } };
-    transferVk = await (await fetch(vkUrls.transferVkUrl, noCacheHeader)).json();
-    treeVk = await (await fetch(vkUrls.treeVkUrl, noCacheHeader)).json();
-    console.timeEnd(`VK initializing`);
+    txParser = wasm.TxParser._new()
 
     console.info('Web worker init complete.');
   },
 
   async loadTxParams() {
-    txParams.load(wasm);
+    txParams.getParams(wasm);
   },
 
   async proveTx(pub, sec) {
     console.debug('Web worker: proveTx');
-    let params = await txParams.get(wasm);
+    let params = await txParams.getParams(wasm);
     return wasm.Proof.tx(params, pub, sec);
-  },
-
-  async proveTree(pub, sec) {
-    console.debug('Web worker: proveTree');
-    return wasm.Proof.tree(treeParams, pub, sec);
   },
 
   async parseTxs(sk: Uint8Array, txs: IndexedTx[]): Promise<ParseTxsResult> {
@@ -80,8 +73,8 @@ const obj = {
     return result;
   },
 
-  async getTxInputs(address: string, index: bigint): Promise<TxInput> {
-    return zpAccounts[address].getTxInputs(index);
+  async getTxInputs(accountId: string, index: bigint): Promise<TxInput> {
+    return zpAccounts[accountId].getTxInputs(index);
   },
 
   async decryptAccount(symkey: Uint8Array, encrypted: Uint8Array): Promise<Account> {
@@ -92,131 +85,145 @@ const obj = {
     return txParser.symcipherDecryptNote(symkey, encrypted);
   },
 
-  async calcNullifier(address: string, account: Account, index: bigint): Promise<String> {
-    return zpAccounts[address].calculateNullifier(account, index);
+  async calcNullifier(accountId: string, account: Account, index: bigint): Promise<String> {
+    return zpAccounts[accountId].calculateNullifier(account, index);
   },
 
-  async createAccount(address: string, sk: Uint8Array, networkName: string, poolId: number, accountId: string): Promise<void> {
+  // accountId is a unique string depends on network, poolId and sk
+  // The local db will be named with accountId
+  async createAccount(accountId: string, sk: Uint8Array, poolId: number, network: string): Promise<void> {
     console.debug('Web worker: createAccount');
     try {
-      const state = await wasm.UserState.init(`zp.${networkName}.${accountId}`);
-      const acc = new wasm.UserAccount(sk, BigInt(poolId), state);
-      zpAccounts[address] = acc;
+      const state = await wasm.UserState.init(accountId);
+      zpAccounts[accountId] = new wasm.UserAccount(sk, poolId, state, network);
     } catch (e) {
       console.error(e);
     }
   },
 
-  async totalBalance(address: string): Promise<string> {
-    return zpAccounts[address].totalBalance();
+  async totalBalance(accountId: string): Promise<string> {
+    return zpAccounts[accountId].totalBalance();
   },
 
-  async accountBalance(address: string): Promise<string> {
-    return zpAccounts[address].accountBalance();
+  async accountBalance(accountId: string): Promise<string> {
+    return zpAccounts[accountId].accountBalance();
   },
 
-  async noteBalance(address: string): Promise<string> {
-    return zpAccounts[address].noteBalance();
+  async noteBalance(accountId: string): Promise<string> {
+    return zpAccounts[accountId].noteBalance();
   },
 
-  async usableNotes(address: string): Promise<any[]> {
-    return zpAccounts[address].getUsableNotes();
+  async usableNotes(accountId: string): Promise<any[]> {
+    return zpAccounts[accountId].getUsableNotes();
   },
 
-  async isOwnAddress(address: string, shieldedAddress: string): Promise<boolean> {
-    return zpAccounts[address].isOwnAddress(shieldedAddress);
+  async rawState(accountId: string): Promise<any> {
+    return zpAccounts[accountId].getWholeState();
   },
 
-  async rawState(address: string): Promise<any> {
-    return zpAccounts[address].getWholeState();
+  async free(accountId: string): Promise<void> {
+    return zpAccounts[accountId].free();
   },
 
-  async free(address: string): Promise<void> {
-    return zpAccounts[address].free();
+  async createDepositPermittable(accountId: string, deposit: IDepositPermittableData): Promise<any> {
+    return zpAccounts[accountId].createDepositPermittable(deposit);
   },
 
-  async generateAddress(address: string): Promise<string> {
-    return zpAccounts[address].generateAddress();
+  async createTransferOptimistic(accountId: string, tx: ITransferData, optimisticState: any): Promise<any> {
+    return zpAccounts[accountId].createTransferOptimistic(tx, optimisticState);
   },
 
-  async createDepositPermittable(address: string, deposit: IDepositPermittableData): Promise<any> {
-    return zpAccounts[address].createDepositPermittable(deposit);
+  async createWithdrawalOptimistic(accountId: string, tx: IWithdrawData, optimisticState: any): Promise<any> {
+    return zpAccounts[accountId].createWithdrawalOptimistic(tx, optimisticState);
   },
 
-  async createTransferOptimistic(address: string, tx: ITransferData, optimisticState: any): Promise<any> {
-    return zpAccounts[address].createTransferOptimistic(tx, optimisticState);
+  async createDeposit(accountId: string, deposit: IDepositData): Promise<any> {
+    return zpAccounts[accountId].createDeposit(deposit);
   },
 
-  async createWithdrawalOptimistic(address: string, tx: IWithdrawData, optimisticState: any): Promise<any> {
-    return zpAccounts[address].createWithdrawalOptimistic(tx, optimisticState);
+  async createTransfer(accountId: string, transfer: ITransferData): Promise<any> {
+    return zpAccounts[accountId].createTransfer(transfer);
   },
 
-  async createDeposit(address: string, deposit: IDepositData): Promise<any> {
-    return zpAccounts[address].createDeposit(deposit);
+  async nextTreeIndex(accountId: string): Promise<bigint> {
+    return zpAccounts[accountId].nextTreeIndex();
   },
 
-  async createTransfer(address: string, transfer: ITransferData): Promise<any> {
-    return zpAccounts[address].createTransfer(transfer);
+  async firstTreeIndex(accountId: string): Promise<bigint | undefined> {
+    return zpAccounts[accountId].firstTreeIndex();
   },
 
-  async nextTreeIndex(address: string): Promise<bigint> {
-    return zpAccounts[address].nextTreeIndex();
+  async getRoot(accountId: string): Promise<string> {
+    return zpAccounts[accountId].getRoot();
   },
 
-  async firstTreeIndex(address: string): Promise<bigint | undefined> {
-    return zpAccounts[address].firstTreeIndex();
+  async getRootAt(accountId: string, index: bigint): Promise<string> {
+    return zpAccounts[accountId].getRootAt(index);
   },
 
-  async getRoot(address: string): Promise<string> {
-    return zpAccounts[address].getRoot();
+  async getLeftSiblings(accountId: string, index: bigint): Promise<TreeNode[]> {
+    return zpAccounts[accountId].getLeftSiblings(index);
   },
 
-  async getRootAt(address: string, index: bigint): Promise<string> {
-    return zpAccounts[address].getRootAt(index);
+  async rollbackState(accountId: string, index: bigint): Promise<bigint> {
+    return zpAccounts[accountId].rollbackState(index);
   },
 
-  async getLeftSiblings(address: string, index: bigint): Promise<TreeNode[]> {
-    return zpAccounts[address].getLeftSiblings(index);
+  async wipeState(accountId: string): Promise<void> {
+    return zpAccounts[accountId].wipeState();
   },
 
-  async rollbackState(address: string, index: bigint): Promise<bigint> {
-    return zpAccounts[address].rollbackState(index);
+  async getTreeLastStableIndex(accountId: string): Promise<bigint> {
+    return zpAccounts[accountId].treeGetStableIndex();
   },
 
-  async wipeState(address: string): Promise<void> {
-    return zpAccounts[address].wipeState();
+  async setTreeLastStableIndex(accountId: string, index: bigint): Promise<void> {
+    return zpAccounts[accountId].treeSetStableIndex(index);
   },
 
-  async getTreeLastStableIndex(address: string): Promise<bigint> {
-    return zpAccounts[address].treeGetStableIndex();
+  async updateState(accountId: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
+    return zpAccounts[accountId].updateState(stateUpdate, siblings);
   },
 
-  async setTreeLastStableIndex(address: string, index: bigint): Promise<void> {
-    return zpAccounts[address].treeSetStableIndex(index);
-  },
-
-  async updateState(address: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
-    return zpAccounts[address].updateState(stateUpdate, siblings);
-  },
-
-  async updateStateColdStorage(address: string, bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<ParseTxsColdStorageResult> {
-    return zpAccounts[address].updateStateColdStorage(bulks, indexFrom, indexTo);
+  async updateStateColdStorage(accountId: string, bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<ParseTxsColdStorageResult> {
+    return zpAccounts[accountId].updateStateColdStorage(bulks, indexFrom, indexTo);
   },
 
   async verifyTxProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
-    return wasm.Proof.verify(transferVk!, inputs, proof);
+    const vk = await txParams.getVk();  // will throw error if VK fetch fail
+    return wasm.Proof.verify(vk, inputs, proof);
   },
 
-  async verifyTreeProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
-    return wasm.Proof.verify(treeVk!, inputs, proof);
+  async generateAddress(accountId: string): Promise<string> {
+    return zpAccounts[accountId].generateAddress();
   },
 
-  async verifyShieldedAddress(shieldedAddress: string): Promise<boolean> {
-    return wasm.validateAddress(shieldedAddress);
+  async generateUniversalAddress(accountId: string): Promise<string> {
+    return zpAccounts[accountId].generateUniversalAddress();
   },
 
-  async assembleAddress(d: string, p_d: string): Promise<string> {
-    return wasm.assembleAddress(d, p_d);
+  async generateAddressForSeed(accountId: string, seed: Uint8Array): Promise<string> {
+    return zpAccounts[accountId].generateAddressForSeed(seed);
+  },
+
+  async verifyShieldedAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
+    return zpAccounts[accountId].validateAddress(shieldedAddress);
+  },
+
+  async isOwnAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
+    return zpAccounts[accountId].isOwnAddress(shieldedAddress);
+  },
+
+  async assembleAddress(accountId: string, d: string, p_d: string): Promise<string> {
+    return zpAccounts[accountId].assembleAddress(d, p_d);
+  },
+
+  async convertAddressToChainSpecific(accountId: string, oldAddress: string): Promise<string> {
+    return zpAccounts[accountId].convertAddressToChainSpecific(oldAddress);
+  },
+
+  async parseAddress(accountId: string, shieldedAddress: string): Promise<IAddressComponents> {
+    return zpAccounts[accountId].parseAddress(shieldedAddress);
   }
 };
 

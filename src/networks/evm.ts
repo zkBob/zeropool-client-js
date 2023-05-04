@@ -1,242 +1,111 @@
 import Web3 from 'web3';
-import { AbiItem } from 'web3-utils';
 import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
 import { NetworkBackend } from './network';
 import { InternalError } from '..';
+import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 
 export class EvmNetwork implements NetworkBackend {
-    contract: Contract;
-    ddContract: Contract;
-    token: Contract;
     rpcUrl: string;
-    web3: Web3;
+
+    // these properties can be undefined when backend in disabled state
+    private web3?: Web3;
+    private pool?: Contract;
+    private dd?: Contract;
+    private token?: Contract;
 
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
 
-    constructor(rpcUrl: string) {
+    constructor(rpcUrl: string, enabled: boolean = true) {
         this.rpcUrl = rpcUrl;
 
-        this.web3 = new Web3(rpcUrl);
+        if (enabled) {
+            this.setEnabled(true);
+        }
+    }
 
-        const abi: AbiItem[] = [
-            {
-                constant: true,
-                inputs: [],
-                name: 'denominator',
-                outputs: [{
-                    name: '',
-                    type: 'uint256',
-                }],
-                stateMutability: 'pure',
-                type: 'function',
-            },
-            {
-                inputs: [],
-                name: 'pool_id',
-                outputs: [{
-                    internalType: 'uint256',
-                    name: '',
-                    type: 'uint256',
-                }],
-                stateMutability: 'view',
-                type: 'function',
-            },
-            {
-                inputs:[],
-                name: 'pool_index',
-                outputs: [{
-                    internalType: 'uint256',
-                    name:'',
-                    type:'uint256'
-                }],
-                stateMutability: 'view',
-                type: 'function'
-            },
-            {
-                inputs: [{
-                    internalType: 'uint256',
-                    name: '',
-                    type: 'uint256'
-                }],
-                name: 'roots',
-                outputs: [{
-                    internalType: 'uint256',
-                    name: '',
-                    type: 'uint256'
-                }],
-                stateMutability: 'view',
-                type: 'function'
-            },
-            {
-                inputs: [{
-                    internalType: 'address',
-                    name: '_user',
-                    type: 'address',
-                }],
-                name: 'getLimitsFor',
-                outputs: [{
-                    components: [{
-                        internalType: 'uint256',
-                        name: 'tvlCap',
-                        type: 'uint256',
-                    }, {
-                        internalType: 'uint256',
-                        name: 'tvl',
-                        type: 'uint256',
-                    }, {
-                        internalType: 'uint256',
-                        name: 'dailyDepositCap',
-                        type: 'uint256',
-                    }, {
-                        internalType: 'uint256',
-                        name: 'dailyDepositCapUsage',
-                        type: 'uint256',
-                    }, {
-                        internalType: 'uint256',
-                        name: 'dailyWithdrawalCap',
-                        type: 'uint256',
-                    }, {
-                        internalType: 'uint256',
-                        name: 'dailyWithdrawalCapUsage',
-                        type: 'uint256',
-                    }, {
-                        internalType: 'uint256',
-                        name: 'dailyUserDepositCap',
-                        type: 'uint256',
-                    }, {
-                        internalType: 'uint256',
-                        name: 'dailyUserDepositCapUsage',
-                        type: 'uint256',
-                    }, {
-                        internalType: 'uint256',
-                        name: 'depositCap',
-                        type: 'uint256',
-                    }, {
-                      internalType: 'uint8',
-                      name: 'tier',
-                      type: 'uint8',
-                    }],
-                    internalType: 'struct ZkBobAccounting.Limits',
-                    name: '',
-                    type: 'tuple'
-                }],
-                stateMutability: 'view',
-                type: 'function',
-            },
-            {
-                inputs: [],
-                name: 'direct_deposit_queue',
-                outputs: [{
-                    internalType: 'contract IZkBobDirectDepositQueue',
-                    name: '',
-                    type: 'address'
-                }],
-                stateMutability: 'view',
-                type: 'function'
+    public isEnabled(): boolean {
+        return this.web3 !== undefined &&
+                this.pool !== undefined &&
+                this.dd !== undefined &&
+                this.token !== undefined;
+    }
+
+    public setEnabled(enabled: boolean) {
+        if (enabled) {
+            if (!this.isEnabled()) {
+                this.web3 = new Web3(this.rpcUrl);
+                this.pool = new this.web3.eth.Contract(poolContractABI) as unknown as Contract;
+                this.dd = new this.web3.eth.Contract(ddContractABI) as unknown as Contract;
+                this.token = new this.web3.eth.Contract(tokenABI) as unknown as Contract;
             }
-        ];
-        this.contract = new this.web3.eth.Contract(abi) as unknown as Contract;
+        } else {
+            this.web3 = undefined;
+            this.pool = undefined;
+            this.dd = undefined;
+            this.token = undefined;
+        }
+    }
 
-        const ddAbi: AbiItem[] = [{
-                inputs: [],
-                name: 'directDepositFee',
-                outputs: [{
-                    internalType: 'uint64',
-                    name: '',
-                    type: 'uint64'
-                }],
-                stateMutability: 'view',
-                type: 'function'
-        }];
-        this.ddContract = new this.web3.eth.Contract(ddAbi) as unknown as Contract;
+    private activeWeb3(): Web3 {
+        if (!this.web3) {
+            throw new InternalError(`Cannot interact with the NetworkBackend in the disabled mode`);
+        }
 
-        const abiTokenJson: AbiItem[] = [{
-                anonymous: false,
-                inputs: [{
-                    indexed: true,
-                    name: 'from',
-                    type: 'address'
-                }, {
-                    indexed: true,
-                    name: 'to',
-                    type: 'address'
-                }, {
-                    indexed: false,
-                    name: 'value',
-                    type: 'uint256'
-                }],
-                name: 'Transfer',
-                type: 'event'
-            }, {
-                inputs: [],
-                name: 'name',
-                outputs: [{
-                    internalType: 'string',
-                    name: '',
-                    type: 'string'
-                }],
-                stateMutability: 'view',
-                type: 'function'
-            }, {
-                inputs: [{
-                    internalType: 'address',
-                    name: '',
-                    type: 'address'
-                }],
-                name: 'nonces',
-                outputs: [{
-                    internalType: 'uint256',
-                    name: '',
-                    type: 'uint256'
-                }],
-                stateMutability: 'view',
-                type: 'function'
-            }, {
-                constant: true,
-                inputs: [{
-                    name: '_owner',
-                    type: 'address'
-                }],
-                name: 'balanceOf',
-                outputs: [{
-                    name: 'balance',
-                    type: 'uint256'
-                }],
-                payable: false,
-                stateMutability: 'view',
-                type: 'function'
-            }];
-        this.token = new this.web3.eth.Contract(abiTokenJson) as unknown as Contract;
+        return this.web3;
+    }
+
+    private poolContract(): Contract {
+        if (!this.pool) {
+            throw new InternalError(`Cannot interact with the NetworkBackend in the disabled mode`);
+        }
+
+        return this.pool;
+    }
+
+    private directDepositContract(): Contract {
+        if (!this.dd) {
+            throw new InternalError(`Cannot interact with the NetworkBackend in the disabled mode`);
+        }
+
+        return this.dd;
+    }
+
+    private tokenContract(): Contract {
+        if (!this.token) {
+            throw new InternalError(`Cannot interact with the NetworkBackend in the disabled mode`);
+        }
+
+        return this.token;
     }
 
     public async getChainId(): Promise<number> {
-        return await this.web3.eth.getChainId();
+        return await this.activeWeb3().eth.getChainId();
     }
 
     public async getTokenName(tokenAddress: string): Promise<string> {
-        this.token.options.address = tokenAddress;
-        return await this.token.methods.name().call();
+        this.tokenContract().options.address = tokenAddress;
+        return await this.tokenContract().methods.name().call();
     }
     
     public async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
-        this.token.options.address = tokenAddress;
-        return Number(await this.token.methods.nonces(address).call());
+        this.tokenContract().options.address = tokenAddress;
+        return Number(await this.tokenContract().methods.nonces(address).call());
     }
 
     public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {    // in wei
-        this.token.options.address = tokenAddress;
-        return BigInt(await this.token.methods.balanceOf(address).call());
+        this.tokenContract().options.address = tokenAddress;
+        return BigInt(await this.tokenContract().methods.balanceOf(address).call());
     }
 
     public async getDenominator(contractAddress: string): Promise<bigint> {
-        this.contract.options.address = contractAddress;
-        return BigInt(await this.contract.methods.denominator().call());
+        this.poolContract().options.address = contractAddress;
+        return BigInt(await this.poolContract().methods.denominator().call());
     }
 
     public async getPoolId(contractAddress: string): Promise<number> {
-        this.contract.options.address = contractAddress;
-        return Number(await this.contract.methods.pool_id().call());
+        this.poolContract().options.address = contractAddress;
+        return Number(await this.poolContract().methods.pool_id().call());
     }
 
     isSignatureCompact(): boolean {
@@ -252,20 +121,20 @@ export class EvmNetwork implements NetworkBackend {
     }
 
     public async poolLimits(contractAddress: string, address: string | undefined): Promise<any> {
-        this.contract.options.address = contractAddress;
+        this.poolContract().options.address = contractAddress;
         let addr = address;
         if (address === undefined) {
             addr = '0x0000000000000000000000000000000000000000';
         }
         
-        return await this.contract.methods.getLimitsFor(addr).call();
+        return await this.poolContract().methods.getLimitsFor(addr).call();
     }
 
     public async getDirectDepositFee(contractAddress: string): Promise<bigint> {
         let ddContractAddr = this.ddContractAddresses.get(contractAddress);
         if (!ddContractAddr) {
-            this.contract.options.address = contractAddress;
-            ddContractAddr = await this.contract.methods.direct_deposit_queue().call();
+            this.poolContract().options.address = contractAddress;
+            ddContractAddr = await this.poolContract().methods.direct_deposit_queue().call();
             if (ddContractAddr) {
                 this.ddContractAddresses.set(contractAddress, ddContractAddr);
             } else {
@@ -273,34 +142,34 @@ export class EvmNetwork implements NetworkBackend {
             }
         }
 
-        this.ddContract.options.address = ddContractAddr;
+        this.directDepositContract().options.address = ddContractAddr;
         
-        return BigInt(await this.ddContract.methods.directDepositFee().call());
+        return BigInt(await this.directDepositContract().methods.directDepositFee().call());
     }
 
     public async poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
-        this.contract.options.address = contractAddress;
+        this.poolContract().options.address = contractAddress;
         let idx;
         if (index === undefined) {
-            idx = await this.contract.methods.pool_index().call();
+            idx = await this.poolContract().methods.pool_index().call();
         } else {
             idx = index?.toString();
         }
-        const root = await this.contract.methods.roots(idx).call();
+        const root = await this.poolContract().methods.roots(idx).call();
 
 
         return {index: BigInt(idx), root: BigInt(root)};
     }
 
     public async getTxRevertReason(txHash: string): Promise<string | null> {
-        const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
+        const txReceipt = await this.activeWeb3().eth.getTransactionReceipt(txHash);
         if (txReceipt && txReceipt.status !== undefined) {
             if (txReceipt.status == false) {
-                const txData = await this.web3.eth.getTransaction(txHash);
+                const txData = await this.activeWeb3().eth.getTransaction(txHash);
                 
                 let reason = 'unknown reason';
                 try {
-                    await this.web3.eth.call(txData as TransactionConfig, txData.blockNumber as number);
+                    await this.activeWeb3().eth.call(txData as TransactionConfig, txData.blockNumber as number);
                 } catch(err) {
                     reason = err.message;
                 }

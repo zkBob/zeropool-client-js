@@ -33,7 +33,7 @@ export class FileCache {
     let data = await this.get(path);
     if (!data) {
       console.log(`Caching ${path}`)
-      data = await this.cache(path);
+      data = await this.cache(path, loadingCallback);
     } else {
       console.log(`File ${path} is present in cache, no need to fetch`);
     }
@@ -42,7 +42,7 @@ export class FileCache {
   }
 
   public async cache(path: string, loadingCallback: LoadingProgressCallback | undefined = undefined): Promise<ArrayBuffer> {
-    const response = await fetch(path);
+    const response = await fetch(path, { headers: { 'Cache-Control': 'no-cache' } });
 
     if (response.status == 200 && response.body) {
       const reader = response.body.getReader();  
