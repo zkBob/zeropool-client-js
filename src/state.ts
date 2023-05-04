@@ -1,6 +1,8 @@
 import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
           ParseTxsResult, ParseTxsColdStorageResult, StateUpdate,
-          DecryptedMemo, IndexedTx, TreeNode, IAddressComponents,
+          DecryptedMemo, IndexedTx, TreeNode, IAddressComponents, TxMemoChunk, TxInput,
+          Account,
+          Note,
       } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
 import { bufToHex, isRangesIntersected } from './utils';
@@ -725,5 +727,29 @@ export class ZkBobState {
     this.syncStats = [];
     this.skipColdStorage = false;
     this.rollbackAttempts = this.wipeAttempts = 0;
+  }
+
+  public async decryptMemos(tx: IndexedTx): Promise<ParseTxsResult> {
+    return (await this.worker.parseTxs(this.sk, [tx])).decryptedMemos;
+  }
+
+  public async extractDecryptKeys(treeIndex: number, memoblock: Uint8Array): Promise<TxMemoChunk[]> {
+    return this.worker.extractDecryptKeys(this.stateId, this.sk, BigInt(treeIndex), memoblock);
+  }
+
+  public async getTxInputs(treeIndex: number): Promise<TxInput | undefined> {
+    return this.worker.getTxInputs(this.sk, BigInt(treeIndex));
+  }
+
+  public async calcNullifier(treeIndex: number, acc: Account): Promise<string> {
+    return this.worker.calcNullifier(this.stateId, acc, BigInt(treeIndex));
+  }
+
+  public async decryptAccount(symkey: Uint8Array, encrypted: Uint8Array): Promise<Account> {
+    return this.worker.decryptAccount(symkey, encrypted);
+  }
+
+  public async decryptNote(symkey: Uint8Array, encrypted: Uint8Array): Promise<Note> {
+    return this.worker.decryptNote(symkey, encrypted);
   }
 }

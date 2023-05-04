@@ -85,7 +85,7 @@ const obj = {
     return txParser.symcipherDecryptNote(symkey, encrypted);
   },
 
-  async calcNullifier(accountId: string, account: Account, index: bigint): Promise<String> {
+  async calcNullifier(accountId: string, account: Account, index: bigint): Promise<string> {
     return zpAccounts[accountId].calculateNullifier(account, index);
   },
 

@@ -638,7 +638,7 @@ export class HistoryStorage {
 
   // the history should be synced before invoking that method
   // timestamps are milliseconds, low bound is inclusively
-  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null, sk: Uint8Array, tokenAddress: string): Promise<ComplianceHistoryRecord[]> {
+  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null): Promise<ComplianceHistoryRecord[]> {
     let complienceRecords: ComplianceHistoryRecord[] = [];
     
     for (const [treeIndex, value] of  this.currentHistory.entries()) {
@@ -663,7 +663,7 @@ export class HistoryStorage {
                   memo: tx.ciphertext,
                   commitment: bufToHex(bigintToArrayLe(tx.outCommit)),
                 }
-                const res: ParseTxsResult = (await this.worker.parseTxs(sk, [indexedTx])).decryptedMemos;
+                const res: ParseTxsResult = await this.state.decryptMemos(indexedTx);
                 if (res.decryptedMemos.length == 1) {
                   decryptedMemo = res.decryptedMemos[0];
                 } else {
@@ -671,7 +671,7 @@ export class HistoryStorage {
                 }
               }
 
-              const chunks: TxMemoChunk[] = await this.worker.extractDecryptKeys(sk, BigInt(treeIndex), memoblock);
+              const chunks: TxMemoChunk[] = await this.state.extractDecryptKeys(treeIndex, memoblock);
 
               let nullifier: Uint8Array | undefined;
               let inputs: TxInput | undefined;
@@ -679,9 +679,9 @@ export class HistoryStorage {
               if (value.type != HistoryTransactionType.TransferIn) {
                 // tx is user-initiated
                 nullifier = bigintToArrayLe(tx.nullifier);
-                inputs = await this.worker.getTxInputs(tokenAddress, BigInt(treeIndex));
+                inputs = await this.state.getTxInputs(treeIndex);
                 if (decryptedMemo && decryptedMemo.acc) {
-                  const strNullifier = await this.worker.calcNullifier(tokenAddress, decryptedMemo.acc, BigInt(decryptedMemo.index));
+                  const strNullifier = await this.state.calcNullifier(decryptedMemo.index, decryptedMemo.acc);
                   const writer = new HexStringWriter();
                   writer.writeBigInt(BigInt(strNullifier), 32, true);
                   nextNullifier = hexToBuf(writer.toString());
@@ -695,13 +695,13 @@ export class HistoryStorage {
               for (const aChunk of chunks) {
                 if(aChunk.index == treeIndex) {
                   // account
-                  const restoredAcc = await this.worker.decryptAccount(aChunk.key, aChunk.encrypted);
+                  const restoredAcc = await this.state.decryptAccount(aChunk.key, aChunk.encrypted);
                   if (JSON.stringify(restoredAcc) != JSON.stringify(decryptedMemo?.acc)) {
                     throw new InternalError(`Cannot restore source account @${aChunk.index} from the compliance report!`);
                   }
                 } else if (decryptedMemo) {
                   // notes
-                  const restoredNote = await this.worker.decryptNote(aChunk.key, aChunk.encrypted);
+                  const restoredNote = await this.state.decryptNote(aChunk.key, aChunk.encrypted);
                   let srcNote: Note | undefined;
                   for (const aNote of decryptedMemo.outNotes) {
                     if (aNote.index == aChunk.index) { srcNote = aNote.note; break; }
@@ -979,67 +979,67 @@ export class HistoryStorage {
                 // source address in the memo block (20 bytes, starts from 16 bytes offset)
                 const depositHolderAddr = '0x' + tx.memo.substr(32, 40);  // TODO: Check it!
                 
-                  const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
-                  allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+                const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
+                allRecords.push(HistoryRecordIdx.create(rec, memo.index));
 
-                } else if (tx.txType == TxType.Transfer) {
-                  // there are 2 cases: 
-                  if (memo.acc) {
-                    // 1. we initiated it => outcoming tx(s)
-                    const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
-                      const destAddr = await this.state.assembleAddress(note.d, note.p_d);
-                      return {to: destAddr, amount: BigInt(note.b)};
-                    }));
+              } else if (tx.txType == TxType.Transfer) {
+                // there are 2 cases: 
+                if (memo.acc) {
+                  // 1. we initiated it => outcoming tx(s)
+                  const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
+                    const destAddr = await this.state.assembleAddress(note.d, note.p_d);
+                    return {to: destAddr, amount: BigInt(note.b)};
+                  }));
 
-                    if (transfers.length == 0) {
-                      const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
-                      allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                    } else {
-                      const rec = await HistoryRecord.transferOut(
-                        transfers,
-                        feeAmount,
-                        ts, txHash,
-                        pending,
-                        async (addr) => this.state.isOwnAddress(addr)
-                      );
-                      allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                    }
+                  if (transfers.length == 0) {
+                    const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
+                    allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                   } else {
-                    // 2. somebody initiated it => incoming tx(s)
-
-                    const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-                      const destAddr = await this.state.assembleAddress(note.d, note.p_d);
-                      return {to: destAddr, amount: BigInt(note.b)};
-                    }));
-
-                    const rec = await HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
+                    const rec = await HistoryRecord.transferOut(
+                      transfers,
+                      feeAmount,
+                      ts, txHash,
+                      pending,
+                      async (addr) => this.state.isOwnAddress(addr)
+                    );
                     allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                   }
-                } else if (tx.txType == TxType.Withdraw) {
-                  // withdrawal transaction (destination address in the memoblock)
-                  const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
+                } else {
+                  // 2. somebody initiated it => incoming tx(s)
 
-                  const rec = await HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
+                  const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
+                    const destAddr = await this.state.assembleAddress(note.d, note.p_d);
+                    return {to: destAddr, amount: BigInt(note.b)};
+                  }));
+
+                  const rec = await HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
                   allRecords.push(HistoryRecordIdx.create(rec, memo.index));
                 }
+              } else if (tx.txType == TxType.Withdraw) {
+                // withdrawal transaction (destination address in the memoblock)
+                const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
 
-                // if we found txHash in the blockchain -> remove it from the saved tx array
-                if (pending) {
-                  // if tx is in pending state - remove it only on success
-                  const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
-                  if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
-                    this.removePendingTxByTxHash(txHash);
-                  }
-                } else {
+                const rec = await HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
+                allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+              }
+
+              // if we found txHash in the blockchain -> remove it from the saved tx array
+              if (pending) {
+                // if tx is in pending state - remove it only on success
+                const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
+                if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
                   this.removePendingTxByTxHash(txHash);
                 }
+              } else {
+                this.removePendingTxByTxHash(txHash);
+              }
 
-                return allRecords;
+              return allRecords;
 
             } else if (txSelector == PoolSelector.AppendDirectDeposit) {
               // Direct Deposit tranaction
               const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-                const destAddr = await this.worker.assembleAddress(note.d, note.p_d);
+                const destAddr = await this.state.assembleAddress(note.d, note.p_d);
                 return {to: destAddr, amount: BigInt(note.b)};
               }));
 

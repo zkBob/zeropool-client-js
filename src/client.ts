@@ -345,22 +345,22 @@ export class ZkBobClient extends ZkBobProvider {
     updateState: boolean = true,
   ): Promise<ComplianceHistoryRecord[]> {
     if (updateState) {
-      await this.getAllHistory(tokenAddress);
+      await this.getAllHistory();
     }
 
-    return await this.zpStates[tokenAddress].history.getComplianceReport(fromTimestamp, toTimestamp, this.config.sk, tokenAddress);
+    const sk = this.account?.sk;
+    if (!sk) {
+      throw new InternalError('Account is not set');
+    }
+    
+    return await this.zpState().history?.getComplianceReport(fromTimestamp, toTimestamp) ?? [];     
+
   }
 
   // ------------------=========< Service Routines >=========-------------------
   // | Methods for creating and sending transactions in different modes        |
   // ---------------------------------------------------------------------------
 
-  // Unique account ID needed to user identify
-  // Currently it's spending key hash (SHA-256)
-  public getAccountId(): string {
-    return this.accountId;
-  }
-  
   // Generate shielded address to receive funds
   public async generateAddress(): Promise<string> {;
     return this.zpState().generateAddress();
