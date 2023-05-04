@@ -734,11 +734,11 @@ export class ZkBobState {
   }
 
   public async extractDecryptKeys(treeIndex: number, memoblock: Uint8Array): Promise<TxMemoChunk[]> {
-    return this.worker.extractDecryptKeys(this.stateId, this.sk, BigInt(treeIndex), memoblock);
+    return this.worker.extractDecryptKeys(this.sk, BigInt(treeIndex), memoblock);
   }
 
   public async getTxInputs(treeIndex: number): Promise<TxInput | undefined> {
-    return this.worker.getTxInputs(this.sk, BigInt(treeIndex));
+    return this.worker.getTxInputs(this.stateId, BigInt(treeIndex));
   }
 
   public async calcNullifier(treeIndex: number, acc: Account): Promise<string> {
