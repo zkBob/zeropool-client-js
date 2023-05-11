@@ -6,7 +6,7 @@ export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount } from './clien
 export { ZkBobProvider as ZkBobAccountlessClient, GiftCardProperties } from './client-provider';
 export { SyncStat } from './state';
 export { TxType } from './tx';
-export { HistoryRecord, HistoryTransactionType, HistoryRecordState } from './history';
+export { HistoryRecord, HistoryTransactionType, HistoryRecordState, ComplianceHistoryRecord } from './history';
 export { EphemeralAddress, EphemeralPool } from './ephemeral';
 export { ServiceType, ServiceVersion } from './services/common';
 export { PoolLimits, TreeState } from './client-provider';
