@@ -779,7 +779,7 @@ export class ZkBobClient extends ZkBobProvider {
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // feeGwei - fee per single transaction (request it with atomicTxFee method)
   // Returns jobId from the relayer or throw an Error
-  public async withdrawMulti(address: string, amountGwei: bigint, feeGwei: bigint = BigInt(0)): Promise<string[]> {
+  public async withdrawMulti(address: string, amountGwei: bigint, swapAmount: bigint, feeGwei: bigint = BigInt(0)): Promise<string[]> {
     const relayer = this.relayer();
     const state = this.zpState();
 
@@ -830,7 +830,7 @@ export class ZkBobClient extends ZkBobProvider {
           amount: onePart.outNotes[0].amountGwei.toString(),
           fee: onePart.fee.toString(),
           to: addressBin,
-          native_amount: '0',
+          native_amount: swapAmount.toString(),
           energy_amount: '0',
         };
         oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
