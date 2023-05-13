@@ -10,7 +10,7 @@ import { EphemeralAddress } from './ephemeral';
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
 import { 
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
-  TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
+  TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
 import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
@@ -792,6 +792,11 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxInvalidArgumentError('Please provide a valid non-zero address');
     }
     const addressBin = ethAddrToBuf(address);
+
+    const supportedSwapAmount = await this.maxSupportedTokenSwap();
+    if (swapAmount > supportedSwapAmount) {
+      throw new TxSwapTooHighError(swapAmount, supportedSwapAmount);
+    }
 
     const minTx = await this.minTxAmount();
     if (amountGwei < minTx) {

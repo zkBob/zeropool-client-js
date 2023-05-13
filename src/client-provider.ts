@@ -15,6 +15,7 @@ const LIB_VERSION = require('../package.json').version;
 
 const DEFAULT_DENOMINATOR = BigInt(1000000000);
 const RELAYER_FEE_LIFETIME = 3600;  // when to refetch the relayer fee (in seconds)
+const NATIVE_AMOUNT_LIFETIME = 3600;  // when to refetch the max supported swap amount (in seconds)
 const DEFAULT_RELAYER_FEE = BigInt(100000000);
 const MIN_TX_AMOUNT = BigInt(50000000);
 const GIFT_CARD_CODE_VER = 1;
@@ -23,6 +24,12 @@ const GIFT_CARD_CODE_VER = 1;
 interface RelayerFeeFetch {
     fee: bigint;
     timestamp: number;  // when the fee was fetched
+}
+
+// max supported swap amount + fetching timestamp
+interface MaxSwapAmountFetch {
+    amount: bigint;
+    timestamp: number;  // when amount was fetched
 }
 
 export interface Limit { // all values are in Gwei
@@ -78,6 +85,7 @@ export class ZkBobProvider {
     private denominators:   { [name: string]: bigint } = {};
     private poolIds:        { [name: string]: number } = {};
     private relayerFee:     { [name: string]: RelayerFeeFetch } = {};
+    private maxSwapAmount:  { [name: string]: MaxSwapAmountFetch } = {};
     private coldStorageCfg: { [name: string]: ColdStorageConfig } = {};
     protected supportId: string | undefined;
 
@@ -319,12 +327,33 @@ export class ZkBobProvider {
                 cachedFee = {fee, timestamp: Date.now()};
                 this.relayerFee[this.curPool] = cachedFee;
             } catch (err) {
-                console.error(`Cannot fetch relayer fee, will using default (${DEFAULT_RELAYER_FEE}): ${err}`);
-                return this.relayerFee[this.curPool]?.fee ?? DEFAULT_RELAYER_FEE;
+                const res = this.relayerFee[this.curPool]?.fee ?? DEFAULT_RELAYER_FEE;
+                console.error(`Cannot fetch relayer fee, will using default (${res}): ${err}`);
+
+                return res;
             }
         }
 
         return cachedFee.fee;
+    }
+
+    // Max supported token swap during withdrawal, in token resolution (Gwei)
+    public async maxSupportedTokenSwap(): Promise<bigint> {
+        let cachedAmount = this.maxSwapAmount[this.curPool];
+        if (!cachedAmount || cachedAmount.timestamp + NATIVE_AMOUNT_LIFETIME * 1000 < Date.now()) {
+            try {
+                const amount = await this.relayer().maxSupportedSwapAmount();
+                cachedAmount = {amount, timestamp: Date.now()};
+                this.maxSwapAmount[this.curPool] = cachedAmount;
+            } catch (err) {
+                const res = this.maxSwapAmount[this.curPool]?.amount ?? 0;
+                console.warn(`Cannot fetch max available swap amount, will using default (${res}): ${err}`);
+
+                return res;
+            }
+        }
+
+        return cachedAmount.amount;
     }
 
     public async directDepositFee(): Promise<bigint> {
