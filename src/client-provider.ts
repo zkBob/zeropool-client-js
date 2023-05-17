@@ -5,9 +5,10 @@ import { NetworkType } from "./network-type";
 import { NetworkBackend } from "./networks/network";
 import { ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/prover";
-import { LimitsFetch, ZkBobRelayer } from "./services/relayer";
+import { DynamicFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
+import { TxType } from "./tx";
 
 const bs58 = require('bs58')
 
@@ -21,7 +22,7 @@ const GIFT_CARD_CODE_VER = 1;
 
 // relayer fee + fetching timestamp
 interface RelayerFeeFetch {
-    fee: bigint;
+    fee: DynamicFee;
     timestamp: number;  // when the fee was fetched
 }
 
@@ -301,26 +302,28 @@ export class ZkBobProvider {
     // | Fees and limits, min tx amount (which are not depend on zkAccount)       |
     // ----------------------------------------------------------------------------
 
-    // Min trensaction fee in Gwei (e.g. deposit or single transfer)
+    // Min transaction fee in Gwei (for regular transaction without any payload overhead)
     // To estimate fee in the common case please use feeEstimate instead
-    public async atomicTxFee(): Promise<bigint> {
+    public async atomicTxFee(txType: TxType): Promise<bigint> {
         const relayer = await this.getRelayerFee();
-        const l1 = BigInt(0);
+        
+        
 
-        return relayer + l1;
+        return relayer.fee + l1;
     }
 
     // Base relayer fee per tx. Do not use it directly, use atomicTxFee instead
-    protected async getRelayerFee(): Promise<bigint> {
+    protected async getRelayerFee(): Promise<DynamicFee> {
         let cachedFee = this.relayerFee[this.curPool];
         if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
             try {
-                const fee = await this.relayer().fee()
+                const fee = await this.relayer().feeV2();
                 cachedFee = {fee, timestamp: Date.now()};
                 this.relayerFee[this.curPool] = cachedFee;
             } catch (err) {
                 console.error(`Cannot fetch relayer fee, will using default (${DEFAULT_RELAYER_FEE}): ${err}`);
-                return this.relayerFee[this.curPool]?.fee ?? DEFAULT_RELAYER_FEE;
+                return this.relayerFee[this.curPool]?.fee ?? 
+                    {fee: DEFAULT_RELAYER_FEE, oneByteFee: 0n};
             }
         }
 
