@@ -261,4 +261,20 @@ export class ZkBobRelayer implements IZkBobService {
   
     return res.hash;
   }
+
+  // Amount of the pool tokens which could be swapped to the native ones
+  // in a single withdrawal transaction (aka native_amount)
+  public async maxSupportedSwapAmount(): Promise<bigint> {
+    const url = new URL('/maxNativeAmount', this.url());
+    const headers = defaultHeaders();
+    const res = await fetchJson(url.toString(), {headers}, this.type());
+
+    if (typeof res !== 'object' || res === null ||
+        !res.hasOwnProperty('maxNativeAmount') || typeof res.maxNativeAmount !== 'string')
+    {
+      throw new ServiceError(this.type(), 200, 'Incorrect respons for /maxNativeAmount');
+    }
+  
+    return BigInt(res.maxNativeAmount);
+  }
 }

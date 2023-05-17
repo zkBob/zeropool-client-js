@@ -74,6 +74,16 @@ export class TxInsufficientFundsError extends BobError {
     }
 }
 
+export class TxSwapTooHighError extends BobError {
+    public requested: bigint;
+    public supported: bigint;
+    constructor(requested: bigint, supported: bigint) {
+        super(`The pool doesn't support requested swap amount (requested ${requested.toString()}, supported ${supported.toString()})`);
+        this.requested = requested;
+        this.supported = supported;
+    }
+}
+
 export class ServiceError extends BobError {
     public code: number;
     public service: ServiceType;
