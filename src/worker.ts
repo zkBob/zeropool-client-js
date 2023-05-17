@@ -2,6 +2,7 @@ import { expose } from 'comlink';
 import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
           ParseTxsResult, ParseTxsColdStorageResult, StateUpdate,
           IndexedTx, TreeNode, SnarkProof, IAddressComponents,
+          TxMemoChunk, TxInput, Account, Note,
         } from 'libzkbob-rs-wasm-web';
 import { threads } from 'wasm-feature-detect';
 import { SnarkParams } from './params';
@@ -64,6 +65,28 @@ const obj = {
     const result = txParser.parseTxs(sk, txs)
     sk.fill(0)
     return result;
+  },
+
+  async extractDecryptKeys(sk: Uint8Array, index: bigint, memo: Uint8Array): Promise<TxMemoChunk[]> {
+    const result = txParser.extractDecryptKeys(sk, index, memo);
+    sk.fill(0);
+    return result;
+  },
+
+  async getTxInputs(accountId: string, index: bigint): Promise<TxInput> {
+    return zpAccounts[accountId].getTxInputs(index);
+  },
+
+  async decryptAccount(symkey: Uint8Array, encrypted: Uint8Array): Promise<Account> {
+    return txParser.symcipherDecryptAcc(symkey, encrypted);
+  },
+
+  async decryptNote(symkey: Uint8Array, encrypted: Uint8Array): Promise<Note> {
+    return txParser.symcipherDecryptNote(symkey, encrypted);
+  },
+
+  async calcNullifier(accountId: string, account: Account, index: bigint): Promise<string> {
+    return zpAccounts[accountId].calculateNullifier(account, index);
   },
 
   // accountId is a unique string depends on network, poolId and sk
