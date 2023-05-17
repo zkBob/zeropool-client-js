@@ -270,7 +270,7 @@ export class ZkBobRelayer implements IZkBobService {
     const res = await fetchJson(url.toString(), {headers}, this.type());
 
     if (typeof res !== 'object' || res === null ||
-        !res.hasOwnProperty('maxNativeAmount') || typeof res.hash !== 'string')
+        !res.hasOwnProperty('maxNativeAmount') || typeof res.maxNativeAmount !== 'string')
     {
       throw new ServiceError(this.type(), 200, 'Incorrect respons for /maxNativeAmount');
     }
