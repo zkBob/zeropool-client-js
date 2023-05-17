@@ -47,7 +47,7 @@ const isRelayerInfo = (obj: any): obj is RelayerInfo => {
     obj.hasOwnProperty('optimisticDeltaIndex') && typeof obj.optimisticDeltaIndex === 'number';
 }
 
-export interface DynamicFee {
+export interface RelayerFee {
   fee: bigint;
   oneByteFee: bigint;
 }
@@ -216,14 +216,7 @@ export class ZkBobRelayer implements IZkBobService {
     throw new ServiceError(this.type(), 200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
   }
   
-  public async fee(): Promise<bigint> {
-    const url = new URL('/fee', this.url());
-    const headers = defaultHeaders(this.supportId);
-    const res = await fetchJson(url.toString(), {headers}, this.type());
-    return BigInt(res.fee);
-  }
-
-  public async feeV2(): Promise<DynamicFee> {
+  public async fee(): Promise<RelayerFee> {
     const url = new URL('/fee/v2', this.url());
     const headers = defaultHeaders(this.supportId);
     const res = await fetchJson(url.toString(), {headers}, this.type());

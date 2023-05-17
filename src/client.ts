@@ -15,7 +15,7 @@ import {
 import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
 import { isAddress } from 'web3-utils';
-import { JobInfo } from './services/relayer';
+import { JobInfo, RelayerFee } from './services/relayer';
 import { TreeState, ZkBobProvider } from './client-provider';
 import { wrap } from 'comlink';
 
@@ -53,10 +53,8 @@ export interface TransferConfig {
 
 export interface FeeAmount { // all values are in Gwei
   total: bigint;    // total fee
-  totalPerTx: bigint; // multitransfer case (== total for regular tx)
   txCnt: number;      // multitransfer case (== 1 for regular tx)
-  relayer: bigint;  // relayer fee component
-  l1: bigint;       // L1 fee component
+  relayerFee: RelayerFee;  // fee from relayer which was used during estimation
   insufficientFunds: boolean; // true when the local balance is insufficient for requested tx amount
 }
 
@@ -905,7 +903,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     const accId = accountId(giftCardAcc);
     const giftCardBalance = await this.giftCardBalance(giftCardAcc);
-    const fee = await this.atomicTxFee();
+    const fee = await this.atomicTxFee(TxType.Transfer);
     const minTxAmount = await this.minTxAmount();
     if (giftCardBalance - fee < minTxAmount) {
       throw new TxInsufficientFundsError(minTxAmount + fee, giftCardBalance)
@@ -1037,27 +1035,25 @@ export class ZkBobClient extends ZkBobProvider {
   //  1. txCnt contains number of transactions for maximum available transfer
   //  2. txCnt can't be less than 1 (e.g. when balance is less than atomic fee)
   public async feeEstimate(transfersGwei: bigint[], txType: TxType, updateState: boolean = true): Promise<FeeAmount> {
-    const relayer = await this.getRelayerFee();
-    const l1 = BigInt(0);
+    const relayerFee = await this.getRelayerFee();
     let txCnt = 1;
-    const totalPerTx = relayer + l1;
-    let total = totalPerTx;
+    let total = 0n;
     let insufficientFunds = false;
 
     if (txType === TxType.Transfer || txType === TxType.Withdraw) {
       // we set allowPartial flag here to get parts anywhere
       const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: NULL_ADDRESS} });  // destination address is ignored for estimation purposes
-      const parts = await this.getTransactionParts(requests, totalPerTx, updateState, true);
+      const parts = await this.getTransactionParts(requests, relayerFee, updateState, true);
       const totalBalance = await this.getTotalBalance(false);
 
       const totalSumm = parts
         .map((p) => p.outNotes.reduce((acc, cur) => acc + cur.amountGwei, BigInt(0)))
-        .reduce((acc, cur) => acc + cur, BigInt(0));
+        .reduce((acc, cur) => acc + cur, 0n);
 
       const totalRequested = transfersGwei.reduce((acc, cur) => acc + cur, BigInt(0));
 
       txCnt = parts.length > 0 ? parts.length : 1;  // if we haven't funds for atomic fee - suppose we can make one tx
-      total = totalPerTx * BigInt(txCnt);
+      total = parts.map((p) => p.fee).reduce((acc, cur) => acc + cur, 0n);
 
       insufficientFunds = (totalSumm < totalRequested || totalSumm + total > totalBalance) ? true : false;
     } else {
@@ -1065,7 +1061,7 @@ export class ZkBobClient extends ZkBobProvider {
       // Fee got from the native coins, so any deposit can be make within single tx
     }
 
-    return {total, totalPerTx, txCnt, relayer, l1, insufficientFunds};
+    return {total, txCnt, relayerFee, insufficientFunds};
   }
 
   // Account + notes balance excluding fee needed to transfer or withdraw it
@@ -1101,7 +1097,7 @@ export class ZkBobClient extends ZkBobProvider {
   // This method ALLOWS creating transaction parts less than MIN_TX_AMOUNT (check it before tx creating)
   public async getTransactionParts(
     transfers: TransferRequest[],
-    feeGwei: bigint,
+    relayerFee: RelayerFee,
     updateState: boolean = true,
     allowPartial: boolean = false,
   ): Promise<Array<TransferConfig>> {

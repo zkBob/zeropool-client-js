@@ -5,24 +5,24 @@ import { NetworkType } from "./network-type";
 import { NetworkBackend } from "./networks/network";
 import { ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/prover";
-import { DynamicFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
+import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
-import { TxType } from "./tx";
+import { estimateCalldataLength, TxType } from "./tx";
 
 const bs58 = require('bs58')
 
 const LIB_VERSION = require('../package.json').version;
 
 const DEFAULT_DENOMINATOR = BigInt(1000000000);
-const RELAYER_FEE_LIFETIME = 3600;  // when to refetch the relayer fee (in seconds)
+const RELAYER_FEE_LIFETIME = 30;  // when to refetch the relayer fee (in seconds)
 const DEFAULT_RELAYER_FEE = BigInt(100000000);
 const MIN_TX_AMOUNT = BigInt(50000000);
 const GIFT_CARD_CODE_VER = 1;
 
 // relayer fee + fetching timestamp
 interface RelayerFeeFetch {
-    fee: DynamicFee;
+    fee: RelayerFee;
     timestamp: number;  // when the fee was fetched
 }
 
@@ -305,19 +305,18 @@ export class ZkBobProvider {
     // Min transaction fee in Gwei (for regular transaction without any payload overhead)
     // To estimate fee in the common case please use feeEstimate instead
     public async atomicTxFee(txType: TxType): Promise<bigint> {
-        const relayer = await this.getRelayerFee();
-        
-        
+        const relayerFee = await this.getRelayerFee();
+        const calldataBytesCnt = estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0);
 
-        return relayer.fee + l1;
+        return relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
     }
 
     // Base relayer fee per tx. Do not use it directly, use atomicTxFee instead
-    protected async getRelayerFee(): Promise<DynamicFee> {
+    protected async getRelayerFee(): Promise<RelayerFee> {
         let cachedFee = this.relayerFee[this.curPool];
         if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
             try {
-                const fee = await this.relayer().feeV2();
+                const fee = await this.relayer().fee();
                 cachedFee = {fee, timestamp: Date.now()};
                 this.relayerFee[this.curPool] = cachedFee;
             } catch (err) {
