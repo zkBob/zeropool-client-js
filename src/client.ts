@@ -3,7 +3,7 @@ import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature, bufToHex
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
-import { TxType, estimateCalldataLength } from './tx';
+import { TxType, estimateCalldataLength, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
@@ -724,10 +724,10 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }));
 
-    const txParts = await this.getTransactionParts(transfers, relayerFee);
+    const txParts = await this.getTransactionParts(TxType.Transfer, transfers, relayerFee);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(false);
+      const available = await this.calcMaxAvailableTransfer(TxType.Transfer, false);
       const amounts = transfers.map((aTx) => aTx.amountGwei);
       const totalAmount = amounts.reduce((acc, cur) => acc + cur, BigInt(0));
       const feeEst = await this.feeEstimate(amounts, TxType.Transfer, false);
@@ -820,10 +820,10 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxLimitError(amountGwei, limits.withdraw.total);
     }
 
-    const txParts = await this.getTransactionParts([{amountGwei, destination: address}], relayerFee);
+    const txParts = await this.getTransactionParts(TxType.Withdraw, [{amountGwei, destination: address}], relayerFee);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(false);
+      const available = await this.calcMaxAvailableTransfer(TxType.Withdraw, false);
       const feeEst = await this.feeEstimate([amountGwei], TxType.Withdraw, false);
       throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
@@ -1030,7 +1030,7 @@ export class ZkBobClient extends ZkBobProvider {
   // Fee can depends on tx amount for multitransfer transactions,
   // that's why you should specify it here for general case
   // This method also supposed that in some cases fee can depends on tx amount in future
-  // Currently any deposit isn't depends of amount (txCnt is always 1)
+  // Currently any deposit isn't depends of amount (txCnt is always 1 and transfersGwei ignored)
   // There are two extra states in case of insufficient funds for requested token amount:
   //  1. txCnt contains number of transactions for maximum available transfer
   //  2. txCnt can't be less than 1 (e.g. when balance is less than atomic fee)
@@ -1043,7 +1043,7 @@ export class ZkBobClient extends ZkBobProvider {
     if (txType === TxType.Transfer || txType === TxType.Withdraw) {
       // we set allowPartial flag here to get parts anywhere
       const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: NULL_ADDRESS} });  // destination address is ignored for estimation purposes
-      const parts = await this.getTransactionParts(requests, relayerFee, updateState, true);
+      const parts = await this.getTransactionParts(txType, requests, relayerFee, updateState, true);
       const totalBalance = await this.getTotalBalance(false);
 
       const totalSumm = parts
@@ -1059,6 +1059,7 @@ export class ZkBobClient extends ZkBobProvider {
     } else {
       // Deposit and BridgeDeposit cases are independent on the user balance
       // Fee got from the native coins, so any deposit can be make within single tx
+      total = relayerFee.fee + relayerFee.oneByteFee * BigInt(estimateCalldataLength(txType, 0));
     }
 
     return {total, txCnt, relayerFee, insufficientFunds};
@@ -1066,15 +1067,19 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Account + notes balance excluding fee needed to transfer or withdraw it
   // TODO: need to optimize for edge cases (account limit calculating)
-  public async calcMaxAvailableTransfer(updateState: boolean = true): Promise<bigint> {
+  public async calcMaxAvailableTransfer(txType: TxType, updateState: boolean = true): Promise<bigint> {
+    if (txType != TxType.Transfer && txType != TxType.Withdraw) {
+      throw new InternalError(`Attempting to invoke \'calcMaxAvailableTransfer\' for ${txTypeToString(txType)} tx (only transfer\\withdraw are supported)`);
+    }
+
     const state = this.zpState();
     if (updateState) {
       await this.updateState();
     }
 
     const relayerFee = await this.getRelayerFee();
-    const aggregateTxLen = BigInt(estimateCalldataLength(TxType.Transfer, 0));
-    const finalTxLen = BigInt(estimateCalldataLength(TxType.Transfer, 1));
+    const aggregateTxLen = BigInt(estimateCalldataLength(TxType.Transfer, 0)); // aggregation txs are always transfers
+    const finalTxLen = BigInt(estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0));
     const aggregateTxFee = relayerFee.fee + aggregateTxLen * relayerFee.oneByteFee;
     const finalTxFeeDelta = (finalTxLen - aggregateTxLen) * relayerFee.oneByteFee;
 
@@ -1102,11 +1107,16 @@ export class ZkBobClient extends ZkBobProvider {
   // (otherwise the void array will be returned in case of insufficient funds)
   // This method ALLOWS creating transaction parts less than MIN_TX_AMOUNT (check it before tx creating)
   public async getTransactionParts(
+    txType: TxType,
     transfers: TransferRequest[],
     relayerFee: RelayerFee,
     updateState: boolean = true,
     allowPartial: boolean = false,
   ): Promise<Array<TransferConfig>> {
+
+    if (txType != TxType.Transfer && txType != TxType.Withdraw) {
+      throw new InternalError(`Attempting to invoke \'getTransactionParts\' for ${txTypeToString(txType)} tx (only transfer\\withdraw are supported)`);
+    }
 
     const state = this.zpState();
     if (updateState) {
@@ -1134,7 +1144,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     let i = 0;
     do {
-      txParts = this.tryToPrepareTransfers(accountBalance, relayerFee, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
+      txParts = this.tryToPrepareTransfers(txType, accountBalance, relayerFee, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
       if (txParts.length == aggregatedTransfers.length) {
         // We are able to perform all txs starting from this index
         return aggregationParts.concat(txParts);
@@ -1144,6 +1154,7 @@ export class ZkBobClient extends ZkBobProvider {
         // We can't aggregate notes if we doesn't have one
         break;
       }
+
 
       const calldataBytesCnt = estimateCalldataLength(TxType.Transfer, 0);
       const fee = relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
@@ -1169,8 +1180,10 @@ export class ZkBobClient extends ZkBobProvider {
     return allowPartial ? aggregationParts.concat(txParts) : [];
   }
 
-  // try to prepare transfer configs
+  // try to prepare transfer configs without extra aggregation transactions
+  // (using just account balance and notes collected in these txs)
   private tryToPrepareTransfers(
+    txType: TxType,
     balance: bigint,
     relayerFee: RelayerFee,
     groupedNotesBalances: Array<bigint>,
@@ -1181,7 +1194,8 @@ export class ZkBobClient extends ZkBobProvider {
     for (let i = 0; i < transfers.length; i++) {
       const inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
 
-      const calldataBytesCnt = estimateCalldataLength(TxType.Transfer, transfers[i].requests.length);
+      const numOfNotes = (txType == TxType.Transfer) ? transfers[i].requests.length : 0;
+      const calldataBytesCnt = estimateCalldataLength(txType, numOfNotes);
       const fee = relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
 
       if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
