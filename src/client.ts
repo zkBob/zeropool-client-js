@@ -3,7 +3,7 @@ import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature, bufToHex
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
-import { TxType } from './tx';
+import { TxType, estimateCalldataLength } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
@@ -709,7 +709,7 @@ export class ZkBobClient extends ZkBobProvider {
   // Transfer shielded funds to the shielded address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // Returns jobIds from the relayer or throw an Error
-  public async transferMulti(transfers: TransferRequest[], feeGwei: bigint = BigInt(0)): Promise<string[]> {
+  public async transferMulti(transfers: TransferRequest[], relayerFee: RelayerFee): Promise<string[]> {
     const state = this.zpState();
     const relayer = this.relayer();
 
@@ -724,7 +724,7 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }));
 
-    const txParts = await this.getTransactionParts(transfers, feeGwei);
+    const txParts = await this.getTransactionParts(transfers, relayerFee);
 
     if (txParts.length == 0) {
       const available = await this.calcMaxAvailableTransfer(false);
@@ -796,7 +796,7 @@ export class ZkBobClient extends ZkBobProvider {
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // feeGwei - fee per single transaction (request it with atomicTxFee method)
   // Returns jobId from the relayer or throw an Error
-  public async withdrawMulti(address: string, amountGwei: bigint, feeGwei: bigint = BigInt(0)): Promise<string[]> {
+  public async withdrawMulti(address: string, amountGwei: bigint, relayerFee: RelayerFee): Promise<string[]> {
     const relayer = this.relayer();
     const state = this.zpState();
 
@@ -820,7 +820,7 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxLimitError(amountGwei, limits.withdraw.total);
     }
 
-    const txParts = await this.getTransactionParts([{amountGwei, destination: address}], feeGwei);
+    const txParts = await this.getTransactionParts([{amountGwei, destination: address}], relayerFee);
 
     if (txParts.length == 0) {
       const available = await this.calcMaxAvailableTransfer(false);
@@ -1072,22 +1072,28 @@ export class ZkBobClient extends ZkBobProvider {
       await this.updateState();
     }
 
-    const txFee = await this.atomicTxFee();
+    const relayerFee = await this.getRelayerFee();
+    const aggregateTxLen = BigInt(estimateCalldataLength(TxType.Transfer, 0));
+    const finalTxLen = BigInt(estimateCalldataLength(TxType.Transfer, 1));
+    const aggregateTxFee = relayerFee.fee + aggregateTxLen * relayerFee.oneByteFee;
+    const finalTxFeeDelta = (finalTxLen - aggregateTxLen) * relayerFee.oneByteFee;
+
     const groupedNotesBalances = await this.getGroupedNotes();
     let accountBalance = await state.accountBalance();
 
-    let maxAmount = accountBalance > txFee ? accountBalance - txFee : BigInt(0);
+    let maxAmount = accountBalance > aggregateTxFee ? accountBalance - aggregateTxFee : 0n;
     for (const inNotesBalance of groupedNotesBalances) {
-      if (accountBalance + inNotesBalance < txFee) {
+      if (accountBalance + inNotesBalance < aggregateTxFee) {
         break;
       }
 
-      accountBalance += inNotesBalance - txFee;
+      accountBalance += inNotesBalance - aggregateTxFee;
       if (accountBalance > maxAmount) {
         maxAmount = accountBalance;
       }
     }
-    return maxAmount;
+
+    return (maxAmount > finalTxFeeDelta) ? maxAmount - finalTxFeeDelta : 0n;
   }
 
   // Calculate multitransfer configuration for specified token amount and fee per transaction
@@ -1128,7 +1134,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     let i = 0;
     do {
-      txParts = this.tryToPrepareTransfers(accountBalance, feeGwei, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
+      txParts = this.tryToPrepareTransfers(accountBalance, relayerFee, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
       if (txParts.length == aggregatedTransfers.length) {
         // We are able to perform all txs starting from this index
         return aggregationParts.concat(txParts);
@@ -1139,8 +1145,11 @@ export class ZkBobClient extends ZkBobProvider {
         break;
       }
 
+      const calldataBytesCnt = estimateCalldataLength(TxType.Transfer, 0);
+      const fee = relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
+
       const inNotesBalance = groupedNotesBalances[i];
-      if (accountBalance + inNotesBalance < feeGwei) {
+      if (accountBalance + inNotesBalance < fee) {
         // We cannot collect amount to cover tx fee. There are 2 cases:
         // insufficient balance or unoperable notes configuration
         break;
@@ -1149,10 +1158,10 @@ export class ZkBobClient extends ZkBobProvider {
       aggregationParts.push({
         inNotesBalance,
         outNotes: [],
-        fee: feeGwei,
+        fee,
         accountLimit: BigInt(0)
       });
-      accountBalance += BigInt(inNotesBalance) - BigInt(feeGwei);
+      accountBalance += BigInt(inNotesBalance) - fee;
       
       i++;
     } while (i < groupedNotesBalances.length)
@@ -1161,11 +1170,19 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   // try to prepare transfer configs
-  private tryToPrepareTransfers(balance: bigint, fee: bigint, groupedNotesBalances: Array<bigint>, transfers: MultinoteTransferRequest[]): Array<TransferConfig> {
+  private tryToPrepareTransfers(
+    balance: bigint,
+    relayerFee: RelayerFee,
+    groupedNotesBalances: Array<bigint>,
+    transfers: MultinoteTransferRequest[]
+  ): Array<TransferConfig> {
     let accountBalance = balance;
     let parts: Array<TransferConfig> = [];
     for (let i = 0; i < transfers.length; i++) {
       const inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
+
+      const calldataBytesCnt = estimateCalldataLength(TxType.Transfer, transfers[i].requests.length);
+      const fee = relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
 
       if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
         // We haven't enough funds to perform such tx
