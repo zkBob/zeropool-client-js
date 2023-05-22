@@ -217,9 +217,10 @@ export class ZkBobRelayer implements IZkBobService {
   }
   
   public async fee(): Promise<RelayerFee> {
-    const url = new URL('/fee/v2', this.url());
+    const url = new URL('/fee', this.url());
     const headers = defaultHeaders(this.supportId);
-    const res = await fetchJson(url.toString(), {headers}, this.type());
+    //const res = await fetchJson(url.toString(), {headers}, this.type());
+    const res = { fee: '100000000', oneByteFee: '97466'}; // TEST ONLY
 
     if (typeof res !== 'object' || res === null || !res.hasOwnProperty('fee')) {
       throw new ServiceError(this.type(), 200, 'Incorrect response for dynamic fees');

@@ -302,17 +302,9 @@ export class ZkBobProvider {
     // | Fees and limits, min tx amount (which are not depend on zkAccount)       |
     // ----------------------------------------------------------------------------
 
-    // Min transaction fee in Gwei (for regular transaction without any payload overhead)
-    // To estimate fee in the common case please use feeEstimate instead
-    public async atomicTxFee(txType: TxType): Promise<bigint> {
-        const relayerFee = await this.getRelayerFee();
-        const calldataBytesCnt = estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0);
-
-        return relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
-    }
-
-    // Base relayer fee per tx. Do not use it directly, use atomicTxFee instead
-    protected async getRelayerFee(): Promise<RelayerFee> {
+    // Relayer fee components used to calculate concrete tx cost
+    // To estimate typycal fee for transaction with desired type please use atomicTxFee
+    public async getRelayerFee(): Promise<RelayerFee> {
         let cachedFee = this.relayerFee[this.curPool];
         if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
             try {
@@ -327,6 +319,15 @@ export class ZkBobProvider {
         }
 
         return cachedFee.fee;
+    }
+
+    // Min transaction fee in pool resolution (for regular transaction without any payload overhead)
+    // To estimate fee for the concrete tx use account-based method (feeEstimate from client.ts)
+    public async atomicTxFee(txType: TxType): Promise<bigint> {
+        const relayerFee = await this.getRelayerFee();
+        const calldataBytesCnt = estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0);
+
+        return relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
     }
 
     public async directDepositFee(): Promise<bigint> {
