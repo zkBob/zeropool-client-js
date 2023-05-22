@@ -1068,9 +1068,10 @@ export class ZkBobClient extends ZkBobProvider {
 
       txCnt = parts.length > 0 ? parts.length : 1;  // if we haven't funds for atomic fee - suppose we can make one tx
       total = parts.map((p) => p.fee).reduce((acc, cur) => acc + cur, 0n);
-      calldataTotalLength = parts
-        .map((p) => p.outNotes.length)
-        .reduce((acc, cur) => acc + estimateCalldataLength(txType, cur), 0);
+      for (let i = 0; i < parts.length; i++) {
+        const curTxType = i < parts.length - 1 ? TxType.Transfer : txType;
+        calldataTotalLength += estimateCalldataLength(curTxType, curTxType == TxType.Transfer ? parts[i].outNotes.length : 0);
+      }
 
       insufficientFunds = (totalSumm < totalRequested || totalSumm + total > totalBalance) ? true : false;
     } else {
@@ -1172,7 +1173,6 @@ export class ZkBobClient extends ZkBobProvider {
         // We can't aggregate notes if we doesn't have one
         break;
       }
-
 
       const calldataBytesCnt = estimateCalldataLength(TxType.Transfer, 0);
       const fee = relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);

@@ -46,7 +46,7 @@ export function estimateCalldataLength(txType: TxType, notesCnt: number, extraDa
       break;
 
     case TxType.Transfer:
-      txSpecificLen = CALLDATA_MEMO_TRANSFER_BASE_LENGTH + notesCnt * CALLDATA_MEMO_NOTE_LENGTH;
+      txSpecificLen = CALLDATA_MEMO_TRANSFER_BASE_LENGTH;
       break;
 
     case TxType.Withdraw:
@@ -54,7 +54,7 @@ export function estimateCalldataLength(txType: TxType, notesCnt: number, extraDa
       break;
   }
 
-  return CALLDATA_BASE_LENGTH + txSpecificLen + extraDataLen;
+  return CALLDATA_BASE_LENGTH + txSpecificLen + extraDataLen + notesCnt * CALLDATA_MEMO_NOTE_LENGTH;
 }
 
 /** The universal transaction data format used on most networks. */
