@@ -942,7 +942,7 @@ export class ZkBobClient extends ZkBobProvider {
     return jobId;
   }
 
-  // DEPRECATED. Please use depositPermittableV2 method instead
+  // DEPRECATED. Please use depositPermittable method instead
   // Deposit throught approval allowance
   // User should approve allowance for contract address at least 
   // (amountGwei + feeGwei) tokens before calling this method
@@ -966,7 +966,7 @@ export class ZkBobClient extends ZkBobProvider {
     await this.updateState();
 
     const usedFee = relayerFee ?? await this.getRelayerFee();
-    const feeGwei = (await this.feeEstimateInternal([amountGwei], TxType.BridgeDeposit, usedFee, false)).total;
+    const feeGwei = (await this.feeEstimateInternal([amountGwei], TxType.Deposit, usedFee, false)).total;
 
     const txData = await state.createDeposit({
       amount: (amountGwei + feeGwei).toString(),
