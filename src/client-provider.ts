@@ -298,11 +298,27 @@ export class ZkBobProvider {
         return amountWei / denominator;
     }
 
+    // Round up the fee if needed with fixed fee decimal places (after point)
+    protected async roundFee(fee: bigint): Promise<bigint> {
+        const feeDecimals = this.pool().feeDecimals;
+        if (feeDecimals !== undefined) {
+            const denom = (await this.denominator()).toString();
+            const denomLog = denom.length + Math.log10(Number('0.' + denom.substring(0, 15)));
+            const poolResDigits = 18 - denomLog;
+            if (poolResDigits > feeDecimals) {
+                const rounder = 10n ** BigInt(poolResDigits - feeDecimals);
+                return (fee / rounder) * rounder + (fee % rounder > 0n ? rounder : 0n);
+            }
+        }
+
+        return fee;
+    }
+
     // -------------=========< Transaction configuration >=========----------------
     // | Fees and limits, min tx amount (which are not depend on zkAccount)       |
     // ----------------------------------------------------------------------------
 
-    // Relayer fee components used to calculate concrete tx cost
+    // Relayer raw fee components used to calculate concrete tx cost
     // To estimate typycal fee for transaction with desired type please use atomicTxFee
     public async getRelayerFee(): Promise<RelayerFee> {
         let cachedFee = this.relayerFee[this.curPool];
@@ -327,7 +343,7 @@ export class ZkBobProvider {
         const relayerFee = await this.getRelayerFee();
         const calldataBytesCnt = estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0);
 
-        return relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
+        return this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt));
     }
 
     public async directDepositFee(): Promise<bigint> {

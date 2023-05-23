@@ -25,6 +25,7 @@ export interface Pool {
   relayerUrls: string[];
   delegatedProverUrls: string[];
   coldStorageConfigPath?: string;
+  feeDecimals: number | undefined;
 }
 
 export enum ProverMode {
