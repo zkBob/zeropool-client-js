@@ -2744,15 +2744,15 @@ levn@^0.3.0, levn@~0.3.0:
     prelude-ls "~1.1.2"
     type-check "~0.3.2"
 
-libzkbob-rs-wasm-web-mt@1.3.0:
-  version "1.3.0"
-  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web-mt/-/libzkbob-rs-wasm-web-mt-1.3.0.tgz#b8fae3509b49fb4031f4c4ea1ecbfa58743ac36b"
-  integrity sha512-R0iq3hdJ5pLcO8jBIIE6ln9E0ewyXgYZemYXnq3g97uo8Ie/xRSQmgZXxGhF7KhBVeWdMjd66sNMxbS9l6Vihg==
+libzkbob-rs-wasm-web-mt@1.4.0:
+  version "1.4.0"
+  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web-mt/-/libzkbob-rs-wasm-web-mt-1.4.0.tgz#7720239b38c7cf99aaa03c9deefba028bbf46062"
+  integrity sha512-8h1kNd6dpprAKzcUliNYpncqYlvvzTl01/6Q52B3G63JuaDVmkCH3UMf5BZEFRqOu12BgztfatI0b1dGNSZg4g==
 
-libzkbob-rs-wasm-web@1.3.0:
-  version "1.3.0"
-  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web/-/libzkbob-rs-wasm-web-1.3.0.tgz#a9be0b5f53f853093805324fb027eeff52db2fa5"
-  integrity sha512-vt88pW2viTHkbXFeS0Bgi621X7ccFArjd+bZDdBHKCDjKmsXkr2ZQ2neoKn4KX0jqQVvUiETmsbI4CBcP4St4w==
+libzkbob-rs-wasm-web@1.4.0:
+  version "1.4.0"
+  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web/-/libzkbob-rs-wasm-web-1.4.0.tgz#a545cfc67e03717396f5c6d852f53681e1648fde"
+  integrity sha512-Kl5ieK8gdjt5T0l2PC9H/IEhv79+FyWCbZqL/dTmqzDkTzPDZT/X6j0zMIDxsqhniQnh4iduFxc6iPSy2xtbmg==
 
 loader-runner@^4.2.0:
   version "4.3.0"
