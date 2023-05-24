@@ -10,7 +10,7 @@ import { EphemeralAddress } from './ephemeral';
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
 import { 
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
-  TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
+  TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
 import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
@@ -796,7 +796,7 @@ export class ZkBobClient extends ZkBobProvider {
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // relayerFee - fee from the relayer (request one if undefined)
   // Returns jobId from the relayer or throw an Error
-  public async withdrawMulti(address: string, amountGwei: bigint, relayerFee?: RelayerFee): Promise<string[]> {
+  public async withdrawMulti(address: string, amountGwei: bigint, swapAmount: bigint, relayerFee?: RelayerFee): Promise<string[]> {
     const relayer = this.relayer();
     const state = this.zpState();
 
@@ -809,6 +809,11 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxInvalidArgumentError('Please provide a valid non-zero address');
     }
     const addressBin = ethAddrToBuf(address);
+
+    const supportedSwapAmount = await this.maxSupportedTokenSwap();
+    if (swapAmount > supportedSwapAmount) {
+      throw new TxSwapTooHighError(swapAmount, supportedSwapAmount);
+    }
 
     const minTx = await this.minTxAmount();
     if (amountGwei < minTx) {
@@ -848,7 +853,7 @@ export class ZkBobClient extends ZkBobProvider {
           amount: onePart.outNotes[0].amountGwei.toString(),
           fee: onePart.fee.toString(),
           to: addressBin,
-          native_amount: '0',
+          native_amount: swapAmount.toString(),
           energy_amount: '0',
         };
         oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
