@@ -346,7 +346,7 @@ export class ZkBobProvider {
                 cachedAmount = {amount, timestamp: Date.now()};
                 this.maxSwapAmount[this.curPool] = cachedAmount;
             } catch (err) {
-                const res = this.maxSwapAmount[this.curPool]?.amount ?? 0;
+                const res = this.maxSwapAmount[this.curPool]?.amount ?? 0n;
                 console.warn(`Cannot fetch max available swap amount, will using default (${res}): ${err}`);
 
                 return res;
