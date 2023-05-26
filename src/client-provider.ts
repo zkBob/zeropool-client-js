@@ -327,7 +327,7 @@ export class ZkBobProvider {
     // ----------------------------------------------------------------------------
 
     // Relayer raw fee components used to calculate concrete tx cost
-    // To estimate typycal fee for transaction with desired type please use atomicTxFee
+    // To estimate typical fee for transaction with desired type please use atomicTxFee
     public async getRelayerFee(): Promise<RelayerFee> {
         let cachedFee = this.relayerFee[this.curPool];
         if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
