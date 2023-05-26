@@ -310,8 +310,7 @@ export class ZkBobProvider {
     protected async roundFee(fee: bigint): Promise<bigint> {
         const feeDecimals = this.pool().feeDecimals;
         if (feeDecimals !== undefined) {
-            const denom = (await this.denominator()).toString();
-            const denomLog = denom.length + Math.log10(Number('0.' + denom.substring(0, 15)));
+            const denomLog = (await this.denominator()).toString().length - 1;
             const poolResDigits = 18 - denomLog;
             if (poolResDigits > feeDecimals) {
                 const rounder = 10n ** BigInt(poolResDigits - feeDecimals);
