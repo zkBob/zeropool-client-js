@@ -3,7 +3,7 @@ import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature, bufToHex
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
-import { TxType, estimateCalldataLength, txTypeToString } from './tx';
+import { CALLDATA_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
@@ -46,6 +46,7 @@ export interface MultinoteTransferRequest {
 export interface TransferConfig {
   inNotesBalance: bigint;
   outNotes: TransferRequest[];  // tx notes (without fee)
+  calldataLength: number; // used to estimate fee
   fee: bigint;  // absolute transaction fee (pool resolution)
   accountLimit: bigint;  // minimum account remainder after transaction
                          // (for future use, e.g. complex multi-tx transfers, default: 0)
@@ -570,7 +571,8 @@ export class ZkBobClient extends ZkBobProvider {
     await this.updateState();
 
     const usedFee = relayerFee ?? await this.getRelayerFee();
-    const feeGwei = (await this.feeEstimateInternal([amountGwei], TxType.BridgeDeposit, usedFee, false, true)).total;
+    const estimatedFee = await this.feeEstimateInternal([amountGwei], TxType.BridgeDeposit, usedFee, false, true);
+    const feeGwei = estimatedFee.total;
 
     const deadline = Math.floor(Date.now() / 1000) + PERMIT_DEADLINE_INTERVAL;
     const holder = ethAddrToBuf(fromAddress);
@@ -625,6 +627,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     const tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
+    this.assertCalldataLength(tx, estimatedFee.calldataTotalLength);
     const jobId = await relayer.sendTransactions([tx]);
     this.startJobMonitoring(jobId);
 
@@ -753,6 +756,7 @@ export class ZkBobClient extends ZkBobProvider {
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Transfer};
+      this.assertCalldataLength(transaction, onePart.calldataLength);
 
       const jobId = await relayer.sendTransactions([transaction]);
       this.startJobMonitoring(jobId);
@@ -868,6 +872,7 @@ export class ZkBobClient extends ZkBobProvider {
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType};
+      this.assertCalldataLength(transaction, onePart.calldataLength);
 
       const jobId = await relayer.sendTransactions([transaction]);
       this.startJobMonitoring(jobId);
@@ -930,6 +935,7 @@ export class ZkBobClient extends ZkBobProvider {
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
     const transaction = {memo: txData.memo, proof: txProof, txType: TxType.Transfer};
+    this.assertCalldataLength(transaction, estimateCalldataLength(TxType.Transfer, 1));
 
     const relayer = this.relayer();
     const jobId = await relayer.sendTransactions([transaction]);
@@ -971,7 +977,8 @@ export class ZkBobClient extends ZkBobProvider {
     await this.updateState();
 
     const usedFee = relayerFee ?? await this.getRelayerFee();
-    const feeGwei = (await this.feeEstimateInternal([amountGwei], TxType.Deposit, usedFee, false, true)).total;
+    const estimatedFee = await this.feeEstimateInternal([amountGwei], TxType.Deposit, usedFee, false, true);
+    const feeGwei = estimatedFee.total;
 
     const txData = await state.createDeposit({
       amount: (amountGwei + feeGwei).toString(),
@@ -1020,6 +1027,7 @@ export class ZkBobClient extends ZkBobProvider {
 
 
     const tx = { txType: TxType.Deposit, memo: txData.memo, proof: txProof, depositSignature: fullSignature };
+    this.assertCalldataLength(tx, estimatedFee.calldataTotalLength);
     const jobId = await relayer.sendTransactions([tx]);
     this.startJobMonitoring(jobId);
 
@@ -1029,6 +1037,17 @@ export class ZkBobClient extends ZkBobProvider {
     state.history?.keepQueuedTransactions([rec], jobId);
 
     return jobId;
+  }
+
+  private assertCalldataLength(txToRelayer: any, estimatedLen: number) {
+    let factLen = CALLDATA_BASE_LENGTH + txToRelayer.memo.length / 2;
+    if (txToRelayer.depositSignature) {
+      factLen += txToRelayer.depositSignature.length / 2;
+    }
+
+    if (factLen != estimatedLen) {
+      throw new InternalError(`Calldata length estimation error: est ${estimatedLen}, actual ${factLen} bytes`);
+    }
   }
 
   // ------------------=========< Transaction configuration >=========-------------------
@@ -1185,8 +1204,8 @@ export class ZkBobClient extends ZkBobProvider {
         break;
       }
 
-      const calldataBytesCnt = estimateCalldataLength(TxType.Transfer, 0);
-      const fee = await this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt));
+      const calldataLength = estimateCalldataLength(TxType.Transfer, 0);
+      const fee = await this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataLength));
 
       const inNotesBalance = groupedNotesBalances[i];
       if (accountBalance + inNotesBalance < fee) {
@@ -1198,6 +1217,7 @@ export class ZkBobClient extends ZkBobProvider {
       aggregationParts.push({
         inNotesBalance,
         outNotes: [],
+        calldataLength,
         fee,
         accountLimit: BigInt(0)
       });
@@ -1224,8 +1244,8 @@ export class ZkBobClient extends ZkBobProvider {
       const inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
 
       const numOfNotes = (txType == TxType.Transfer) ? transfers[i].requests.length : 0;
-      const calldataBytesCnt = estimateCalldataLength(txType, numOfNotes);
-      const fee = await this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt));
+      const calldataLength = estimateCalldataLength(txType, numOfNotes);
+      const fee = await this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataLength));
 
       if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
         // We haven't enough funds to perform such tx
@@ -1234,7 +1254,8 @@ export class ZkBobClient extends ZkBobProvider {
 
       parts.push({
         inNotesBalance,
-        outNotes: transfers[i].requests, 
+        outNotes: transfers[i].requests,
+        calldataLength,
         fee, 
         accountLimit: BigInt(0)
       });
