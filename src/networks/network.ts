@@ -3,6 +3,7 @@ export interface NetworkBackend {
     setEnabled(enabled: boolean);
     getChainId(): Promise<number>;
     getTokenName(tokenAddress: string): Promise<string>;
+    getTokenDecimals(tokenAddress: string): Promise<number>;
     getTokenNonce(tokenAddress: string, address: string): Promise<number>;
     getTokenBalance(tokenAddress: string, address: string): Promise<bigint>;
     getDenominator(contractAddress: string): Promise<bigint>;
