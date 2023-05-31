@@ -266,7 +266,7 @@ export class ZkBobRelayer implements IZkBobService {
   // in a single withdrawal transaction (aka native_amount)
   public async maxSupportedSwapAmount(): Promise<bigint> {
     const url = new URL('/maxNativeAmount', this.url());
-    const headers = defaultHeaders();
+    const headers = defaultHeaders(this.supportId);
     const res = await fetchJson(url.toString(), {headers}, this.type());
 
     if (typeof res !== 'object' || res === null ||
