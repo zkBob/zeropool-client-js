@@ -73,10 +73,11 @@ export async function fetchJson(url: string, headers: RequestInit, service: Serv
         throw new ServiceError(service, response.status, responseBody);
       }
 
-      // process 'errors' json response
-      if (Array.isArray(responseBody.errors)) {
-        const errorsText = responseBody.errors.map((oneError) => {
-          return `[${oneError.path}]: ${oneError.message}`;
+      // process multiple errors json response
+      if (Array.isArray(responseBody.errors) || Array.isArray(responseBody)) {
+        const errArr = Array.isArray(responseBody.errors) ? responseBody.errors : responseBody;
+        const errorsText = errArr.map((oneError) => {
+          return `${oneError.path ? `[${oneError.path}]: ` : ''}${oneError.message}`;
         }).join(', ');
 
         throw new ServiceError(service, response.status, errorsText);
