@@ -335,7 +335,7 @@ export class ZkBobProvider {
             const poolResDigits = (await this.decimals()) - denomLog;
             if (poolResDigits > feeDecimals) {
                 const rounder = 10n ** BigInt(poolResDigits - feeDecimals);
-                return (fee / rounder) * rounder + (fee % rounder > 0n ? rounder : 0n);
+                return fee % rounder > 0n ? fee + rounder - fee % rounder : fee;
             }
         }
 
