@@ -5,16 +5,16 @@ import { NetworkType } from "./network-type";
 import { NetworkBackend } from "./networks/network";
 import { ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/prover";
-import { LimitsFetch, ZkBobRelayer } from "./services/relayer";
+import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
+import { estimateCalldataLength, TxType } from "./tx";
 
 const bs58 = require('bs58')
 
 const LIB_VERSION = require('../package.json').version;
 
-const DEFAULT_DENOMINATOR = BigInt(1000000000);
-const RELAYER_FEE_LIFETIME = 3600;  // when to refetch the relayer fee (in seconds)
+const RELAYER_FEE_LIFETIME = 30;  // when to refetch the relayer fee (in seconds)
 const NATIVE_AMOUNT_LIFETIME = 3600;  // when to refetch the max supported swap amount (in seconds)
 const DEFAULT_RELAYER_FEE = BigInt(100000000);
 const MIN_TX_AMOUNT = BigInt(50000000);
@@ -22,7 +22,7 @@ const GIFT_CARD_CODE_VER = 1;
 
 // relayer fee + fetching timestamp
 interface RelayerFeeFetch {
-    fee: bigint;
+    fee: RelayerFee;
     timestamp: number;  // when the fee was fetched
 }
 
@@ -77,16 +77,17 @@ export class GiftCardProperties {
 // within the specified configuration and selected pool
 // without attaching the user account
 export class ZkBobProvider {
-    private chains:         { [chainId: string]: ChainConfig } = {};
-    private pools:          { [name: string]: Pool } = {};
-    private relayers:       { [name: string]: ZkBobRelayer } = {};
-    private provers:        { [name: string]: ZkBobDelegatedProver } = {};
-    private proverModes:    { [name: string]: ProverMode } = {};
-    private denominators:   { [name: string]: bigint } = {};
-    private poolIds:        { [name: string]: number } = {};
-    private relayerFee:     { [name: string]: RelayerFeeFetch } = {};
-    private maxSwapAmount:  { [name: string]: MaxSwapAmountFetch } = {};
-    private coldStorageCfg: { [name: string]: ColdStorageConfig } = {};
+    private chains:           { [chainId: string]: ChainConfig } = {};
+    private pools:            { [name: string]: Pool } = {};
+    private relayers:         { [name: string]: ZkBobRelayer } = {};
+    private provers:          { [name: string]: ZkBobDelegatedProver } = {};
+    private proverModes:      { [name: string]: ProverMode } = {};
+    private poolDenominators: { [name: string]: bigint } = {};
+    private tokenDecimals:    { [name: string]: number } = {};
+    private poolIds:          { [name: string]: number } = {};
+    private relayerFee:       { [name: string]: RelayerFeeFetch } = {};
+    private maxSwapAmount:    { [name: string]: MaxSwapAmountFetch } = {};
+    private coldStorageCfg:   { [name: string]: ColdStorageConfig } = {};
     protected supportId: string | undefined;
 
     // The current pool alias should always be set
@@ -222,23 +223,44 @@ export class ZkBobProvider {
         return this.provers[this.curPool];
     }
 
-    // Pool contract using default denominator 10^9
-    // i.e. values less than 1 Gwei are supposed equals zero
-    // But this is deployable parameter so this method needed to retrieve it
+    // Pool contract using denominator to calculate
+    // absolute token amount (by multiplying)
+    // E.g. for denomiator 10^9 values less than 1 Gwei
+    // are supposed equals zero
+    // This is a pool contract deployable parameter so this method needed to retrieve it
     protected async denominator(): Promise<bigint> {
-        let denominator = this.denominators[this.curPool];
+        let denominator = this.poolDenominators[this.curPool];
         if (!denominator) {
             try {
                 const pool = this.pool();
                 denominator = await this.network().getDenominator(pool.poolAddress);
-                this.denominators[this.curPool] = denominator;
+                this.poolDenominators[this.curPool] = denominator;
             } catch (err) {
-                console.error(`Cannot fetch denominator value from the relayer, will using default 10^9: ${err}`);
-                denominator = DEFAULT_DENOMINATOR;
+                console.error(`Cannot fetch denominator value from the pool contract: ${err}`);
+                throw new InternalError(`Unable to retrieve pool denominator`);
             }
         }
 
         return denominator;
+    }
+
+    // Number of decimals used to get user representation of 1 token
+    // Most of tokens have decimals = 18, but it isn't a rule
+    // This is a token contract deployable parameter
+    protected async decimals(): Promise<number> {
+        let decimals = this.tokenDecimals[this.curPool];
+        if (!decimals) {
+            try {
+                const pool = this.pool();
+                decimals = await this.network().getTokenDecimals(pool.tokenAddress);
+                this.tokenDecimals[this.curPool] = decimals;
+            } catch (err) {
+                console.error(`Cannot fetch decimals value from the token contract: ${err}`);
+                throw new InternalError(`Unable to retrieve token decimals`);
+            }
+        }
+
+        return decimals;
     }
 
     // Each zkBob pool should have a unique identifier
@@ -305,30 +327,38 @@ export class ZkBobProvider {
         return amountWei / denominator;
     }
 
+    // Round up the fee if needed with fixed fee decimal places (after point)
+    protected async roundFee(fee: bigint): Promise<bigint> {
+        const feeDecimals = this.pool().feeDecimals;
+        if (feeDecimals !== undefined) {
+            const denomLog = (await this.denominator()).toString().length - 1;
+            const poolResDigits = (await this.decimals()) - denomLog;
+            if (poolResDigits > feeDecimals) {
+                const rounder = 10n ** BigInt(poolResDigits - feeDecimals);
+                return fee % rounder > 0n ? fee + rounder - fee % rounder : fee;
+            }
+        }
+
+        return fee;
+    }
+
     // -------------=========< Transaction configuration >=========----------------
     // | Fees and limits, min tx amount (which are not depend on zkAccount)       |
     // ----------------------------------------------------------------------------
 
-    // Min trensaction fee in Gwei (e.g. deposit or single transfer)
-    // To estimate fee in the common case please use feeEstimate instead
-    public async atomicTxFee(): Promise<bigint> {
-        const relayer = await this.getRelayerFee();
-        const l1 = BigInt(0);
-
-        return relayer + l1;
-    }
-
-    // Base relayer fee per tx. Do not use it directly, use atomicTxFee instead
-    protected async getRelayerFee(): Promise<bigint> {
+    // Relayer raw fee components used to calculate concrete tx cost
+    // To estimate typical fee for transaction with desired type please use atomicTxFee
+    public async getRelayerFee(): Promise<RelayerFee> {
         let cachedFee = this.relayerFee[this.curPool];
         if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
             try {
-                const fee = await this.relayer().fee()
+                const fee = await this.relayer().fee();
                 cachedFee = {fee, timestamp: Date.now()};
                 this.relayerFee[this.curPool] = cachedFee;
             } catch (err) {
-                const res = this.relayerFee[this.curPool]?.fee ?? DEFAULT_RELAYER_FEE;
-                console.error(`Cannot fetch relayer fee, will using default (${res}): ${err}`);
+				const res = this.relayerFee[this.curPool]?.fee ?? 
+                    {fee: DEFAULT_RELAYER_FEE, oneByteFee: 0n};
+                console.error(`Cannot fetch relayer fee, will using default (${res.fee} per tx, ${res.oneByteFee} per byte): ${err}`);
 
                 return res;
             }
@@ -337,6 +367,15 @@ export class ZkBobProvider {
         return cachedFee.fee;
     }
 
+    // Min transaction fee in pool resolution (for regular transaction without any payload overhead)
+    // To estimate fee for the concrete tx use account-based method (feeEstimate from client.ts)
+    public async atomicTxFee(txType: TxType): Promise<bigint> {
+        const relayerFee = await this.getRelayerFee();
+        const calldataBytesCnt = estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0);
+
+        return this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt));
+    }
+    
     // Max supported token swap during withdrawal, in token resolution (Gwei)
     public async maxSupportedTokenSwap(): Promise<bigint> {
         let cachedAmount = this.maxSwapAmount[this.curPool];

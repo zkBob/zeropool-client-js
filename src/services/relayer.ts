@@ -47,6 +47,11 @@ const isRelayerInfo = (obj: any): obj is RelayerInfo => {
     obj.hasOwnProperty('optimisticDeltaIndex') && typeof obj.optimisticDeltaIndex === 'number';
 }
 
+export interface RelayerFee {
+  fee: bigint;
+  oneByteFee: bigint;
+}
+
 interface Limit { // all values are in Gwei
   total: bigint;
   available: bigint;
@@ -211,11 +216,19 @@ export class ZkBobRelayer implements IZkBobService {
     throw new ServiceError(this.type(), 200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
   }
   
-  public async fee(): Promise<bigint> {
+  public async fee(): Promise<RelayerFee> {
     const url = new URL('/fee', this.url());
     const headers = defaultHeaders(this.supportId);
     const res = await fetchJson(url.toString(), {headers}, this.type());
-    return BigInt(res.fee);
+
+    if (typeof res !== 'object' || res === null || !res.hasOwnProperty('fee')) {
+      throw new ServiceError(this.type(), 200, 'Incorrect response for dynamic fees');
+    }
+
+    return {
+      fee: BigInt(res.fee),
+      oneByteFee: BigInt(res.oneByteFee ?? '0')
+    };
   }
   
   public async limits(address: string | undefined): Promise<LimitsFetch> {
@@ -256,7 +269,7 @@ export class ZkBobRelayer implements IZkBobService {
     if (typeof res !== 'object' || res === null ||
         !res.hasOwnProperty('hash') || typeof res.hash !== 'string')
     {
-      throw new ServiceError(this.type(), 200, 'Incorrect respons for tx params hash');
+      throw new ServiceError(this.type(), 200, 'Incorrect response for tx params hash');
     }
   
     return res.hash;

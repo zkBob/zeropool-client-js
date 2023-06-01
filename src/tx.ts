@@ -10,6 +10,14 @@ const MEMO_META_DEFAULT_SIZE: number = 8; // fee (u64)
 const MEMO_META_WITHDRAW_SIZE: number = 8 + 8 + 20; // fee (u64) + amount + address (u160)
 const MEMO_META_PERMITDEPOSIT_SIZE: number = 8 + 8 + 20; // fee (u64) + amount + address (u160)
 
+export const CALLDATA_BASE_LENGTH: number = 644;
+export const CALLDATA_MEMO_APPROVE_DEPOSIT_BASE_LENGTH: number = 210;
+export const CALLDATA_MEMO_DEPOSIT_BASE_LENGTH: number = 238;
+export const CALLDATA_MEMO_TRANSFER_BASE_LENGTH: number = 210;
+export const CALLDATA_MEMO_NOTE_LENGTH: number = 172;
+export const CALLDATA_MEMO_WITHDRAW_BASE_LENGTH: number = 238;
+export const CALLDATA_DEPOSIT_SIGNATURE_LENGTH: number = 64;
+
 export enum TxType {
   Deposit = '0000',
   Transfer = '0001',
@@ -24,6 +32,29 @@ export function txTypeToString(txType: TxType): string {
     case TxType.Withdraw: return 'withdraw';
     case TxType.BridgeDeposit: return 'bridge-deposit';
   }
+}
+
+export function estimateCalldataLength(txType: TxType, notesCnt: number, extraDataLen: number = 0): number {
+  let txSpecificLen = 0;
+  switch (txType) {
+    case TxType.Deposit:
+      txSpecificLen = CALLDATA_MEMO_APPROVE_DEPOSIT_BASE_LENGTH + CALLDATA_DEPOSIT_SIGNATURE_LENGTH;
+      break;
+
+    case TxType.BridgeDeposit:
+      txSpecificLen = CALLDATA_MEMO_DEPOSIT_BASE_LENGTH + CALLDATA_DEPOSIT_SIGNATURE_LENGTH;
+      break;
+
+    case TxType.Transfer:
+      txSpecificLen = CALLDATA_MEMO_TRANSFER_BASE_LENGTH;
+      break;
+
+    case TxType.Withdraw:
+      txSpecificLen = CALLDATA_MEMO_WITHDRAW_BASE_LENGTH;
+      break;
+  }
+
+  return CALLDATA_BASE_LENGTH + txSpecificLen + extraDataLen + notesCnt * CALLDATA_MEMO_NOTE_LENGTH;
 }
 
 /** The universal transaction data format used on most networks. */
