@@ -25,7 +25,7 @@ export interface Pool {
   relayerUrls: string[];
   delegatedProverUrls: string[];
   coldStorageConfigPath?: string;
-  feeDecimals: number | undefined;
+  feeDecimals?: number;
 }
 
 export enum ProverMode {
@@ -43,10 +43,10 @@ export interface ClientConfig {
   // (currenly we assume the parameters are the same for the all pools)
   snarkParams: SnarkConfigParams;
   // Support ID - unique random string to track user's activity for support purposes
-  supportId: string | undefined;
+  supportId?: string;
   // By default MT mode selects automatically depended on browser
   // This flag can override autoselection behaviour
-  forcedMultithreading: boolean | undefined;
+  forcedMultithreading?: boolean;
 }
 
 export interface AccountConfig {
@@ -58,7 +58,7 @@ export interface AccountConfig {
   // Account birthday for selected pool
   //  no transactions associated with the account should exist lower that index
   //  set -1 to use the latest index (ONLY for creating _NEW_ account)
-  birthindex: number | undefined;
+  birthindex?: number;
   // Current prover mode (local, delegated, delegated with fallback)
   proverMode: ProverMode;
 }
