@@ -1091,13 +1091,18 @@ export class ZkBobClient extends ZkBobProvider {
 
       const totalRequested = transfersGwei.reduce((acc, cur) => acc + cur, BigInt(0));
 
-      txCnt = parts.length > 0 ? parts.length : 1;  // if we haven't funds for atomic fee - suppose we can make one tx
-
-      for (let i = 0; i < parts.length; i++) {
-        const curTxType = i < parts.length - 1 ? TxType.Transfer : txType;
-        const curFee = roundFee ? (await this.roundFee(parts[i].fee)) : parts[i].fee;
-        total += curFee;
-        calldataTotalLength += estimateCalldataLength(curTxType, curTxType == TxType.Transfer ? parts[i].outNotes.length : 0);
+      if (parts.length > 0) {
+        txCnt = parts.length;
+        for (let i = 0; i < txCnt; i++) {
+          const curTxType = i < txCnt - 1 ? TxType.Transfer : txType;
+          const curFee = roundFee ? (await this.roundFee(parts[i].fee)) : parts[i].fee;
+          total += curFee;
+          calldataTotalLength += estimateCalldataLength(curTxType, curTxType == TxType.Transfer ? parts[i].outNotes.length : 0);
+        }
+      } else { // if we haven't funds for atomic fee - suppose we can make at least one tx
+        txCnt = 1;
+        total = await this.atomicTxFee(txType);
+        calldataTotalLength = estimateCalldataLength(txType, txType == TxType.Transfer ? transfersGwei.length : 0);
       }
 
       insufficientFunds = (totalSumm < totalRequested || totalSumm + total > totalBalance) ? true : false;
