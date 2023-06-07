@@ -281,7 +281,7 @@ export class ZkBobProvider {
     }
 
     // get the cold storage configuration for the specified pool
-    public async coldStorageConfig(): Promise<ColdStorageConfig | undefined> {
+    protected async coldStorageConfig(): Promise<ColdStorageConfig | undefined> {
         if (!this.coldStorageCfg[this.curPool]) {
             const pool = this.pool();
             if (pool.coldStorageConfigPath) {
@@ -302,7 +302,7 @@ export class ZkBobProvider {
     }
 
     // path to search cold storage bulk files for the specified pool
-    public coldStorageBaseURL(): string | undefined {
+    protected coldStorageBaseURL(): string | undefined {
         const pool = this.pool();
         if (pool.coldStorageConfigPath) {
             return pool.coldStorageConfigPath.substring(0, pool.coldStorageConfigPath.lastIndexOf('/'));
