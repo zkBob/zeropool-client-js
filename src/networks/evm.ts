@@ -87,6 +87,11 @@ export class EvmNetwork implements NetworkBackend {
         this.tokenContract().options.address = tokenAddress;
         return await this.tokenContract().methods.name().call();
     }
+
+    public async getTokenDecimals(tokenAddress: string): Promise<number> {
+        this.tokenContract().options.address = tokenAddress;
+        return Number(await this.tokenContract().methods.decimals().call());
+    }
     
     public async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
         this.tokenContract().options.address = tokenAddress;

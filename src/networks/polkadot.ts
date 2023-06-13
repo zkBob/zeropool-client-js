@@ -13,6 +13,11 @@ export class PolkadotNetwork implements NetworkBackend {
         return '';
     }
 
+    async getTokenDecimals(_tokenAddress: string): Promise<number> {
+        return 1;
+    }
+    
+
     async getTokenNonce(_tokenAddress: string, _address: string): Promise<number> {
         return 0;
     }

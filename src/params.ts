@@ -125,7 +125,7 @@ export class SnarkParams {
 
                     try {
                         console.time(`Creating Params object`);
-                        params = wasm.Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false);
+                        params = wasm.Params.fromBinaryExtended(new Uint8Array(txParamsData!), false, false, false);
                     } finally {
                         console.timeEnd(`Creating Params object`);
                     }

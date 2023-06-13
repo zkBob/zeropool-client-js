@@ -3,19 +3,19 @@ import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, addressFromSignature, bufToHex
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
-import { TxType } from './tx';
+import { CALLDATA_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
 import { 
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
-  TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount
+  TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
 import { isHexPrefixed } from '@ethereumjs/util';
 import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
 import { isAddress } from 'web3-utils';
-import { JobInfo } from './services/relayer';
+import { JobInfo, RelayerFee } from './services/relayer';
 import { TreeState, ZkBobProvider } from './client-provider';
 import { wrap } from 'comlink';
 
@@ -40,23 +40,24 @@ export interface MultinoteTransferRequest {
   requests: TransferRequest[];
 }
 
-// Old TxAmount interface
+// Configuration for the transfer/withdrawal transactions used in multi-tx scheme
 // Supporting for multi-note transfers
-// Descripbes a transfer transaction configuration
+// Describes single transaction configuration
 export interface TransferConfig {
   inNotesBalance: bigint;
   outNotes: TransferRequest[];  // tx notes (without fee)
-  fee: bigint;  // transaction fee, Gwei
+  calldataLength: number; // used to estimate fee
+  fee: bigint;  // absolute transaction fee (pool resolution)
   accountLimit: bigint;  // minimum account remainder after transaction
                          // (for future use, e.g. complex multi-tx transfers, default: 0)
 }
 
+// Used in the fee estimation methods
 export interface FeeAmount { // all values are in Gwei
-  total: bigint;    // total fee
-  totalPerTx: bigint; // multitransfer case (== total for regular tx)
+  total: bigint;    // total fee estimation (in pool resolution)
   txCnt: number;      // multitransfer case (== 1 for regular tx)
-  relayer: bigint;  // relayer fee component
-  l1: bigint;       // L1 fee component
+  calldataTotalLength: number; // started from selector, summ for all txs
+  relayerFee: RelayerFee;  // fee from relayer which was used during estimation
   insufficientFunds: boolean; // true when the local balance is insufficient for requested tx amount
 }
 
@@ -550,8 +551,8 @@ export class ZkBobClient extends ZkBobProvider {
   public async depositPermittable(
     amountGwei: bigint,
     signTypedData: (deadline: bigint, value: bigint, salt: string) => Promise<string>,
-    fromAddress: string | null = null,
-    feeGwei: bigint = BigInt(0),
+    fromAddress: string,
+    relayerFee?: RelayerFee,
   ): Promise<string> {
     const pool = this.pool();
     const relayer = this.relayer();
@@ -562,81 +563,80 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxSmallAmount(amountGwei, minTx);
     }
 
-    const limits = await this.getLimits((fromAddress !== null) ? fromAddress : undefined);
+    const limits = await this.getLimits(fromAddress);
     if (amountGwei > limits.deposit.total) {
       throw new TxLimitError(amountGwei, limits.deposit.total);
     }
 
     await this.updateState();
 
-    let txData;
-    if (fromAddress) {
-      const deadline = Math.floor(Date.now() / 1000) + PERMIT_DEADLINE_INTERVAL;
-      const holder = ethAddrToBuf(fromAddress);
-      txData = await state.createDepositPermittable({ 
-        amount: (amountGwei + feeGwei).toString(),
-        fee: feeGwei.toString(),
-        deadline: String(deadline),
-        holder
-      });
+    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const estimatedFee = await this.feeEstimateInternal([amountGwei], TxType.BridgeDeposit, usedFee, false, true);
+    const feeGwei = estimatedFee.total;
 
-      // permittable deposit signature should be calculated for the typed data
-      const value = await this.shieldedAmountToWei(amountGwei + feeGwei);
-      const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
-      let signature = truncateHexPrefix(await signTypedData(BigInt(deadline), value, salt));
-      if (this.network().isSignatureCompact()) {
-        signature = toCompactSignature(signature);
-      }
+    const deadline = Math.floor(Date.now() / 1000) + PERMIT_DEADLINE_INTERVAL;
+    const holder = ethAddrToBuf(fromAddress);
+    const txData = await state.createDepositPermittable({ 
+      amount: (amountGwei + feeGwei).toString(),
+      fee: feeGwei.toString(),
+      deadline: String(deadline),
+      holder
+    });
 
-      // Checking signature correct (and corresponded with declared address)
-      const claimedAddr = `0x${bufToHex(holder)}`;
-      let recoveredAddr;
-      try {
-        const dataToSign: any = await this.createPermittableDepositData('1', claimedAddr, pool.poolAddress, value, BigInt(deadline), salt);
-        recoveredAddr = recoverTypedSignature({data: dataToSign, signature: `0x${signature}`, version: SignTypedDataVersion.V4});
-      } catch (err) {
-        throw new SignatureError(`Cannot recover address from the provided signature. Error: ${err.message}`);
-      }
-      if (recoveredAddr != claimedAddr) {
-        throw new SignatureError(`The address recovered from the permit signature ${recoveredAddr} doesn't match the declared one ${claimedAddr}`);
-      }
-
-      // We should check deadline here because the user could introduce great delay
-      if (Math.floor(Date.now() / 1000) > deadline - PERMIT_DEADLINE_THRESHOLD) {
-        throw new TxDepositDeadlineExpiredError(deadline);
-      }
-
-      const startProofDate = Date.now();
-      const txProof = await this.proveTx(txData.public, txData.secret);
-      const proofTime = (Date.now() - startProofDate) / 1000;
-      console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-
-      // Checking the depositor's token balance before sending tx
-      let balance: bigint;
-      try {
-        const balanceWei = await this.network().getTokenBalance(pool.tokenAddress, claimedAddr);
-        balance = await this.weiToShieldedAmount(balanceWei);
-      } catch (err) {
-        throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
-      }
-      if (balance < (amountGwei + feeGwei)) {
-        throw new TxInsufficientFundsError(amountGwei, balance);
-      }
-
-      const tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
-      const jobId = await relayer.sendTransactions([tx]);
-      this.startJobMonitoring(jobId);
-
-      // Temporary save transaction in the history module (to prevent history delays)
-      const ts = Math.floor(Date.now() / 1000);
-      const rec = await HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, '0', true);
-      state.history?.keepQueuedTransactions([rec], jobId);
-
-      return jobId;
-
-    } else {
-      throw new TxInvalidArgumentError('You must provide fromAddress for deposit transaction');
+    // permittable deposit signature should be calculated for the typed data
+    const value = await this.shieldedAmountToWei(amountGwei + feeGwei);
+    const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
+    let signature = truncateHexPrefix(await signTypedData(BigInt(deadline), value, salt));
+    if (this.network().isSignatureCompact()) {
+      signature = toCompactSignature(signature);
     }
+
+    // Checking signature correct (and corresponded with declared address)
+    const claimedAddr = `0x${bufToHex(holder)}`;
+    let recoveredAddr;
+    try {
+      const dataToSign: any = await this.createPermittableDepositData('1', claimedAddr, pool.poolAddress, value, BigInt(deadline), salt);
+      recoveredAddr = recoverTypedSignature({data: dataToSign, signature: `0x${signature}`, version: SignTypedDataVersion.V4});
+    } catch (err) {
+      throw new SignatureError(`Cannot recover address from the provided signature. Error: ${err.message}`);
+    }
+    if (recoveredAddr != claimedAddr) {
+      throw new SignatureError(`The address recovered from the permit signature ${recoveredAddr} doesn't match the declared one ${claimedAddr}`);
+    }
+
+    // We should check deadline here because the user could introduce great delay
+    if (Math.floor(Date.now() / 1000) > deadline - PERMIT_DEADLINE_THRESHOLD) {
+      throw new TxDepositDeadlineExpiredError(deadline);
+    }
+
+    const startProofDate = Date.now();
+    const txProof = await this.proveTx(txData.public, txData.secret);
+    const proofTime = (Date.now() - startProofDate) / 1000;
+    console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
+
+    // Checking the depositor's token balance before sending tx
+    let balance: bigint;
+    try {
+      const balanceWei = await this.network().getTokenBalance(pool.tokenAddress, claimedAddr);
+      balance = await this.weiToShieldedAmount(balanceWei);
+    } catch (err) {
+      throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
+    }
+    if (balance < (amountGwei + feeGwei)) {
+      throw new TxInsufficientFundsError(amountGwei, balance);
+    }
+
+    const tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
+    this.assertCalldataLength(tx, estimatedFee.calldataTotalLength);
+    const jobId = await relayer.sendTransactions([tx]);
+    this.startJobMonitoring(jobId);
+
+    // Temporary save transaction in the history module (to prevent history delays)
+    const ts = Math.floor(Date.now() / 1000);
+    const rec = await HistoryRecord.deposit(fromAddress, amountGwei, feeGwei, ts, '0', true);
+    state.history?.keepQueuedTransactions([rec], jobId);
+
+    return jobId;
   }
 
   private async createPermittableDepositData(
@@ -686,7 +686,7 @@ export class ZkBobClient extends ZkBobProvider {
   public async depositPermittableEphemeral(
     amountGwei: bigint,
     ephemeralIndex: number,
-    feeGwei: bigint = BigInt(0),
+    relayerFee?: RelayerFee,
   ): Promise<string> {
     const state = this.zpState();
     const fromAddress = await state.ephemeralPool().getEphemeralAddress(ephemeralIndex);
@@ -705,13 +705,13 @@ export class ZkBobClient extends ZkBobProvider {
       let ephemeralAddress = await state.ephemeralPool().getAddress(ephemeralIndex);
       const dataToSign = await this.createPermittableDepositData('1', ephemeralAddress, pool.poolAddress, value, deadline, salt);
       return await state.ephemeralPool().signTypedData(dataToSign, ephemeralIndex);
-    }, fromAddress.address, feeGwei);
+    }, fromAddress.address, relayerFee);
   }
 
   // Transfer shielded funds to the shielded address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // Returns jobIds from the relayer or throw an Error
-  public async transferMulti(transfers: TransferRequest[], feeGwei: bigint = BigInt(0)): Promise<string[]> {
+  public async transferMulti(transfers: TransferRequest[], relayerFee?: RelayerFee): Promise<string[]> {
     const state = this.zpState();
     const relayer = this.relayer();
 
@@ -726,13 +726,14 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }));
 
-    const txParts = await this.getTransactionParts(transfers, feeGwei);
+    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const txParts = await this.getTransactionParts(TxType.Transfer, transfers, usedFee);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(false);
+      const available = await this.calcMaxAvailableTransfer(TxType.Transfer, false);
       const amounts = transfers.map((aTx) => aTx.amountGwei);
       const totalAmount = amounts.reduce((acc, cur) => acc + cur, BigInt(0));
-      const feeEst = await this.feeEstimate(amounts, TxType.Transfer, false);
+      const feeEst = await this.feeEstimateInternal(amounts, TxType.Transfer, usedFee, false, true);
       throw new TxInsufficientFundsError(totalAmount + feeEst.total, available);
     }
 
@@ -755,6 +756,7 @@ export class ZkBobClient extends ZkBobProvider {
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Transfer};
+      this.assertCalldataLength(transaction, onePart.calldataLength);
 
       const jobId = await relayer.sendTransactions([transaction]);
       this.startJobMonitoring(jobId);
@@ -796,9 +798,9 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Withdraw shielded funds to the specified native chain address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
-  // feeGwei - fee per single transaction (request it with atomicTxFee method)
+  // relayerFee - fee from the relayer (request one if undefined)
   // Returns jobId from the relayer or throw an Error
-  public async withdrawMulti(address: string, amountGwei: bigint, feeGwei: bigint = BigInt(0)): Promise<string[]> {
+  public async withdrawMulti(address: string, amountGwei: bigint, swapAmount: bigint, relayerFee?: RelayerFee): Promise<string[]> {
     const relayer = this.relayer();
     const state = this.zpState();
 
@@ -812,6 +814,11 @@ export class ZkBobClient extends ZkBobProvider {
     }
     const addressBin = ethAddrToBuf(address);
 
+    const supportedSwapAmount = await this.maxSupportedTokenSwap();
+    if (swapAmount > supportedSwapAmount) {
+      throw new TxSwapTooHighError(swapAmount, supportedSwapAmount);
+    }
+
     const minTx = await this.minTxAmount();
     if (amountGwei < minTx) {
       throw new TxSmallAmount(amountGwei, minTx);
@@ -822,11 +829,12 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxLimitError(amountGwei, limits.withdraw.total);
     }
 
-    const txParts = await this.getTransactionParts([{amountGwei, destination: address}], feeGwei);
+    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const txParts = await this.getTransactionParts(TxType.Withdraw, [{amountGwei, destination: address}], usedFee);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(false);
-      const feeEst = await this.feeEstimate([amountGwei], TxType.Withdraw, false);
+      const available = await this.calcMaxAvailableTransfer(TxType.Withdraw, false);
+      const feeEst = await this.feeEstimateInternal([amountGwei], TxType.Withdraw, usedFee, false, true);
       throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
 
@@ -849,7 +857,7 @@ export class ZkBobClient extends ZkBobProvider {
           amount: onePart.outNotes[0].amountGwei.toString(),
           fee: onePart.fee.toString(),
           to: addressBin,
-          native_amount: '0',
+          native_amount: swapAmount.toString(),
           energy_amount: '0',
         };
         oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
@@ -864,6 +872,7 @@ export class ZkBobClient extends ZkBobProvider {
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
       const transaction = {memo: oneTxData.memo, proof: txProof, txType};
+      this.assertCalldataLength(transaction, onePart.calldataLength);
 
       const jobId = await relayer.sendTransactions([transaction]);
       this.startJobMonitoring(jobId);
@@ -905,7 +914,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     const accId = accountId(giftCardAcc);
     const giftCardBalance = await this.giftCardBalance(giftCardAcc);
-    const fee = await this.atomicTxFee();
+    const fee = await this.atomicTxFee(TxType.Transfer);
     const minTxAmount = await this.minTxAmount();
     if (giftCardBalance - fee < minTxAmount) {
       throw new TxInsufficientFundsError(minTxAmount + fee, giftCardBalance)
@@ -926,6 +935,7 @@ export class ZkBobClient extends ZkBobProvider {
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
     const transaction = {memo: txData.memo, proof: txProof, txType: TxType.Transfer};
+    this.assertCalldataLength(transaction, estimateCalldataLength(TxType.Transfer, 1));
 
     const relayer = this.relayer();
     const jobId = await relayer.sendTransactions([transaction]);
@@ -943,7 +953,7 @@ export class ZkBobClient extends ZkBobProvider {
     return jobId;
   }
 
-  // DEPRECATED. Please use depositPermittableV2 method instead
+  // DEPRECATED. Please use depositPermittable method instead
   // Deposit throught approval allowance
   // User should approve allowance for contract address at least 
   // (amountGwei + feeGwei) tokens before calling this method
@@ -953,7 +963,7 @@ export class ZkBobClient extends ZkBobProvider {
     sign: (data: string) => Promise<string>,
     fromAddress: string | null = null,  // this field is only for substrate-based network,
                                         // it should be null for EVM
-    feeGwei: bigint = BigInt(0),
+    relayerFee?: RelayerFee,
   ): Promise<string> {
     const pool = this.pool();
     const state = this.zpState();
@@ -965,6 +975,10 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     await this.updateState();
+
+    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const estimatedFee = await this.feeEstimateInternal([amountGwei], TxType.Deposit, usedFee, false, true);
+    const feeGwei = estimatedFee.total;
 
     const txData = await state.createDeposit({
       amount: (amountGwei + feeGwei).toString(),
@@ -1013,6 +1027,7 @@ export class ZkBobClient extends ZkBobProvider {
 
 
     const tx = { txType: TxType.Deposit, memo: txData.memo, proof: txProof, depositSignature: fullSignature };
+    this.assertCalldataLength(tx, estimatedFee.calldataTotalLength);
     const jobId = await relayer.sendTransactions([tx]);
     this.startJobMonitoring(jobId);
 
@@ -1024,6 +1039,17 @@ export class ZkBobClient extends ZkBobProvider {
     return jobId;
   }
 
+  private assertCalldataLength(txToRelayer: any, estimatedLen: number) {
+    let factLen = CALLDATA_BASE_LENGTH + txToRelayer.memo.length / 2;
+    if (txToRelayer.depositSignature) {
+      factLen += txToRelayer.depositSignature.length / 2;
+    }
+
+    if (factLen != estimatedLen) {
+      throw new InternalError(`Calldata length estimation error: est ${estimatedLen}, actual ${factLen} bytes`);
+    }
+  }
+
   // ------------------=========< Transaction configuration >=========-------------------
   // | These methods includes fee estimation, multitransfer estimation and other inform |
   // | functions.                                                                       |
@@ -1032,56 +1058,90 @@ export class ZkBobClient extends ZkBobProvider {
   // Fee can depends on tx amount for multitransfer transactions,
   // that's why you should specify it here for general case
   // This method also supposed that in some cases fee can depends on tx amount in future
-  // Currently any deposit isn't depends of amount (txCnt is always 1)
+  // Currently any deposit isn't depends of amount (txCnt is always 1 and transfersGwei ignored)
   // There are two extra states in case of insufficient funds for requested token amount:
   //  1. txCnt contains number of transactions for maximum available transfer
   //  2. txCnt can't be less than 1 (e.g. when balance is less than atomic fee)
   public async feeEstimate(transfersGwei: bigint[], txType: TxType, updateState: boolean = true): Promise<FeeAmount> {
-    const relayer = await this.getRelayerFee();
-    const l1 = BigInt(0);
+    const relayerFee = await this.getRelayerFee();
+    return this.feeEstimateInternal(transfersGwei, txType, relayerFee, updateState, true);
+  }
+
+  private async feeEstimateInternal(
+    transfersGwei: bigint[],
+    txType: TxType,
+    relayerFee: RelayerFee,
+    updateState: boolean,
+    roundFee: boolean
+  ): Promise<FeeAmount> {
     let txCnt = 1;
-    const totalPerTx = relayer + l1;
-    let total = totalPerTx;
+    let total = 0n;
+    let calldataTotalLength = 0;
     let insufficientFunds = false;
 
     if (txType === TxType.Transfer || txType === TxType.Withdraw) {
       // we set allowPartial flag here to get parts anywhere
       const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: NULL_ADDRESS} });  // destination address is ignored for estimation purposes
-      const parts = await this.getTransactionParts(requests, totalPerTx, updateState, true);
+      const parts = await this.getTransactionParts(txType, requests, relayerFee, updateState, true);
       const totalBalance = await this.getTotalBalance(false);
 
       const totalSumm = parts
         .map((p) => p.outNotes.reduce((acc, cur) => acc + cur.amountGwei, BigInt(0)))
-        .reduce((acc, cur) => acc + cur, BigInt(0));
+        .reduce((acc, cur) => acc + cur, 0n);
 
       const totalRequested = transfersGwei.reduce((acc, cur) => acc + cur, BigInt(0));
 
-      txCnt = parts.length > 0 ? parts.length : 1;  // if we haven't funds for atomic fee - suppose we can make one tx
-      total = totalPerTx * BigInt(txCnt);
+      if (parts.length > 0) {
+        txCnt = parts.length;
+        for (let i = 0; i < txCnt; i++) {
+          const curTxType = i < txCnt - 1 ? TxType.Transfer : txType;
+          const curFee = roundFee ? (await this.roundFee(parts[i].fee)) : parts[i].fee;
+          total += curFee;
+          calldataTotalLength += estimateCalldataLength(curTxType, curTxType == TxType.Transfer ? parts[i].outNotes.length : 0);
+        }
+      } else { // if we haven't funds for atomic fee - suppose we can make at least one tx
+        txCnt = 1;
+        total = await this.atomicTxFee(txType);
+        calldataTotalLength = estimateCalldataLength(txType, txType == TxType.Transfer ? transfersGwei.length : 0);
+      }
 
       insufficientFunds = (totalSumm < totalRequested || totalSumm + total > totalBalance) ? true : false;
     } else {
       // Deposit and BridgeDeposit cases are independent on the user balance
       // Fee got from the native coins, so any deposit can be make within single tx
+      calldataTotalLength = estimateCalldataLength(txType, 0);
+      total = relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataTotalLength);
+      total = roundFee ? await this.roundFee(total) : total;
     }
 
-    return {total, totalPerTx, txCnt, relayer, l1, insufficientFunds};
+    return {total, txCnt, calldataTotalLength, relayerFee, insufficientFunds};
   }
 
   // Account + notes balance excluding fee needed to transfer or withdraw it
   // TODO: need to optimize for edge cases (account limit calculating)
-  public async calcMaxAvailableTransfer(updateState: boolean = true): Promise<bigint> {
+  public async calcMaxAvailableTransfer(txType: TxType, updateState: boolean = true): Promise<bigint> {
+    if (txType != TxType.Transfer && txType != TxType.Withdraw) {
+      throw new InternalError(`Attempting to invoke \'calcMaxAvailableTransfer\' for ${txTypeToString(txType)} tx (only transfer\\withdraw are supported)`);
+    }
+
     const state = this.zpState();
     if (updateState) {
       await this.updateState();
     }
 
-    const txFee = await this.atomicTxFee();
+    const relayerFee = await this.getRelayerFee();
+    const aggregateTxLen = BigInt(estimateCalldataLength(TxType.Transfer, 0)); // aggregation txs are always transfers
+    const finalTxLen = BigInt(estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0));
+    const aggregateTxFee = await this.roundFee(relayerFee.fee + aggregateTxLen * relayerFee.oneByteFee);
+    const finalTxFee = await this.roundFee(relayerFee.fee + finalTxLen * relayerFee.oneByteFee);
+
     const groupedNotesBalances = await this.getGroupedNotes();
     let accountBalance = await state.accountBalance();
 
-    let maxAmount = accountBalance > txFee ? accountBalance - txFee : BigInt(0);
-    for (const inNotesBalance of groupedNotesBalances) {
+    let maxAmount = accountBalance > aggregateTxFee ? accountBalance - aggregateTxFee : 0n;
+    for (var i = 0; i < groupedNotesBalances.length; i++) { 
+      const inNotesBalance = groupedNotesBalances[i];
+      const txFee = (i == groupedNotesBalances.length - 1) ? finalTxFee : aggregateTxFee;
       if (accountBalance + inNotesBalance < txFee) {
         break;
       }
@@ -1091,6 +1151,7 @@ export class ZkBobClient extends ZkBobProvider {
         maxAmount = accountBalance;
       }
     }
+
     return maxAmount;
   }
 
@@ -1100,11 +1161,16 @@ export class ZkBobClient extends ZkBobProvider {
   // (otherwise the void array will be returned in case of insufficient funds)
   // This method ALLOWS creating transaction parts less than MIN_TX_AMOUNT (check it before tx creating)
   public async getTransactionParts(
+    txType: TxType,
     transfers: TransferRequest[],
-    feeGwei: bigint,
+    relayerFee: RelayerFee,
     updateState: boolean = true,
     allowPartial: boolean = false,
   ): Promise<Array<TransferConfig>> {
+
+    if (txType != TxType.Transfer && txType != TxType.Withdraw) {
+      throw new InternalError(`Attempting to invoke \'getTransactionParts\' for ${txTypeToString(txType)} tx (only transfer\\withdraw are supported)`);
+    }
 
     const state = this.zpState();
     if (updateState) {
@@ -1132,7 +1198,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     let i = 0;
     do {
-      txParts = this.tryToPrepareTransfers(accountBalance, feeGwei, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
+      txParts = await this.tryToPrepareTransfers(txType, accountBalance, relayerFee, groupedNotesBalances.slice(i, i + aggregatedTransfers.length), aggregatedTransfers);
       if (txParts.length == aggregatedTransfers.length) {
         // We are able to perform all txs starting from this index
         return aggregationParts.concat(txParts);
@@ -1143,8 +1209,11 @@ export class ZkBobClient extends ZkBobProvider {
         break;
       }
 
+      const calldataLength = estimateCalldataLength(TxType.Transfer, 0);
+      const fee = await this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataLength));
+
       const inNotesBalance = groupedNotesBalances[i];
-      if (accountBalance + inNotesBalance < feeGwei) {
+      if (accountBalance + inNotesBalance < fee) {
         // We cannot collect amount to cover tx fee. There are 2 cases:
         // insufficient balance or unoperable notes configuration
         break;
@@ -1153,10 +1222,11 @@ export class ZkBobClient extends ZkBobProvider {
       aggregationParts.push({
         inNotesBalance,
         outNotes: [],
-        fee: feeGwei,
+        calldataLength,
+        fee,
         accountLimit: BigInt(0)
       });
-      accountBalance += BigInt(inNotesBalance) - BigInt(feeGwei);
+      accountBalance += BigInt(inNotesBalance) - fee;
       
       i++;
     } while (i < groupedNotesBalances.length)
@@ -1164,12 +1234,23 @@ export class ZkBobClient extends ZkBobProvider {
     return allowPartial ? aggregationParts.concat(txParts) : [];
   }
 
-  // try to prepare transfer configs
-  private tryToPrepareTransfers(balance: bigint, fee: bigint, groupedNotesBalances: Array<bigint>, transfers: MultinoteTransferRequest[]): Array<TransferConfig> {
+  // try to prepare transfer configs without extra aggregation transactions
+  // (using just account balance and notes collected in these txs)
+  private async tryToPrepareTransfers(
+    txType: TxType,
+    balance: bigint,
+    relayerFee: RelayerFee,
+    groupedNotesBalances: Array<bigint>,
+    transfers: MultinoteTransferRequest[]
+  ): Promise<Array<TransferConfig>> {
     let accountBalance = balance;
     let parts: Array<TransferConfig> = [];
     for (let i = 0; i < transfers.length; i++) {
       const inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
+
+      const numOfNotes = (txType == TxType.Transfer) ? transfers[i].requests.length : 0;
+      const calldataLength = estimateCalldataLength(txType, numOfNotes);
+      const fee = await this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataLength));
 
       if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
         // We haven't enough funds to perform such tx
@@ -1178,7 +1259,8 @@ export class ZkBobClient extends ZkBobProvider {
 
       parts.push({
         inNotesBalance,
-        outNotes: transfers[i].requests, 
+        outNotes: transfers[i].requests,
+        calldataLength,
         fee, 
         accountLimit: BigInt(0)
       });
