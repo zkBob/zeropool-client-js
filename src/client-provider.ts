@@ -400,7 +400,7 @@ export class ZkBobProvider {
     }
 
     public async minTxAmount(): Promise<bigint> {
-        return MIN_TX_AMOUNT;
+        return this.pool().minTxAmount ?? MIN_TX_AMOUNT;
     }
 
     // The deposit and withdraw amount is limited by few factors:

@@ -66,7 +66,30 @@ export const tokenABI: AbiItem[] = [
         payable: false,
         stateMutability: 'view',
         type: 'function'
-    }
+    }, {
+        inputs: [
+          {
+            internalType: 'address',
+            name: '',
+            type: 'address'
+          },
+          {
+            internalType: 'address',
+            name: '',
+            type: 'address'
+          }
+        ],
+        name: 'allowance',
+        outputs: [
+          {
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+          }
+        ],
+        stateMutability: 'view',
+        type: 'function'
+      }
 ];
 
 export const poolContractABI: AbiItem[] = [
@@ -200,3 +223,43 @@ export const ddContractABI: AbiItem[] = [
         type: 'function'
     }
 ];
+
+export const permit2ABI: AbiItem[] = [ {
+    inputs: [{ 
+        internalType: 'address',
+        name: '',
+        type: 'address'
+    }, {
+        internalType: 'uint256',
+        name: '',
+        type: 'uint256'
+    }],
+    name: 'nonceBitmap',
+    outputs: [{
+        internalType: 'uint256',
+        name: '',
+        type: 'uint256'
+    }],
+    stateMutability: 'view',
+    type: 'function'
+}];
+
+export const ERC3009ABI: AbiItem[] = [{
+    inputs: [{
+        internalType: 'address',
+        name: 'authorizer',
+        type: 'address'
+    }, {
+        internalType: 'bytes32',
+        name: 'nonce',
+        type: 'bytes32'
+    }],
+    name: 'authorizationState',
+    outputs: [{
+        internalType: 'uin256',
+        name: '',
+        type: 'uint256'
+    }],
+    stateMutability: 'view',
+    type: 'function'
+}];

@@ -1,5 +1,6 @@
 import { bufToHex } from "./utils";
 import { hash } from 'tweetnacl';
+import { DepositType } from "./signers/abstract-signer";
 
 export interface SnarkConfigParams {
   transferParamsUrl: string;
@@ -25,7 +26,9 @@ export interface Pool {
   relayerUrls: string[];
   delegatedProverUrls: string[];
   coldStorageConfigPath?: string;
+  minTxAmount?: bigint;
   feeDecimals?: number;
+  depositScheme: DepositType;
 }
 
 export enum ProverMode {

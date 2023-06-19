@@ -8,8 +8,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
 import { NetworkType } from './network-type';
-
-import { signTypedData, SignTypedDataVersion } from '@metamask/eth-sig-util'
+import { signTypedData, SignTypedDataVersion, TypedMessage } from '@metamask/eth-sig-util'
 
 const util = require('ethereumjs-util');
 
@@ -356,7 +355,11 @@ export class EphemeralPool {
         let promises = [
             this.getTokenBalance(existing.address),
             this.getNativeBalance(existing.address),
-            this.getPermitNonce(existing.address),
+            this.getPermitNonce(existing.address).catch(async () => {
+                // fallback for tokens without permit support (e.g. WETH)
+                const blockNumber = await this.web3.eth.getBlockNumber();
+                return this.getOutcomingTokenTxCount(existing.address, blockNumber);
+            }),
             this.web3.eth.getTransactionCount(existing.address),
         ];
         const [tokenBalance, nativeBalance, permitNonce, nativeNonce] = await Promise.all(promises);

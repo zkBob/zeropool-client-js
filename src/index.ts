@@ -15,5 +15,6 @@ export { TreeNode } from 'libzkbob-rs-wasm-web';
 export { EvmNetwork } from './networks/evm'
 export { deriveSpendingKeyZkBob } from './utils'
 export { IAddressComponents } from 'libzkbob-rs-wasm-web';
+export { DepositType } from './signers/abstract-signer'
 
 export * from './errors'
