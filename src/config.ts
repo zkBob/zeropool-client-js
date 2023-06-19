@@ -1,6 +1,5 @@
 import { bufToHex } from "./utils";
 import { hash } from 'tweetnacl';
-import { DepositType } from "./signers/abstract-signer";
 
 export interface SnarkConfigParams {
   transferParamsUrl: string;
@@ -18,6 +17,13 @@ export type Chains = {
 export type Pools = {
   [name: string]: Pool;
 };
+
+export enum DepositType {
+  Approve = 'approve',  // deprecated but still supported deposit scheme
+  SaltedPermit = 'permit',  // EIP-2612 (regular permit)
+  PermitV2 = 'permit2',   // Uniswap Permit2 scheme (used for WETH)
+  TransferWithAuth = 'auth',  // EIP-3009 (used for USDC pool)
+}
 
 export interface Pool {
   chainId: number,

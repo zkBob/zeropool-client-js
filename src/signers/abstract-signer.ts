@@ -4,12 +4,6 @@ import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
         personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
 import { addHexPrefix, hexToBuf } from "../utils";
 
-export enum DepositType {
-    Approve = 'approve',  // deprecated but still supported deposit scheme
-    SaltedPermit = 'permit',  // EIP-2612 (regular permit)
-    PermitV2 = 'permit2',   // Uniswap Permit2 scheme (used for WETH)
-    TransferWithAuth = 'auth',  // EIP-3009 (used for USDC pool)
-  }
 
 export interface DepositData {
     tokenAddress: string,
@@ -57,10 +51,9 @@ export abstract class DepositSigner {
             throw new TxDepositDeadlineExpiredError(Number(data.deadline));
         }
     }
-
-    public async signDeposit(privateKey: string, data: DepositData): Promise<string> {
+    
+    public async signRequest(privateKey: string, request: SignatureRequest): Promise<string> {
         if (privateKey) {
-            const request = await this.buildSignatureRequest(data);
             let keyBuf = Buffer.from(hexToBuf(privateKey));
             let signature;
             try {

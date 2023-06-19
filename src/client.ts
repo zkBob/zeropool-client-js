@@ -1,24 +1,27 @@
-import { Chains, Pools, SnarkConfigParams, ClientConfig, AccountConfig, accountId, ProverMode } from './config';
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
+import { Chains, Pools, SnarkConfigParams, ClientConfig,
+        AccountConfig, accountId, ProverMode, DepositType } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
-          toTwosComplementHex, addressFromSignature, bufToHex
+          toTwosComplementHex, bufToHex
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
 import { CALLDATA_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
 import { 
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
-import { isHexPrefixed } from '@ethereumjs/util';
-import { isAddress } from 'web3-utils';
 import { JobInfo, RelayerFee } from './services/relayer';
 import { TreeState, ZkBobProvider } from './client-provider';
-import { wrap } from 'comlink';
-import { DepositData, DepositType, SignatureRequest } from './signers/abstract-signer';
+import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
+
+import { isHexPrefixed } from '@ethereumjs/util';
+import { isAddress } from 'web3-utils';
+import { wrap } from 'comlink';
+import { PERMIT2_CONTRACT } from './signers/permit2-signer';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
@@ -679,6 +682,17 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxInsufficientFundsError(amountGwei + neededFee.total, fromAddress.tokenBalance);
     }
 
+    if (pool.depositScheme == DepositType.PermitV2 || pool.depositScheme == DepositType.Approve) {
+      const spender = pool.depositScheme == DepositType.PermitV2 ? PERMIT2_CONTRACT : pool.poolAddress;
+      const curAllowance = await state.ephemeralPool().allowance(ephemeralIndex, spender);
+      if (curAllowance < amountGwei + neededFee.total) {
+        console.log(`Approving tokens for contract ${spender}...`);
+        const maxTokensAmount = 2n ** 256n - 1n;
+        const txHash = await state.ephemeralPool().approve(ephemeralIndex, spender, maxTokensAmount);
+        console.log(`Tx hash for the approve transaction: ${txHash}`);
+      }
+    }
+
     return this.deposit(amountGwei, async (signingRequest) => {
       const pool = this.pool();
       const state = this.zpState();
@@ -686,7 +700,7 @@ export class ZkBobClient extends ZkBobProvider {
       const privKey = this.getEphemeralAddressPrivateKey(ephemeralIndex);
 
       const depositSigner = DepositSignerFactory.createSigner(this.network(), pool.depositScheme);
-      return depositSigner.signDeposit(privKey, signingRequest.data);
+      return depositSigner.signRequest(privKey, signingRequest);
     }, fromAddress.address, actualFee);
   }
 

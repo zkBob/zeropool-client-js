@@ -1,6 +1,6 @@
-import { InternalError } from "..";
+import { DepositType, InternalError } from "..";
 import { NetworkBackend } from "../networks/network";
-import { DepositSigner, DepositType } from "./abstract-signer";
+import { DepositSigner } from "./abstract-signer";
 import { ApproveSigner } from "./approve-signer";
 import { DepositPermitSigner } from "./permit-signer";
 import { DepositPermit2Signer } from "./permit2-signer";
