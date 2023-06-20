@@ -1,3 +1,4 @@
+import { HexStringWriter } from "../utils";
 import { TxDepositNonceAlreadyUsed } from "..";
 import { DepositData, DepositSigner, SignatureType } from "./abstract-signer";
 
@@ -8,8 +9,8 @@ export class TransferWithAuthSigner extends DepositSigner {
             EIP712Domain : [
                 { name: 'name', type: 'string' },
                 { name: 'version', type: 'string' },
-                { name: 'chainId', type: 'uint256' },
                 { name: 'verifyingContract', type: 'address' },
+                { name: 'salt', type: 'bytes32' },
             ],
             TransferWithAuthorization: [
                 { name: 'from', type: 'address' },
@@ -27,12 +28,15 @@ export class TransferWithAuthSigner extends DepositSigner {
     protected async buildDomain(data: DepositData): Promise<any> {
         const tokenName = await this.network.getTokenName(data.tokenAddress);
         const chainId = await this.network.getChainId();
+        
+        const wr = new HexStringWriter();
+        wr.writeNumber(chainId, 32);
 
         const domain = {
             name: tokenName,
             version: '1',
-            chainId: chainId,
             verifyingContract: data.tokenAddress,  
+            salt: wr.buf,
         };
         
         return domain;

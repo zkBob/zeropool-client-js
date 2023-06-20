@@ -143,7 +143,7 @@ export class EvmNetwork implements NetworkBackend {
 
     public async erc3009AuthState(tokenAddress: string, authorizer: string, nonce: bigint): Promise<bigint> {
         this.erc3009Contract().options.address = tokenAddress;
-        const result = await this.erc3009Contract().methods.authorizationState(authorizer, nonce).call();
+        const result = await this.erc3009Contract().methods.authorizationState(authorizer, `0x${nonce.toString(16)}`).call();
 
         return BigInt(result);
     }
