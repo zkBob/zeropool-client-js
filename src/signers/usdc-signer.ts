@@ -58,10 +58,8 @@ export class TransferWithAuthSigner extends DepositSigner {
     public async checkIsDataValid(data: DepositData): Promise<void> {
         await super.checkIsDataValid(data);
 
-        const wordPos = BigInt(data.nullifier) >> 8n;
-        const bitPos = BigInt(data.nullifier) & 0xFFn
         const pointer = await this.network.erc3009AuthState(data.tokenAddress, data.owner, BigInt(data.nullifier));
-        if (pointer & (1n << bitPos)) {
+        if (pointer != 0n) {
             throw new TxDepositNonceAlreadyUsed(data.nullifier, data.tokenAddress);
         }
     }
