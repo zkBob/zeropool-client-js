@@ -20,7 +20,7 @@ export type Pools = {
 
 export enum DepositType {
   Approve = 'approve',  // deprecated but still supported deposit scheme
-  SaltedPermit = 'permit',  // EIP-2612 (regular permit)
+  SaltedPermit = 'permit',  // based on EIP-2612 (salt was added to the signing message)
   PermitV2 = 'permit2',   // Uniswap Permit2 scheme (used for WETH)
   TransferWithAuth = 'auth',  // EIP-3009 (used for USDC pool)
 }

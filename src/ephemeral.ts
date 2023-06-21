@@ -8,7 +8,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
 import { NetworkType } from './network-type';
-import { ERC3009ABI, permit2ABI, tokenABI } from './networks/evm-abi';
+import { tokenABI } from './networks/evm-abi';
 
 const util = require('ethereumjs-util');
 
@@ -43,8 +43,6 @@ export class EphemeralPool {
     private hdwallet: HDKey;
     private web3: Web3;
     private token: Contract;
-    private permit2: Contract;
-    private erc3009: Contract;
     private rpcUrl: string;
     private poolDenominator: bigint; // we represent all amounts in that library as in pool (Gwei currently)
 
@@ -88,8 +86,6 @@ export class EphemeralPool {
         this.hdwallet = HDKey.fromMasterSeed(seed).derive(ephemeralWalletPath);
 
         this.token = new this.web3.eth.Contract(tokenABI, tokenAddress) as unknown as Contract;
-        this.permit2 = new this.web3.eth.Contract(permit2ABI) as unknown as Contract;
-        this.erc3009 = new this.web3.eth.Contract(ERC3009ABI) as unknown as Contract;
     }
   
     static async init(

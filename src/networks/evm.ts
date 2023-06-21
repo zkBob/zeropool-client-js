@@ -3,7 +3,7 @@ import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
 import { NetworkBackend } from './network';
 import { InternalError } from '..';
-import { ddContractABI, ERC3009ABI, permit2ABI, poolContractABI, tokenABI } from './evm-abi';
+import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 
 export class EvmNetwork implements NetworkBackend {
     rpcUrl: string;
@@ -13,8 +13,6 @@ export class EvmNetwork implements NetworkBackend {
     private pool?: Contract;
     private dd?: Contract;
     private token?: Contract;
-    private permit2?: Contract;
-    private erc3009?: Contract;
 
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
 
@@ -30,9 +28,7 @@ export class EvmNetwork implements NetworkBackend {
         return this.web3 !== undefined &&
                 this.pool !== undefined &&
                 this.dd !== undefined &&
-                this.token !== undefined &&
-                this.permit2 !== undefined &&
-                this.erc3009 !== undefined;
+                this.token !== undefined;
     }
 
     public setEnabled(enabled: boolean) {
@@ -42,16 +38,12 @@ export class EvmNetwork implements NetworkBackend {
                 this.pool = new this.web3.eth.Contract(poolContractABI) as unknown as Contract;
                 this.dd = new this.web3.eth.Contract(ddContractABI) as unknown as Contract;
                 this.token = new this.web3.eth.Contract(tokenABI) as unknown as Contract;
-                this.permit2 = new this.web3.eth.Contract(permit2ABI) as unknown as Contract;
-                this.erc3009 = new this.web3.eth.Contract(ERC3009ABI) as unknown as Contract;
             }
         } else {
             this.web3 = undefined;
             this.pool = undefined;
             this.dd = undefined;
             this.token = undefined;
-            this.permit2 = undefined;
-            this.erc3009 = undefined;
         }
     }
 
@@ -87,22 +79,6 @@ export class EvmNetwork implements NetworkBackend {
         return this.token;
     }
 
-    private permit2Contract(): Contract {
-        if (!this.permit2) {
-            throw new InternalError(`EvmNetwork: Permit2 contract object is undefined`);
-        }
-
-        return this.permit2;
-    }
-
-    private erc3009Contract(): Contract {
-        if (!this.erc3009) {
-            throw new InternalError(`EvmNetwork: ERC3009 contract object is undefined`);
-        }
-
-        return this.erc3009;
-    }
-
     public async getChainId(): Promise<number> {
         return await this.activeWeb3().eth.getChainId();
     }
@@ -135,15 +111,15 @@ export class EvmNetwork implements NetworkBackend {
     }
 
     public async permit2NonceBitmap(permit2Address: string, owner: string, wordPos: bigint): Promise<bigint> {
-        this.permit2Contract().options.address = permit2Address;
-        const result = await this.permit2Contract().methods.nonceBitmap(owner, wordPos).call();
+        this.tokenContract().options.address = permit2Address;
+        const result = await this.tokenContract().methods.nonceBitmap(owner, wordPos).call();
 
         return BigInt(result);
     }
 
     public async erc3009AuthState(tokenAddress: string, authorizer: string, nonce: bigint): Promise<bigint> {
-        this.erc3009Contract().options.address = tokenAddress;
-        const result = await this.erc3009Contract().methods.authorizationState(authorizer, `0x${nonce.toString(16)}`).call();
+        this.tokenContract().options.address = tokenAddress;
+        const result = await this.tokenContract().methods.authorizationState(authorizer, `0x${nonce.toString(16)}`).call();
 
         return BigInt(result);
     }
