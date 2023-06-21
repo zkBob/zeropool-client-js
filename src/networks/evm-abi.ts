@@ -143,7 +143,17 @@ export const tokenABI: AbiItem[] = [
         }],
         stateMutability: 'view',
         type: 'function'
-    }
+    }, {
+        inputs: [],
+        stateMutability: 'view',
+        type: 'function',
+        name: 'DOMAIN_SEPARATOR',
+        outputs: [{
+            internalType: 'bytes32',
+            name: '',
+            type: 'bytes32',
+        }],
+    },
 ];
 
 export const poolContractABI: AbiItem[] = [

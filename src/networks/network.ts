@@ -2,6 +2,7 @@ export interface NetworkBackend {
     isEnabled(): boolean;
     setEnabled(enabled: boolean);
     getChainId(): Promise<number>;
+    getDomainSeparator(tokenAddress: string): Promise<string>;
     getTokenName(tokenAddress: string): Promise<string>;
     getTokenDecimals(tokenAddress: string): Promise<number>;
     getTokenNonce(tokenAddress: string, address: string): Promise<number>;

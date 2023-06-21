@@ -1,5 +1,5 @@
 import { TxDepositAllowanceTooLow, TxDepositNonceAlreadyUsed } from "..";
-import { DepositData, DepositSigner, SignatureType } from "./abstract-signer";
+import { DepositData, DepositSigner, SignatureRequest, SignatureType } from "./abstract-signer";
 
 export const PERMIT2_CONTRACT = '0x000000000022D473030F116dDEE9F6B43aC78BA3';
 
@@ -69,7 +69,7 @@ export class DepositPermit2Signer extends DepositSigner {
         }
     }
 
-    public async buildSignatureRequest(data: DepositData): Promise<any> {
+    public async buildSignatureRequest(data: DepositData): Promise<SignatureRequest> {
         return {
             type: SignatureType.TypedDataV4,
             data: {
@@ -80,6 +80,4 @@ export class DepositPermit2Signer extends DepositSigner {
             }
         }
     }
-    
-
 }

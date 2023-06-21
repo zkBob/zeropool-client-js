@@ -1,8 +1,8 @@
 import { HexStringWriter } from "../utils";
 import { TxDepositNonceAlreadyUsed } from "..";
-import { DepositData, DepositSigner, SignatureType } from "./abstract-signer";
+import { DepositData, DepositSigner, SignatureRequest, SignatureType } from "./abstract-signer";
 
-export class TransferWithAuthSigner extends DepositSigner {
+export class PolygonUSDCSigner extends DepositSigner {
 
     protected async buildTypes(): Promise<any> {
         const types = {
@@ -64,7 +64,7 @@ export class TransferWithAuthSigner extends DepositSigner {
         }
     }
 
-    public async buildSignatureRequest(data: DepositData): Promise<any> {
+    public async buildSignatureRequest(data: DepositData): Promise<SignatureRequest> {
         return {
             type: SignatureType.TypedDataV4,
             data: {

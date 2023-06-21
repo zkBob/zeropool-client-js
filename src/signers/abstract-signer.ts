@@ -17,18 +17,27 @@ export interface DepositData {
 export enum SignatureType {
     PersonalSign, // signature for deposit-via approve
     TypedDataV4,  // permit deposit scheme
-  }
+}
   
-  export interface SignatureRequest {
+export interface SignatureRequest {
     type: SignatureType,
     data: any,  // an string for personal sign, object for typed signatures
-  }
+}
   
 
-//export type TypedMessage<Message extends Record<string, any>> = { name: keyof Message & string; type: string }[]
-
 export abstract class DepositSigner {
+    protected domainSeparators: { [tokenAddress: string]: string } = {};
     constructor(protected network: NetworkBackend) {}
+
+    protected async getDomainSeparator(tokenAddress: string): Promise<string> {
+        let separator = await this.domainSeparators[tokenAddress];
+        if (!separator) {
+            separator = await this.network.getDomainSeparator(tokenAddress);
+            this.domainSeparators[tokenAddress] = separator;
+        }
+
+        return separator;
+    }
 
     protected abstract buildTypes(): Promise<any>;
     protected abstract buildDomain(data: DepositData): Promise<any>;

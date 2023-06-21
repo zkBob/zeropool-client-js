@@ -1,5 +1,5 @@
 import { TxDepositAllowanceTooLow } from "..";
-import { DepositData, DepositSigner, SignatureType } from "./abstract-signer";
+import { DepositData, DepositSigner, SignatureRequest, SignatureType } from "./abstract-signer";
 
 export class ApproveSigner extends DepositSigner {
 
@@ -24,7 +24,7 @@ export class ApproveSigner extends DepositSigner {
         }
     }
 
-    public async buildSignatureRequest(data: DepositData): Promise<any> {
+    public async buildSignatureRequest(data: DepositData): Promise<SignatureRequest> {
         return {
             type: SignatureType.PersonalSign,
             data: await this.buildMessage(data),

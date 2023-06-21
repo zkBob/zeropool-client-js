@@ -1,4 +1,4 @@
-import { DepositData, DepositSigner, SignatureType } from "./abstract-signer";
+import { DepositData, DepositSigner, SignatureRequest, SignatureType } from "./abstract-signer";
 
 export class DepositPermitSigner extends DepositSigner {
 
@@ -52,7 +52,7 @@ export class DepositPermitSigner extends DepositSigner {
         return message;
     }
 
-    public async buildSignatureRequest(data: DepositData): Promise<any> {
+    public async buildSignatureRequest(data: DepositData): Promise<SignatureRequest> {
         return {
             type: SignatureType.TypedDataV4,
             data: {

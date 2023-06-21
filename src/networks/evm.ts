@@ -83,6 +83,11 @@ export class EvmNetwork implements NetworkBackend {
         return await this.activeWeb3().eth.getChainId();
     }
 
+    public async getDomainSeparator(tokenAddress: string): Promise<string> {
+        this.tokenContract().options.address = tokenAddress;
+        return await this.tokenContract().methods.DOMAIN_SEPARATOR().call();
+    }
+
     public async getTokenName(tokenAddress: string): Promise<string> {
         this.tokenContract().options.address = tokenAddress;
         return await this.tokenContract().methods.name().call();
