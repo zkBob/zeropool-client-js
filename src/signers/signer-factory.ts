@@ -4,7 +4,7 @@ import { DepositSigner } from "./abstract-signer";
 import { ApproveSigner } from "./approve-signer";
 import { DepositPermitSigner } from "./permit-signer";
 import { DepositPermit2Signer } from "./permit2-signer";
-import { PolygonUSDCSigner } from "./usdc-signer";
+import { USDCSigner, PolygonUSDCSigner } from "./usdc-signer";
 
 export class DepositSignerFactory {
     static createSigner(network: NetworkBackend, type: DepositType): DepositSigner {
@@ -17,6 +17,9 @@ export class DepositSignerFactory {
 
             case DepositType.PermitV2:
                 return new DepositPermit2Signer(network);
+
+            case DepositType.AuthUSDC:
+                return new USDCSigner(network);
 
             case DepositType.AuthPolygonUSDC:
                 return new PolygonUSDCSigner(network);

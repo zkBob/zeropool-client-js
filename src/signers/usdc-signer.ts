@@ -2,16 +2,17 @@ import { HexStringWriter } from "../utils";
 import { TxDepositNonceAlreadyUsed } from "..";
 import { DepositData, DepositSigner, SignatureRequest, SignatureType } from "./abstract-signer";
 
-export class PolygonUSDCSigner extends DepositSigner {
+export class USDCSigner extends DepositSigner {
+    protected EIP712Domain = [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'chainId', type: 'uint256' },
+        { name: 'verifyingContract', type: 'address' },
+    ];
 
     protected async buildTypes(): Promise<any> {
         const types = {
-            EIP712Domain : [
-                { name: 'name', type: 'string' },
-                { name: 'version', type: 'string' },
-                { name: 'verifyingContract', type: 'address' },
-                { name: 'salt', type: 'bytes32' },
-            ],
+            EIP712Domain: this.EIP712Domain,
             TransferWithAuthorization: [
                 { name: 'from', type: 'address' },
                 { name: 'to', type: 'address' },
@@ -28,15 +29,12 @@ export class PolygonUSDCSigner extends DepositSigner {
     protected async buildDomain(data: DepositData): Promise<any> {
         const tokenName = await this.network.getTokenName(data.tokenAddress);
         const chainId = await this.network.getChainId();
-        
-        const wr = new HexStringWriter();
-        wr.writeNumber(chainId, 32);
 
         const domain = {
             name: tokenName,
-            version: '1',
+            version: '2',
+            chainId: chainId,
             verifyingContract: data.tokenAddress,  
-            salt: wr.buf,
         };
         
         return domain;
@@ -75,6 +73,30 @@ export class PolygonUSDCSigner extends DepositSigner {
             }
         }
     }
-    
+}
 
+export class PolygonUSDCSigner extends USDCSigner {
+    protected EIP712Domain = [
+        { name: 'name', type: 'string' },
+        { name: 'version', type: 'string' },
+        { name: 'verifyingContract', type: 'address' },
+        { name: 'salt', type: 'bytes32' },
+    ];
+
+    protected async buildDomain(data: DepositData): Promise<any> {
+        const tokenName = await this.network.getTokenName(data.tokenAddress);
+        const chainId = await this.network.getChainId();
+        
+        const wr = new HexStringWriter();
+        wr.writeNumber(chainId, 32);
+
+        const domain = {
+            name: tokenName,
+            version: '1',
+            verifyingContract: data.tokenAddress,  
+            salt: wr.buf,
+        };
+        
+        return domain;
+    }
 }
