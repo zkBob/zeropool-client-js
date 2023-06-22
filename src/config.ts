@@ -22,6 +22,7 @@ export enum DepositType {
   Approve = 'approve',  // deprecated but still supported deposit scheme
   SaltedPermit = 'permit',  // based on EIP-2612 (salt was added to the signing message)
   PermitV2 = 'permit2',   // Uniswap Permit2 scheme (used for WETH)
+  AuthUSDC = 'usdc',   // EIP-3009 (for most of USDC deployments)
   AuthPolygonUSDC = 'usdc-polygon',  // EIP-3009 (used by USDC token on Polygon)
 }
 
