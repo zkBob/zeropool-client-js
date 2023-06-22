@@ -18,6 +18,13 @@ export type Pools = {
   [name: string]: Pool;
 };
 
+export enum DepositType {
+  Approve = 'approve',  // deprecated but still supported deposit scheme
+  SaltedPermit = 'permit',  // based on EIP-2612 (salt was added to the signing message)
+  PermitV2 = 'permit2',   // Uniswap Permit2 scheme (used for WETH)
+  AuthPolygonUSDC = 'usdc-polygon',  // EIP-3009 (used by USDC token on Polygon)
+}
+
 export interface Pool {
   chainId: number,
   poolAddress: string;
@@ -25,7 +32,9 @@ export interface Pool {
   relayerUrls: string[];
   delegatedProverUrls: string[];
   coldStorageConfigPath?: string;
+  minTxAmount?: bigint;
   feeDecimals?: number;
+  depositScheme: DepositType;
 }
 
 export enum ProverMode {

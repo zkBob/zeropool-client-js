@@ -49,7 +49,7 @@ export class EvmNetwork implements NetworkBackend {
 
     private activeWeb3(): Web3 {
         if (!this.web3) {
-            throw new InternalError(`Cannot interact with the NetworkBackend in the disabled mode`);
+            throw new InternalError(`EvmNetwork: Cannot interact in the disabled mode`);
         }
 
         return this.web3;
@@ -57,7 +57,7 @@ export class EvmNetwork implements NetworkBackend {
 
     private poolContract(): Contract {
         if (!this.pool) {
-            throw new InternalError(`Cannot interact with the NetworkBackend in the disabled mode`);
+            throw new InternalError(`EvmNetwork: pool contract object is undefined`);
         }
 
         return this.pool;
@@ -65,7 +65,7 @@ export class EvmNetwork implements NetworkBackend {
 
     private directDepositContract(): Contract {
         if (!this.dd) {
-            throw new InternalError(`Cannot interact with the NetworkBackend in the disabled mode`);
+            throw new InternalError(`EvmNetwork: direct deposit contract object is undefined`);
         }
 
         return this.dd;
@@ -73,7 +73,7 @@ export class EvmNetwork implements NetworkBackend {
 
     private tokenContract(): Contract {
         if (!this.token) {
-            throw new InternalError(`Cannot interact with the NetworkBackend in the disabled mode`);
+            throw new InternalError(`EvmNetwork: token contract object is undefined`);
         }
 
         return this.token;
@@ -81,6 +81,11 @@ export class EvmNetwork implements NetworkBackend {
 
     public async getChainId(): Promise<number> {
         return await this.activeWeb3().eth.getChainId();
+    }
+
+    public async getDomainSeparator(tokenAddress: string): Promise<string> {
+        this.tokenContract().options.address = tokenAddress;
+        return await this.tokenContract().methods.DOMAIN_SEPARATOR().call();
     }
 
     public async getTokenName(tokenAddress: string): Promise<string> {
@@ -101,6 +106,27 @@ export class EvmNetwork implements NetworkBackend {
     public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {    // in wei
         this.tokenContract().options.address = tokenAddress;
         return BigInt(await this.tokenContract().methods.balanceOf(address).call());
+    }
+
+    public async allowance(tokenAddress: string, owner: string, spender: string): Promise<bigint> {
+        this.tokenContract().options.address = tokenAddress;
+        const result = await this.tokenContract().methods.allowance(owner, spender).call();
+    
+        return BigInt(result);
+    }
+
+    public async permit2NonceBitmap(permit2Address: string, owner: string, wordPos: bigint): Promise<bigint> {
+        this.tokenContract().options.address = permit2Address;
+        const result = await this.tokenContract().methods.nonceBitmap(owner, wordPos).call();
+
+        return BigInt(result);
+    }
+
+    public async erc3009AuthState(tokenAddress: string, authorizer: string, nonce: bigint): Promise<bigint> {
+        this.tokenContract().options.address = tokenAddress;
+        const result = await this.tokenContract().methods.authorizationState(authorizer, `0x${nonce.toString(16)}`).call();
+
+        return BigInt(result);
     }
 
     public async getDenominator(contractAddress: string): Promise<bigint> {

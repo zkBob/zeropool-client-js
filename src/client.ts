@@ -1,23 +1,27 @@
-import { Chains, Pools, SnarkConfigParams, ClientConfig, AccountConfig, accountId, ProverMode } from './config';
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
+import { Chains, Pools, SnarkConfigParams, ClientConfig,
+        AccountConfig, accountId, ProverMode, DepositType } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
-          toTwosComplementHex, addressFromSignature, bufToHex
+          toTwosComplementHex, bufToHex
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
 import { CALLDATA_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
 import { 
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
-import { isHexPrefixed } from '@ethereumjs/util';
-import { recoverTypedSignature, SignTypedDataVersion } from '@metamask/eth-sig-util';
-import { isAddress } from 'web3-utils';
 import { JobInfo, RelayerFee } from './services/relayer';
 import { TreeState, ZkBobProvider } from './client-provider';
+import { DepositData, SignatureRequest } from './signers/abstract-signer';
+import { DepositSignerFactory } from './signers/signer-factory'
+
+import { isHexPrefixed } from '@ethereumjs/util';
+import { isAddress } from 'web3-utils';
 import { wrap } from 'comlink';
+import { PERMIT2_CONTRACT } from './signers/permit2-signer';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
@@ -545,12 +549,12 @@ export class ZkBobClient extends ZkBobProvider {
   // | Methods for creating and sending transactions in different modes           |
   // ------------------------------------------------------------------------------
 
-  // Deposit based on permittable token scheme. User should sign typed data to allow
-  // contract receive his tokens
+  // Universal deposit method based on permit or approve scheme
+  // User should sign typed data to allow contract receive his tokens
   // Returns jobId from the relayer or throw an Error
-  public async depositPermittable(
+  public async deposit(
     amountGwei: bigint,
-    signTypedData: (deadline: bigint, value: bigint, salt: string) => Promise<string>,
+    signatureCallback: (request: SignatureRequest) => Promise<string>,
     fromAddress: string,
     relayerFee?: RelayerFee,
   ): Promise<string> {
@@ -570,33 +574,52 @@ export class ZkBobClient extends ZkBobProvider {
 
     await this.updateState();
 
+    // Fee estimating
     const usedFee = relayerFee ?? await this.getRelayerFee();
-    const estimatedFee = await this.feeEstimateInternal([amountGwei], TxType.BridgeDeposit, usedFee, false, true);
+    const txType = pool.depositScheme == DepositType.Approve ? TxType.Deposit : TxType.BridgeDeposit;
+    let estimatedFee = await this.feeEstimateInternal([amountGwei], txType, usedFee, false, true);
     const feeGwei = estimatedFee.total;
 
     const deadline = Math.floor(Date.now() / 1000) + PERMIT_DEADLINE_INTERVAL;
-    const holder = ethAddrToBuf(fromAddress);
-    const txData = await state.createDepositPermittable({ 
-      amount: (amountGwei + feeGwei).toString(),
-      fee: feeGwei.toString(),
-      deadline: String(deadline),
-      holder
-    });
 
-    // permittable deposit signature should be calculated for the typed data
-    const value = await this.shieldedAmountToWei(amountGwei + feeGwei);
-    const salt = '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32);
-    let signature = truncateHexPrefix(await signTypedData(BigInt(deadline), value, salt));
-    if (this.network().isSignatureCompact()) {
-      signature = toCompactSignature(signature);
+    // Creating raw deposit transaction object
+    let txData;
+    if (txType == TxType.Deposit) {
+      // deposit via approve (deprecated)
+      txData = await state.createDeposit({
+        amount: (amountGwei + feeGwei).toString(),
+        fee: feeGwei.toString(),
+      });
+    } else {
+      // deposit via permit: permit\permitv2\auth
+      txData = await state.createDepositPermittable({ 
+        amount: (amountGwei + feeGwei).toString(),
+        fee: feeGwei.toString(),
+        deadline: String(deadline),
+        holder: ethAddrToBuf(fromAddress)
+      });
     }
 
-    // Checking signature correct (and corresponded with declared address)
-    const claimedAddr = `0x${bufToHex(holder)}`;
+    // Preparing signature request and sending it via callback
+    const dataToSign: DepositData = {
+      tokenAddress: pool.tokenAddress,
+      owner: fromAddress,
+      spender: pool.poolAddress,
+      amount: await this.shieldedAmountToWei(amountGwei + feeGwei),
+      deadline: BigInt(deadline),
+      nullifier: '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32)
+    }
+    const depositSigner = DepositSignerFactory.createSigner(this.network(), pool.depositScheme);
+    await depositSigner.checkIsDataValid(dataToSign); // may throw an error in case of the owner isn't prepared for requested deposit scheme
+    const signReq = await depositSigner.buildSignatureRequest(dataToSign);
+    let signature = await signatureCallback(signReq);
+    signature = toCompactSignature(truncateHexPrefix(signature));
+
+    // Checking signature correct (corresponded with declared address)
+    const claimedAddr = `0x${bufToHex(ethAddrToBuf(fromAddress))}`;
     let recoveredAddr;
     try {
-      const dataToSign: any = await this.createPermittableDepositData('1', claimedAddr, pool.poolAddress, value, BigInt(deadline), salt);
-      recoveredAddr = recoverTypedSignature({data: dataToSign, signature: `0x${signature}`, version: SignTypedDataVersion.V4});
+      recoveredAddr = await depositSigner.recoverAddress(dataToSign, signature);
     } catch (err) {
       throw new SignatureError(`Cannot recover address from the provided signature. Error: ${err.message}`);
     }
@@ -604,11 +627,12 @@ export class ZkBobClient extends ZkBobProvider {
       throw new SignatureError(`The address recovered from the permit signature ${recoveredAddr} doesn't match the declared one ${claimedAddr}`);
     }
 
-    // We should check deadline here because the user could introduce great delay
+    // We should also check deadline here because the user could introduce great delay
     if (Math.floor(Date.now() / 1000) > deadline - PERMIT_DEADLINE_THRESHOLD) {
       throw new TxDepositDeadlineExpiredError(deadline);
     }
 
+    // Proving transaction
     const startProofDate = Date.now();
     const txProof = await this.proveTx(txData.public, txData.secret);
     const proofTime = (Date.now() - startProofDate) / 1000;
@@ -626,7 +650,7 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxInsufficientFundsError(amountGwei, balance);
     }
 
-    const tx = { txType: TxType.BridgeDeposit, memo: txData.memo, proof: txProof, depositSignature: signature };
+    const tx = { txType, memo: txData.memo, proof: txProof, depositSignature: signature };
     this.assertCalldataLength(tx, estimatedFee.calldataTotalLength);
     const jobId = await relayer.sendTransactions([tx]);
     this.startJobMonitoring(jobId);
@@ -639,51 +663,8 @@ export class ZkBobClient extends ZkBobProvider {
     return jobId;
   }
 
-  private async createPermittableDepositData(
-    version: string,
-    owner: string,
-    spender: string,
-    value: bigint,
-    deadline: bigint,
-    salt: string): Promise<object>
-  {
-    const tokenAddress = this.pool().tokenAddress;
-    const tokenName = await this.network().getTokenName(tokenAddress);
-    const chainId = await this.network().getChainId();
-    const nonce = await this.network().getTokenNonce(tokenAddress, owner);
 
-    const domain = {
-        name: tokenName,
-        version: version,
-        chainId: chainId,
-        verifyingContract: tokenAddress,
-    };
-
-    const types = {
-      EIP712Domain: [
-        { name: 'name', type: 'string' },
-        { name: 'version', type: 'string' },
-        { name: 'chainId', type: 'uint256' },
-        { name: 'verifyingContract', type: 'address' },
-      ],
-      Permit: [
-          { name: 'owner', type: 'address' },
-          { name: 'spender', type: 'address' },
-          { name: 'value', type: 'uint256' },
-          { name: 'nonce', type: 'uint256' },
-          { name: 'deadline', type: 'uint256' },
-          { name: 'salt', type: 'bytes32' }
-        ],
-    };
-
-    const message = { owner, spender, value: value.toString(), nonce, deadline: deadline.toString(), salt };
-
-    const data = { types, primaryType: 'Permit', domain, message };
-
-    return data;
-}
-
-  public async depositPermittableEphemeral(
+  public async depositEphemeral(
     amountGwei: bigint,
     ephemeralIndex: number,
     relayerFee?: RelayerFee,
@@ -691,21 +672,36 @@ export class ZkBobClient extends ZkBobProvider {
     const state = this.zpState();
     const fromAddress = await state.ephemeralPool().getEphemeralAddress(ephemeralIndex);
 
-    return this.depositPermittable(amountGwei, async (deadline, value, salt) => {
+    // we should check token balance here since the library is fully responsible
+    // for ephemeral address in contrast to depositing from external user's address
+    const pool = await this.pool();
+    const actualFee = relayerFee ?? await this.getRelayerFee();
+    const txType = pool.depositScheme == DepositType.Approve ? TxType.Deposit : TxType.BridgeDeposit;
+    const neededFee = await this.feeEstimateInternal([amountGwei], txType, actualFee, true, true);
+    if(fromAddress.tokenBalance < amountGwei + neededFee.total) {
+      throw new TxInsufficientFundsError(amountGwei + neededFee.total, fromAddress.tokenBalance);
+    }
+
+    if (pool.depositScheme == DepositType.PermitV2 || pool.depositScheme == DepositType.Approve) {
+      const spender = pool.depositScheme == DepositType.PermitV2 ? PERMIT2_CONTRACT : pool.poolAddress;
+      const curAllowance = await state.ephemeralPool().allowance(ephemeralIndex, spender);
+      if (curAllowance < amountGwei + neededFee.total) {
+        console.log(`Approving tokens for contract ${spender}...`);
+        const maxTokensAmount = 2n ** 256n - 1n;
+        const txHash = await state.ephemeralPool().approve(ephemeralIndex, spender, maxTokensAmount);
+        console.log(`Tx hash for the approve transaction: ${txHash}`);
+      }
+    }
+
+    return this.deposit(amountGwei, async (signingRequest) => {
       const pool = this.pool();
       const state = this.zpState();
 
-      // we should check token balance here since the library is fully responsible
-      // for ephemeral address in contrast to depositing from external user's address
-      const neededGwei = await this.weiToShieldedAmount(value);
-      if(fromAddress.tokenBalance < neededGwei) {
-        throw new TxInsufficientFundsError(neededGwei, fromAddress.tokenBalance);
-      }
+      const privKey = this.getEphemeralAddressPrivateKey(ephemeralIndex);
 
-      let ephemeralAddress = await state.ephemeralPool().getAddress(ephemeralIndex);
-      const dataToSign = await this.createPermittableDepositData('1', ephemeralAddress, pool.poolAddress, value, deadline, salt);
-      return await state.ephemeralPool().signTypedData(dataToSign, ephemeralIndex);
-    }, fromAddress.address, relayerFee);
+      const depositSigner = DepositSignerFactory.createSigner(this.network(), pool.depositScheme);
+      return depositSigner.signRequest(privKey, signingRequest);
+    }, fromAddress.address, actualFee);
   }
 
   // Transfer shielded funds to the shielded address
@@ -949,92 +945,6 @@ export class ZkBobClient extends ZkBobProvider {
     // forget the gift card state 
     this.auxZpStates[accId].free();
     delete this.auxZpStates[accId];
-
-    return jobId;
-  }
-
-  // DEPRECATED. Please use depositPermittable method instead
-  // Deposit throught approval allowance
-  // User should approve allowance for contract address at least 
-  // (amountGwei + feeGwei) tokens before calling this method
-  // Returns jobId
-  public async deposit(
-    amountGwei: bigint,
-    sign: (data: string) => Promise<string>,
-    fromAddress: string | null = null,  // this field is only for substrate-based network,
-                                        // it should be null for EVM
-    relayerFee?: RelayerFee,
-  ): Promise<string> {
-    const pool = this.pool();
-    const state = this.zpState();
-    const relayer = this.relayer();
-
-    const minTx = await this.minTxAmount();
-    if (amountGwei < minTx) {
-      throw new TxSmallAmount(amountGwei, minTx);
-    }
-
-    await this.updateState();
-
-    const usedFee = relayerFee ?? await this.getRelayerFee();
-    const estimatedFee = await this.feeEstimateInternal([amountGwei], TxType.Deposit, usedFee, false, true);
-    const feeGwei = estimatedFee.total;
-
-    const txData = await state.createDeposit({
-      amount: (amountGwei + feeGwei).toString(),
-      fee: feeGwei.toString(),
-    });
-
-    const startProofDate = Date.now();
-    const txProof = await this.proveTx(txData.public, txData.secret);
-    const proofTime = (Date.now() - startProofDate) / 1000;
-    console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
-
-    // regular deposit through approve allowance: sign transaction nullifier
-    const dataToSign = '0x' + BigInt(txData.public.nullifier).toString(16).padStart(64, '0');
-
-    // TODO: Sign fromAddress as well?
-    const signature = truncateHexPrefix(await sign(dataToSign));
-    
-    // now we can restore actual depositer address and check it for limits
-    const addrFromSig = addressFromSignature(signature, dataToSign);
-    const limits = await this.getLimits(addrFromSig);
-    if (amountGwei > limits.deposit.total) {
-      throw new TxLimitError(amountGwei, limits.deposit.total);
-    }
-
-    let fullSignature = signature;
-    if (fromAddress) {
-      const addr = truncateHexPrefix(fromAddress);
-      fullSignature = addr + signature;
-    }
-
-    if (this.network().isSignatureCompact()) {
-      fullSignature = toCompactSignature(fullSignature);
-    }
-
-    // Checking the depositor's token balance before sending tx
-    let balance: bigint;
-    try {
-      const balanceWei = await this.network().getTokenBalance(pool.tokenAddress, addrFromSig);
-      balance = await this.weiToShieldedAmount(balanceWei);
-    } catch (err) {
-      throw new InternalError(`Unable to fetch depositor's balance. Error: ${err.message}`);
-    }
-    if (balance < (amountGwei + feeGwei)) {
-      throw new TxInsufficientFundsError(amountGwei, balance);
-    }
-
-
-    const tx = { txType: TxType.Deposit, memo: txData.memo, proof: txProof, depositSignature: fullSignature };
-    this.assertCalldataLength(tx, estimatedFee.calldataTotalLength);
-    const jobId = await relayer.sendTransactions([tx]);
-    this.startJobMonitoring(jobId);
-
-    // Temporary save transaction in the history module (to prevent history delays)
-    const ts = Math.floor(Date.now() / 1000);
-    const rec = await HistoryRecord.deposit(addrFromSig, amountGwei, feeGwei, ts, '0', true);
-    state.history?.keepQueuedTransactions([rec], jobId);
 
     return jobId;
   }
