@@ -66,7 +66,94 @@ export const tokenABI: AbiItem[] = [
         payable: false,
         stateMutability: 'view',
         type: 'function'
-    }
+    }, {
+        inputs: [
+          {
+            internalType: 'address',
+            name: '',
+            type: 'address'
+          },
+          {
+            internalType: 'address',
+            name: '',
+            type: 'address'
+          }
+        ],
+        name: 'allowance',
+        outputs: [
+          {
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+          }
+        ],
+        stateMutability: 'view',
+        type: 'function'
+    }, {
+        inputs: [{
+            internalType: 'address',
+            name: 'spender',
+            type: 'address'
+          }, {
+            internalType: 'uint256',
+            name: 'amount',
+            type: 'uint256'
+          }],
+        name: 'approve',
+        outputs: [{
+            internalType: 'bool',
+            name: '',
+            type: 'bool'
+        }],
+        stateMutability: 'nonpayable',
+        type: 'function'
+    }, {
+        inputs: [{ 
+            internalType: 'address',
+            name: '',
+            type: 'address'
+        }, {
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        name: 'nonceBitmap',
+        outputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    }, {
+        inputs: [{
+            internalType: 'address',
+            name: 'authorizer',
+            type: 'address'
+        }, {
+            internalType: 'bytes32',
+            name: 'nonce',
+            type: 'bytes32'
+        }],
+        name: 'authorizationState',
+        outputs: [{
+            internalType: 'uin256',
+            name: '',
+            type: 'uint256'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    }, {
+        inputs: [],
+        stateMutability: 'view',
+        type: 'function',
+        name: 'DOMAIN_SEPARATOR',
+        outputs: [{
+            internalType: 'bytes32',
+            name: '',
+            type: 'bytes32',
+        }],
+    },
 ];
 
 export const poolContractABI: AbiItem[] = [
