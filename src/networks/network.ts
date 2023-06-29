@@ -19,6 +19,7 @@ export interface NetworkBackend {
     getDenominator(poolAddress: string): Promise<bigint>;
     getPoolId(poolAddress: string): Promise<number>;
     poolLimits(poolAddress: string, address: string | undefined): Promise<any>;
+    getTokenSellerContract(poolAddress: string): Promise<string>;
     getDirectDepositQueueContract(poolAddress: string): Promise<string>;
     getDirectDepositFee(ddQueueAddress: string): Promise<bigint>;
     createDirectDepositTx(ddQueueAddress: string, amount: bigint, zkAddress: string, fallbackAddress: string): Promise<PreparedTransaction>;

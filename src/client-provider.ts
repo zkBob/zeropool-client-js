@@ -421,12 +421,12 @@ export class ZkBobProvider {
     // https://docs.zkbob.com/bob-protocol/deposit-and-withdrawal-limits
     // Global limits are fetched from the relayer (except personal deposit limit from the specified address)
     public async getLimits(address: string | undefined, directRequest: boolean = false): Promise<PoolLimits> {
-        const token = this.pool();
+        const pool = this.pool();
         const network = this.network();
         const relayer = this.relayer();
 
         async function fetchLimitsFromContract(network: NetworkBackend): Promise<LimitsFetch> {
-            const poolLimits = await network.poolLimits(token.poolAddress, address);
+            const poolLimits = await network.poolLimits(pool.poolAddress, address);
             return {
                 deposit: {
                     singleOperation: BigInt(poolLimits.depositCap),
@@ -680,5 +680,13 @@ export class ZkBobProvider {
         }
 
         return { sk: hexToBuf(sk), birthIndex, balance, poolAlias };
+    }
+
+    public async tokenSellerContract(): Promise<string> {
+        return this.network().getTokenSellerContract(this.pool().poolAddress);
+    }
+
+    public async directDepositContract(): Promise<string> {
+        return this.ddProcessor().getQueueContract();
     }
 }

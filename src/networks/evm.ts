@@ -15,6 +15,7 @@ export class EvmNetwork implements NetworkBackend {
     private dd?: Contract;
     private token?: Contract;
 
+    private tokenSellerAddresses = new Map<string, string>();    // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
 
     constructor(rpcUrl: string, enabled: boolean = true) {
@@ -160,6 +161,21 @@ export class EvmNetwork implements NetworkBackend {
         }
         
         return await this.poolContract().methods.getLimitsFor(addr).call();
+    }
+
+    public async getTokenSellerContract(poolAddress: string): Promise<string> {
+        let tokenSellerAddr = this.tokenSellerAddresses.get(poolAddress);
+        if (!tokenSellerAddr) {
+            this.poolContract().options.address = poolAddress;
+            tokenSellerAddr = await this.poolContract().methods.tokenSeller().call();
+            if (tokenSellerAddr) {
+                this.ddContractAddresses.set(poolAddress, tokenSellerAddr);
+            } else {
+                throw new InternalError(`Cannot fetch token seller contract address`);
+            }
+        }
+
+        return tokenSellerAddr;
     }
 
     public async getDirectDepositQueueContract(poolAddress: string): Promise<string> {

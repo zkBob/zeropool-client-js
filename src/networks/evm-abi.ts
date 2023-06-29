@@ -271,6 +271,17 @@ export const poolContractABI: AbiItem[] = [
         }],
         stateMutability: 'view',
         type: 'function'
+    },
+    {
+        inputs: [],
+        name: 'tokenSeller',
+        outputs: [{
+            internalType: 'contract ITokenSeller',
+            name: '',
+            type: 'address'
+        }],
+        stateMutability: 'view',
+        type: 'function'
     }
 ];
 
