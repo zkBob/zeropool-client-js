@@ -1,9 +1,10 @@
 import Web3 from 'web3';
 import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
-import { NetworkBackend } from './network';
+import { NetworkBackend, PreparedTransaction } from './network';
 import { InternalError } from '..';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
+import bs58 from 'bs58';
 
 export class EvmNetwork implements NetworkBackend {
     rpcUrl: string;
@@ -129,13 +130,13 @@ export class EvmNetwork implements NetworkBackend {
         return BigInt(result);
     }
 
-    public async getDenominator(contractAddress: string): Promise<bigint> {
-        this.poolContract().options.address = contractAddress;
+    public async getDenominator(poolAddress: string): Promise<bigint> {
+        this.poolContract().options.address = poolAddress;
         return BigInt(await this.poolContract().methods.denominator().call());
     }
 
-    public async getPoolId(contractAddress: string): Promise<number> {
-        this.poolContract().options.address = contractAddress;
+    public async getPoolId(poolAddress: string): Promise<number> {
+        this.poolContract().options.address = poolAddress;
         return Number(await this.poolContract().methods.pool_id().call());
     }
 
@@ -151,8 +152,8 @@ export class EvmNetwork implements NetworkBackend {
         return this.rpcUrl;
     }
 
-    public async poolLimits(contractAddress: string, address: string | undefined): Promise<any> {
-        this.poolContract().options.address = contractAddress;
+    public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
+        this.poolContract().options.address = poolAddress;
         let addr = address;
         if (address === undefined) {
             addr = '0x0000000000000000000000000000000000000000';
@@ -161,25 +162,61 @@ export class EvmNetwork implements NetworkBackend {
         return await this.poolContract().methods.getLimitsFor(addr).call();
     }
 
-    public async getDirectDepositFee(contractAddress: string): Promise<bigint> {
-        let ddContractAddr = this.ddContractAddresses.get(contractAddress);
+    public async getDirectDepositQueueContract(poolAddress: string): Promise<string> {
+        let ddContractAddr = this.ddContractAddresses.get(poolAddress);
         if (!ddContractAddr) {
-            this.poolContract().options.address = contractAddress;
+            this.poolContract().options.address = poolAddress;
             ddContractAddr = await this.poolContract().methods.direct_deposit_queue().call();
             if (ddContractAddr) {
-                this.ddContractAddresses.set(contractAddress, ddContractAddr);
+                this.ddContractAddresses.set(poolAddress, ddContractAddr);
             } else {
                 throw new InternalError(`Cannot fetch DD contract address`);
             }
         }
 
-        this.directDepositContract().options.address = ddContractAddr;
+        return ddContractAddr;
+    }
+
+    public async getDirectDepositFee(ddQueueAddress: string): Promise<bigint> {
+        this.directDepositContract().options.address = ddQueueAddress;
         
         return BigInt(await this.directDepositContract().methods.directDepositFee().call());
     }
 
-    public async poolState(contractAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
-        this.poolContract().options.address = contractAddress;
+    public async createDirectDepositTx(
+        ddQueueAddress: string,
+        amount: bigint,
+        zkAddress: string,
+        fallbackAddress: string,
+    ): Promise<PreparedTransaction> {
+        const zkAddrBytes = `0x${Buffer.from(bs58.decode(zkAddress.substring(zkAddress.indexOf(':') + 1))).toString('hex')}`;
+        const encodedTx = await this.directDepositContract().methods["directDeposit(address,uint256,bytes)"](fallbackAddress, amount, zkAddrBytes).encodeABI();
+
+        return {
+            to: ddQueueAddress,
+            amount: 0n,
+            data: encodedTx,
+        };
+    }
+
+    public async createNativeDirectDepositTx(
+        ddQueueAddress: string,
+        nativeAmount: bigint,
+        zkAddress: string,
+        fallbackAddress: string,
+    ): Promise<PreparedTransaction> {
+        const zkAddrBytes = `0x${Buffer.from(bs58.decode(zkAddress.substring(zkAddress.indexOf(':') + 1))).toString('hex')}`;
+        const encodedTx = await this.directDepositContract().methods["directNativeDeposit(address,bytes)"](fallbackAddress, zkAddrBytes).encodeABI();
+
+        return {
+            to: ddQueueAddress,
+            amount: nativeAmount,
+            data: encodedTx,
+        };
+    }
+
+    public async poolState(poolAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
+        this.poolContract().options.address = poolAddress;
         let idx;
         if (index === undefined) {
             idx = await this.poolContract().methods.pool_index().call();

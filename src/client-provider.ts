@@ -9,6 +9,7 @@ import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
 import { estimateCalldataLength, TxType } from "./tx";
+import { DirectDepositProcessor } from "./dd";
 
 const bs58 = require('bs58')
 
@@ -88,6 +89,7 @@ export class ZkBobProvider {
     private relayerFee:       { [name: string]: RelayerFeeFetch } = {};
     private maxSwapAmount:    { [name: string]: MaxSwapAmountFetch } = {};
     private coldStorageCfg:   { [name: string]: ColdStorageConfig } = {};
+    private ddProcessors:     { [name: string]: DirectDepositProcessor } = {};
     protected supportId: string | undefined;
 
     // The current pool alias should always be set
@@ -126,11 +128,14 @@ export class ZkBobProvider {
                 this.provers[alias] = ZkBobDelegatedProver.create(pool.delegatedProverUrls, supportId);
             }
 
+            const network = this.chains[pool.chainId].backend;
             if (alias == currentPool) {
-                this.chains[pool.chainId].backend.setEnabled(true);
+                network.setEnabled(true);
             }
 
             this.proverModes[alias] = ProverMode.Local;
+
+            this.ddProcessors[alias] = new DirectDepositProcessor(pool, network, supportId)
         }
 
         if (!this.pools[currentPool]) {
@@ -311,6 +316,15 @@ export class ZkBobProvider {
         return undefined;
     }
 
+    protected ddProcessor(): DirectDepositProcessor {
+        const proccessor = this.ddProcessors[this.curPool];
+        if (!proccessor) {
+            throw new InternalError(`No direct deposit processer initialized for the pool ${this.curPool}`);
+        }
+
+        return proccessor;
+    }
+
     // -------------=========< Converting Amount Routines >=========---------------
     // | Between wei and pool resolution                                          |
     // ----------------------------------------------------------------------------
@@ -396,7 +410,7 @@ export class ZkBobProvider {
     }
 
     public async directDepositFee(): Promise<bigint> {
-        return this.network().getDirectDepositFee(this.pool().poolAddress);
+        return this.ddProcessor().getFee();
     }
 
     public async minTxAmount(): Promise<bigint> {

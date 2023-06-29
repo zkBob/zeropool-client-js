@@ -35,6 +35,7 @@ export interface Pool {
   coldStorageConfigPath?: string;
   minTxAmount?: bigint;
   feeDecimals?: number;
+  isNative?: boolean;
   depositScheme: DepositType;
 }
 

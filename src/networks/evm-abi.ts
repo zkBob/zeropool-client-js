@@ -285,5 +285,47 @@ export const ddContractABI: AbiItem[] = [
         }],
         stateMutability: 'view',
         type: 'function'
-    }
+    },
+    {
+        inputs: [{
+            internalType: 'address',
+            name: '_fallbackUser',
+            type: 'address'
+        }, {
+            internalType: 'uint256',
+            name: '_amount',
+            type: 'uint256'
+        }, {
+            internalType: 'bytes',
+            name: '_rawZkAddress',
+            type: 'bytes'
+        }],
+        name: 'directDeposit',
+        outputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        stateMutability: 'nonpayable',
+        type: 'function'
+    },
+    {
+        inputs: [ {
+            internalType: 'address',
+            name: '_fallbackUser',
+            type: 'address'
+        }, {
+            internalType: 'bytes',
+            name: '_rawZkAddress',
+            type: 'bytes'
+        }],
+        name: 'directNativeDeposit',
+        outputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        stateMutability: 'payable',
+        type: 'function'
+    },
 ];
