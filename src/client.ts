@@ -714,15 +714,18 @@ export class ZkBobClient extends ZkBobProvider {
   public async directDeposit(
     type: DirectDepositType,
     fromAddress: string,
-    amount: bigint, // in pool resolution for DirectDepositType.Token, in wei for DirectDepositType.Native
+    amount: bigint, // in pool resolution
     sendTxCallback: (tx: PreparedTransaction) => Promise<string>, // txHash
   ): Promise<void> {
     const pool = this.pool();
     const processor = this.ddProcessor();
     const ddQueueAddress = await processor.getQueueContract();
     const zkAddress = await this.generateAddress();
+
+
+    let neededAmount = amount * await this.denominator();
     const fee = await processor.getFee();
-    const neededAmount = amount + fee;
+    neededAmount += fee;
 
     if (type == DirectDepositType.Token) {
       // For the token-based DD we should check allowance first
