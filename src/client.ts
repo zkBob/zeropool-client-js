@@ -722,20 +722,18 @@ export class ZkBobClient extends ZkBobProvider {
     const ddQueueAddress = await processor.getQueueContract();
     const zkAddress = await this.generateAddress();
 
-
-    let neededAmount = amount * await this.denominator();
     const fee = await processor.getFee();
-    neededAmount += fee;
+    let fullAmountNative = await this.shieldedAmountToWei(amount + fee);
 
     if (type == DirectDepositType.Token) {
       // For the token-based DD we should check allowance first
       const curAllowance = await this.network().allowance(pool.tokenAddress, fromAddress, ddQueueAddress);
-      if (curAllowance < neededAmount) {
-        throw new TxDepositAllowanceTooLow(neededAmount, curAllowance, ddQueueAddress);
+      if (curAllowance < fullAmountNative) {
+        throw new TxDepositAllowanceTooLow(fullAmountNative, curAllowance, ddQueueAddress);
       }
     }
     
-    const rawTx = await processor.prepareDirectDeposit(type, zkAddress, neededAmount, fromAddress, true);
+    const rawTx = await processor.prepareDirectDeposit(type, zkAddress, fullAmountNative, fromAddress, true);
     const txHash = await sendTxCallback(rawTx);
 
     console.log(`DD transaction sent: ${txHash}`)
