@@ -1,14 +1,37 @@
 import { Pool } from "./config";
 import { InternalError } from "./errors";
 import { NetworkBackend, PreparedTransaction } from "./networks/network";
+import { execute } from "./.graphclient"
+import { ZkBobState } from "./state";
+
+const ddQuery = `{
+    directDeposits(orderBy: bnInit, where: {pending: true}) {
+        id
+        zkAddress_pk
+        zkAddress_diversifier
+        deposit
+    	fallbackUser
+        tsInit
+        txInit
+    }
+}`;
 
 const DD_FEE_LIFETIME = 3600;
 
+export enum DirectDepositState {
+    Queued,
+    Deposited,
+    Refunded,
+}
+
 export interface DirectDeposit {
+    id: bigint;           // DD queue unique identifier
+    state: DirectDepositState;
     amount: bigint;       // in pool resolution
     destination: string;  // zk-addresss
+    fallback: string;     // 0x-address to refund DD
     timestamp: number;    // when it was created
-  
+    queueTxHash: string;  // transaction hash to the queue
 }
 
 export enum DirectDepositType {
@@ -27,16 +50,18 @@ export class DirectDepositProcessor {
     protected poolAddress: string;
     protected ddQueueContract?: string;
     protected isNativeSupported: boolean;
-    protected supportId: string | undefined;
+    protected subgraphName?: string;
+    protected state: ZkBobState;
 
     protected cachedFee?: FeeFetch;
     
-    constructor(pool: Pool, network: NetworkBackend, supportId: string | undefined) {
+    constructor(pool: Pool, network: NetworkBackend, state: ZkBobState) {
         this.network = network;
         this.tokenAddress = pool.tokenAddress;
         this.poolAddress = pool.poolAddress;
         this.isNativeSupported = pool.isNative ?? false;
-        this.supportId = supportId;
+        this.subgraphName = pool.ddSubgraph;
+        this.state = state;
     }
 
     public async getQueueContract(): Promise<string> {
@@ -90,4 +115,42 @@ export class DirectDepositProcessor {
                 throw new InternalError(`Unsupported direct deposit type ${type}`);
         }
     }
+
+    public async pendingDirectDeposits(): Promise<DirectDeposit[]> {
+        if (this.subgraphName == 'zkbob-bob-goerli') {
+            const allPendingDDs = (await execute(ddQuery, {})).data.directDeposits;
+            if (Array.isArray(allPendingDDs)) {
+                const myPendingDDs: DirectDeposit[] = await allPendingDDs.reduce(async (result, dd) => {
+                    const d = BigInt(dd.zkAddress_diversifier);
+                    const p_d = BigInt(dd.zkAddress_pk);
+                    const zkAddress = await this.state.assembleAddress(d.toString(), p_d.toString());
+                    const isOwn = await this.state.isOwnAddress(zkAddress);
+                    if (isOwn) {
+                        const ownDD: DirectDeposit =  {
+                            id: BigInt(dd.id),
+                            state: DirectDepositState.Queued,
+                            amount: BigInt(dd.deposit),
+                            destination: zkAddress,
+                            fallback: dd.fallbackUser,
+                            timestamp: Number(dd.tsInit),
+                            queueTxHash: dd.txInit,
+                        };
+                        (await result).push(ownDD);
+                    }
+
+                    return result;
+                 }, []);
+
+                return myPendingDDs;
+            } else {
+                throw new InternalError(`Unexpected response from the DD subgraph: ${allPendingDDs}`);
+            }
+        } else {
+            console.warn('There is no configured subraph to query pending DD')
+        }
+
+        return [];
+    }
+
+    
 }

@@ -1,0 +1,5 @@
+sources:
+  - name: zkbob-bob-goerli
+    handler:
+      graphql:
+        endpoint: https://api.thegraph.com/subgraphs/name/zkbob/zkbob-bob-goerli

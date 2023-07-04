@@ -89,7 +89,6 @@ export class ZkBobProvider {
     private relayerFee:       { [name: string]: RelayerFeeFetch } = {};
     private maxSwapAmount:    { [name: string]: MaxSwapAmountFetch } = {};
     private coldStorageCfg:   { [name: string]: ColdStorageConfig } = {};
-    private ddProcessors:     { [name: string]: DirectDepositProcessor } = {};
     protected supportId: string | undefined;
 
     // The current pool alias should always be set
@@ -134,8 +133,6 @@ export class ZkBobProvider {
             }
 
             this.proverModes[alias] = ProverMode.Local;
-
-            this.ddProcessors[alias] = new DirectDepositProcessor(pool, network, supportId)
         }
 
         if (!this.pools[currentPool]) {
@@ -316,15 +313,6 @@ export class ZkBobProvider {
         return undefined;
     }
 
-    protected ddProcessor(): DirectDepositProcessor {
-        const proccessor = this.ddProcessors[this.curPool];
-        if (!proccessor) {
-            throw new InternalError(`No direct deposit processer initialized for the pool ${this.curPool}`);
-        }
-
-        return proccessor;
-    }
-
     // -------------=========< Converting Amount Routines >=========---------------
     // | Between wei and pool resolution                                          |
     // ----------------------------------------------------------------------------
@@ -407,10 +395,6 @@ export class ZkBobProvider {
         }
 
         return cachedAmount.amount;
-    }
-
-    public async directDepositFee(): Promise<bigint> {
-        return this.ddProcessor().getFee();
     }
 
     public async minTxAmount(): Promise<bigint> {
@@ -684,9 +668,5 @@ export class ZkBobProvider {
 
     public async tokenSellerContract(): Promise<string> {
         return this.network().getTokenSellerContract(this.pool().poolAddress);
-    }
-
-    public async directDepositContract(): Promise<string> {
-        return this.ddProcessor().getQueueContract();
     }
 }
