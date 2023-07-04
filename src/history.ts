@@ -160,7 +160,10 @@ class HistoryRecordIdx {
     return result;
   }
 }
-
+export class ComplianceReport {
+  records: ComplianceHistoryRecord[];
+  previousTxHash: string|undefined
+}
 export class ComplianceHistoryRecord extends HistoryRecord {
   // the first leaf (account) index
   public index: number;
@@ -638,9 +641,9 @@ export class HistoryStorage {
 
   // the history should be synced before invoking that method
   // timestamps are milliseconds, low bound is inclusively
-  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null): Promise<ComplianceHistoryRecord[]> {
+  public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null): Promise<ComplianceReport> {
     let complienceRecords: ComplianceHistoryRecord[] = [];
-    
+    let extraRecordBeforeStart:[number, HistoryRecord|undefined] = [0, undefined];
     for (const [treeIndex, value] of  this.currentHistory.entries()) {
       const recTs = value.timestamp * 1000;
       if (recTs >= (fromTimestamp ?? 0) &&
@@ -742,10 +745,37 @@ export class HistoryStorage {
         } else {
           console.warn(`[HistoryStorage]: cannot get calldata for tx at index ${treeIndex}`);
         }
+      } else if( extraRecordBeforeStart[0] < treeIndex ) {
+        extraRecordBeforeStart = [treeIndex,value]
       }
     };
+    if (extraRecordBeforeStart[1]) {
+      // complienceRecords.push(extraRecordBeforeStart[1])
+    }
+    return  {
+      records: complienceRecords,
+      previousTxHash: extraRecordBeforeStart[1]?.txHash
+    }
+  }
 
-    return complienceRecords;
+
+  /*
+  sequentially checks that the report records are valid and consistent, returns index of the latest valid record
+  */
+  public async verifyComplianceReport(report: ComplianceReport): Promise<number>{
+
+
+    /*
+    In order to check that there are no transaction ommited between start of the period and first record in the report we need to reconstruct previous transaction commitment using input account from first record and compare it with the commitment in blockchain
+    */ 
+
+    const previousTxHash = report.previousTxHash;
+    const previousTxCalldata = this.web3.getTransaction(previousTxHash);
+    const txSelector = previousTxCalldata.input.slice(2, 10).toLowerCase();
+            if (txSelector == PoolSelector.Transact) {
+              const tx = ShieldedTx.decode(previousTxCalldata.input);
+            }
+    
   }
 
   public async rollbackHistory(rollbackIndex: number): Promise<void> {

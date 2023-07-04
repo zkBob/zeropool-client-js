@@ -5,7 +5,7 @@ import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
 import { SyncStat, ZkBobState } from './state';
 import { CALLDATA_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
-import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
+import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord, ComplianceReport } from './history'
 import { EphemeralAddress } from './ephemeral';
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
 import { 
@@ -338,12 +338,15 @@ export class ZkBobClient extends ZkBobProvider {
     return await this.zpState().history?.getAllHistory() ?? [];
   }
 
+  public async verifyComplianceReport(report:ComplianceHistoryRecord[]):Promise<number>{
+     
+  }
   // Generate compliance report
   public async getComplianceReport(
     fromTimestamp: number | null,
     toTimestamp: number | null,
     updateState: boolean = true,
-  ): Promise<ComplianceHistoryRecord[]> {
+  ): Promise<ComplianceReport> {
     if (updateState) {
       await this.getAllHistory();
     }
@@ -353,7 +356,7 @@ export class ZkBobClient extends ZkBobProvider {
       throw new InternalError('Account is not set');
     }
     
-    return await this.zpState().history?.getComplianceReport(fromTimestamp, toTimestamp) ?? [];     
+    return await this.zpState().history?.getComplianceReport(fromTimestamp, toTimestamp) ?? {records:[], previousTxHash:""};     
 
   }
 
