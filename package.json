@@ -1,6 +1,6 @@
 {
   "name": "zkbob-client-js",
-  "version": "5.1.0",
+  "version": "5.1.1-beta",
   "description": "zkBob integration library",
   "repository": "git@github.com:zkBob/libzkbob-client-js.git",
   "author": "Dmitry Vdovin <voidxnull@gmail.com>",
@@ -34,10 +34,10 @@
     "regenerator-runtime": "^0.13.9",
     "wasm-feature-detect": "^1.2.11",
     "web3": "1.8.0",
-    "web3-utils": "1.8.0"
+    "web3-utils": "1.8.0",
+    "@graphprotocol/client-cli": "3.0.0"
   },
   "devDependencies": {
-    "@graphprotocol/client-cli": "3.0.0",
     "@types/ethereum-protocol": "^1.0.1",
     "@types/node": "^20.3.3",
     "@types/web3": "1.0.20",
