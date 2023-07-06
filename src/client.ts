@@ -726,6 +726,11 @@ export class ZkBobClient extends ZkBobProvider {
     const ddQueueAddress = await processor.getQueueContract();
     const zkAddress = await this.generateAddress();
 
+    const limits = await this.getLimits(fromAddress);
+    if (amount > limits.dd.total) {
+      throw new TxLimitError(amount, limits.dd.total);
+    }
+
     const fee = await processor.getFee();
     let fullAmountNative = await this.shieldedAmountToWei(amount + fee);
 

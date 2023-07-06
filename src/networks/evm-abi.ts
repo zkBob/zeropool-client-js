@@ -250,9 +250,21 @@ export const poolContractABI: AbiItem[] = [
                 name: 'depositCap',
                 type: 'uint256',
             }, {
-            internalType: 'uint8',
-            name: 'tier',
-            type: 'uint8',
+                internalType: 'uint8',
+                name: 'tier',
+                type: 'uint8',
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'directDepositCap',
+                type: 'uint256'
             }],
             internalType: 'struct ZkBobAccounting.Limits',
             name: '',

@@ -54,6 +54,13 @@ export interface PoolLimits { // all values are in Gwei
             dailyForAll: Limit;
         };
     }
+    dd: {
+        total: bigint;
+        components: {
+            singleOperation: bigint;
+            dailyForAddress: Limit;
+        };
+    }
     tier: number;
 }
 
@@ -433,6 +440,13 @@ export class ZkBobProvider {
                         available:  BigInt(poolLimits.dailyWithdrawalCap) - BigInt(poolLimits.dailyWithdrawalCapUsage),
                     },
                 },
+                dd: {
+                    singleOperation: BigInt(poolLimits.directDepositCap),
+                    dailyForAddress: {
+                        total: BigInt(poolLimits.dailyUserDirectDepositCap),
+                        available: BigInt(poolLimits.dailyUserDirectDepositCap) - BigInt(poolLimits.dailyUserDirectDepositCapUsage),
+                    },
+                },
                 tier: poolLimits.tier === undefined ? 0 : Number(poolLimits.tier)
             };
         }
@@ -459,6 +473,13 @@ export class ZkBobProvider {
                     dailyForAll: {
                         total:      BigInt(100000000000000),  // 100k tokens
                         available:  BigInt(100000000000000),  // 100k tokens
+                    },
+                },
+                dd: {
+                    singleOperation: BigInt(10000000000000),  // 10k tokens
+                    dailyForAddress: {
+                        total: BigInt(10000000000000),  // 10k tokens
+                        available: BigInt(10000000000000),  // 10k tokens
                     },
                 },
                 tier: 0
@@ -509,14 +530,25 @@ export class ZkBobProvider {
         const allWithdrawLimits = [ currentLimits.withdraw.dailyForAll.available ];
         const totalWithdrawLimit = bigIntMin(...allWithdrawLimits);
 
+        // Calculate direct deposit limits
+        const allDdLimits = [
+            currentLimits.dd.singleOperation,
+            currentLimits.dd.dailyForAddress.available,
+        ];
+        const totalDdLimit = bigIntMin(...allDdLimits);
+
         return {
             deposit: {
-                total: totalDepositLimit >= 0 ? totalDepositLimit : BigInt(0),
+                total: totalDepositLimit >= 0 ? totalDepositLimit : 0n,
                 components: currentLimits.deposit,
             },
             withdraw: {
-                total: totalWithdrawLimit >= 0 ? totalWithdrawLimit : BigInt(0),
+                total: totalWithdrawLimit >= 0 ? totalWithdrawLimit : 0n,
                 components: currentLimits.withdraw,
+            },
+            dd: {
+                total: totalDdLimit >=0 ? totalDdLimit : 0n,
+                components: currentLimits.dd,
             },
             tier: currentLimits.tier
         }
