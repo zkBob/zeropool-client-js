@@ -169,7 +169,7 @@ export class EvmNetwork implements NetworkBackend {
             this.poolContract().options.address = poolAddress;
             tokenSellerAddr = await this.poolContract().methods.tokenSeller().call();
             if (tokenSellerAddr) {
-                this.ddContractAddresses.set(poolAddress, tokenSellerAddr);
+                this.tokenSellerAddresses.set(poolAddress, tokenSellerAddr);
             } else {
                 throw new InternalError(`Cannot fetch token seller contract address`);
             }
