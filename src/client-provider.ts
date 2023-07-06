@@ -234,9 +234,9 @@ export class ZkBobProvider {
             try {
                 const pool = this.pool();
                 denominator = await this.network().getDenominator(pool.poolAddress);
-                const negMask = 1n << 255n;
-                if (denominator & negMask) {
-                    denominator = -denominator;
+                const negFlag = 1n << 255n;
+                if (denominator & negFlag) {
+                    denominator = -(denominator ^ negFlag);
                 }
                 this.poolDenominators[this.curPool] = denominator;
             } catch (err) {
@@ -322,13 +322,13 @@ export class ZkBobProvider {
     // Convert native pool amount to the base units
     public async shieldedAmountToWei(amountShielded: bigint): Promise<bigint> {
         const denominator = await this.denominator();
-        return denominator > 0 ? amountShielded * denominator : amountShielded / denominator;
+        return denominator > 0 ? amountShielded * denominator : amountShielded / (-denominator);
     }
     
     // Convert base units to the native pool amount
     public async weiToShieldedAmount(amountWei: bigint): Promise<bigint> {
         const denominator = await this.denominator();
-        return denominator > 0 ? amountWei / denominator : amountWei * denominator;
+        return denominator > 0 ? amountWei / denominator : amountWei * (-denominator);
     }
 
     // Round up the fee if needed with fixed fee decimal places (after point)
