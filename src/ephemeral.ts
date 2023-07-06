@@ -337,9 +337,7 @@ export class EphemeralPool {
     private async getNativeBalance(address: string): Promise<bigint> {
         const result = await this.web3.eth.getBalance(address);
         
-        return this.poolDenominator > 0 ? 
-                BigInt(result) / this.poolDenominator :
-                BigInt(result) * (-this.poolDenominator);
+        return BigInt(result);
     }
     
     // in pool dimension
