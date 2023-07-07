@@ -14,7 +14,7 @@ import {
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
 import { JobInfo, RelayerFee } from './services/relayer';
-import { TreeState, ZkBobProvider } from './client-provider';
+import { GiftCardProperties, TreeState, ZkBobProvider } from './client-provider';
 import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
 
@@ -299,9 +299,20 @@ export class ZkBobClient extends ZkBobProvider {
     return confirmedBalance + pendingDelta;
   }
 
+  public async giftCardBalance(giftCard: GiftCardProperties): Promise<bigint> {
+    const giftCardAcc: AccountConfig = {
+      sk: giftCard.sk,
+      pool: giftCard.poolAlias,
+      birthindex: giftCard.birthIndex,
+      proverMode: this.getProverMode(),
+    }
+
+    return this.giftCardBalanceInternal(giftCardAcc);
+  }
+
   // `giftCardAccount` fields should be set with the gift card associated properties:
   // (sk, birthIndex, pool); proverMode field doesn't affect here
-  public async giftCardBalance(giftCardAcc: AccountConfig): Promise<bigint> {
+  private async giftCardBalanceInternal(giftCardAcc: AccountConfig): Promise<bigint> {
     if (giftCardAcc.pool != this.currentPool()) {
       throw new InternalError(`The current pool (${this.currentPool()}) doesn't match gift-card's one (${giftCardAcc.pool})`);
     }
@@ -896,31 +907,39 @@ export class ZkBobClient extends ZkBobProvider {
     return jobsIds;
   }
 
-  // Transfer shielded tokens from the another account to the current account
-  // It's suitable for gift-cards redeeming
+  // Transfer shielded tokens from the gift-card account to the current account
   // NOTE: for simplicity we assume the multitransfer doesn't applicable for gift-cards
   // (i.e. any redemption can be done in a single transaction)
-  public async redeemGiftCard(giftCardAcc: AccountConfig): Promise<string> {
+  public async redeemGiftCard(giftCard: GiftCardProperties, prefferedProvingMode?: ProverMode): Promise<string> {
     if (!this.account) {
       throw new InternalError(`Cannot redeem gift card to the uninitialized account`);
     }
-    if (giftCardAcc.pool != this.curPool) {
-      throw new InternalError(`Cannot redeem gift card due to unsuitable pool (gift-card pool: ${giftCardAcc.pool}, current pool: ${this.curPool})`);
+    if (giftCard.poolAlias != this.curPool) {
+      throw new InternalError(`Cannot redeem gift card due to unsuitable pool (gift-card pool: ${giftCard.poolAlias}, current pool: ${this.curPool})`);
+    }
+    
+    const giftCardAcc: AccountConfig = {
+        sk: giftCard.sk,
+        pool: giftCard.poolAlias,
+        birthindex: giftCard.birthIndex,
+        proverMode: prefferedProvingMode ?? this.getProverMode(),
     }
     
     const accId = accountId(giftCardAcc);
-    const giftCardBalance = await this.giftCardBalance(giftCardAcc);
-    const fee = await this.atomicTxFee(TxType.Transfer);
+    const giftCardBalance = await this.giftCardBalanceInternal(giftCardAcc);
+    const minFee = await this.atomicTxFee(TxType.Transfer);
     const minTxAmount = await this.minTxAmount();
-    if (giftCardBalance - fee < minTxAmount) {
-      throw new TxInsufficientFundsError(minTxAmount + fee, giftCardBalance)
+    if (giftCardBalance - minFee < minTxAmount) {
+      throw new TxInsufficientFundsError(minTxAmount + minFee, giftCardBalance)
     }
 
-    const redeemAmount = giftCardBalance - fee; // full redemption
+    const bigIntMin = (...args) => args.reduce((m, e) => e < m ? e : m);
+    const redeemAmount =  bigIntMin((giftCardBalance - minFee), giftCard.balance);
     const dstAddr = await this.generateAddress(); // getting address from the current account
+    const actualFee = giftCardBalance - redeemAmount; // fee can be greater than needed to make redemption amount equals to nominal
     const oneTx: ITransferData = {
       outputs: [{to: dstAddr, amount: `${redeemAmount}`}],
-      fee: fee.toString(),
+      fee: actualFee.toString(),
     };
     const giftCardState = this.auxZpStates[accId];
     const txData = await giftCardState.createTransferOptimistic(oneTx, this.zeroOptimisticState());
@@ -939,7 +958,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     // Temporary save transaction in the history module for the current account
     const ts = Math.floor(Date.now() / 1000);
-    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], fee, ts, '0', true);
+    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], actualFee, ts, '0', true);
     this.zpState().history?.keepQueuedTransactions([rec], jobId);
 
     // forget the gift card state 
