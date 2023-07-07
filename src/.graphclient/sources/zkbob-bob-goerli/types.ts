@@ -546,6 +546,6 @@ export type _SubgraphErrorPolicy_ =
 
   export type Context = {
       ["zkbob-bob-goerli"]: { Query: QuerySdk, Mutation: MutationSdk, Subscription: SubscriptionSdk },
-      ["subgraphName"]: Scalars['ID']
+      ["subgraphEndpoint"]: Scalars['ID']
     };
 }

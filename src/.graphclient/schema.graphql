@@ -210,7 +210,7 @@ type DirectDeposit {
   bnClosed: BigInt
   tsClosed: BigInt
   txClosed: Bytes
-  subgraphName: String!
+  subgraphEndpoint: String!
 }
 
 input DirectDeposit_filter {

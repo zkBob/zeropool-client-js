@@ -3,6 +3,7 @@ import { InternalError } from "../errors";
 import { NetworkBackend, PreparedTransaction } from "../networks/network";
 import { getBuiltGraphSDK } from "../.graphclient";
 import { ZkBobState } from "../state";
+import { hostedServiceDefaultURL } from "./dd-resolvers";
 
 const DD_FEE_LIFETIME = 3600;
 
@@ -53,7 +54,7 @@ export class DirectDepositProcessor {
         this.state = state;
 
         this.sdk = getBuiltGraphSDK({
-            subgraphName: pool.ddSubgraph,
+            subgraphEndpoint: this.subgraphEndpoint(),
         })
     }
 
@@ -109,11 +110,21 @@ export class DirectDepositProcessor {
         }
     }
 
+    protected subgraphEndpoint(): string | undefined {
+        if (this.subgraphName) {
+            if (this.subgraphName.indexOf('/') == -1) {
+                return `${hostedServiceDefaultURL}${this.subgraphName}`;
+            }
+        }
+
+        return this.subgraphName;
+    }
+
     public async pendingDirectDeposits(): Promise<DirectDeposit[]> {
 
-        if (this.subgraphName !== undefined) {
+        if (this.subgraphEndpoint()) {
             const allPendingDDs = await this.sdk.PendingDirectDeposits({}, {
-                subgraphName: this.subgraphName,
+                subgraphEndpoint: this.subgraphEndpoint(),
             }).then((data) => data.directDeposits);
 
             if (Array.isArray(allPendingDDs)) {

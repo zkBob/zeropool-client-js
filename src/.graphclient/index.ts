@@ -211,7 +211,7 @@ export type DirectDeposit = {
   bnClosed?: Maybe<Scalars['BigInt']>;
   tsClosed?: Maybe<Scalars['BigInt']>;
   txClosed?: Maybe<Scalars['Bytes']>;
-  subgraphName: Scalars['String'];
+  subgraphEndpoint: Scalars['String'];
 };
 
 export type DirectDeposit_filter = {
@@ -671,21 +671,21 @@ export type ResolversParentTypes = ResolversObject<{
 
 export type entityDirectiveArgs = { };
 
-export type entityDirectiveResolver<Result, Parent, ContextType = MeshContext & { subgraphName: string }, Args = entityDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
+export type entityDirectiveResolver<Result, Parent, ContextType = MeshContext & { subgraphEndpoint: string }, Args = entityDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
 
 export type subgraphIdDirectiveArgs = {
   id: Scalars['String'];
 };
 
-export type subgraphIdDirectiveResolver<Result, Parent, ContextType = MeshContext & { subgraphName: string }, Args = subgraphIdDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
+export type subgraphIdDirectiveResolver<Result, Parent, ContextType = MeshContext & { subgraphEndpoint: string }, Args = subgraphIdDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
 
 export type derivedFromDirectiveArgs = {
   field: Scalars['String'];
 };
 
-export type derivedFromDirectiveResolver<Result, Parent, ContextType = MeshContext & { subgraphName: string }, Args = derivedFromDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
+export type derivedFromDirectiveResolver<Result, Parent, ContextType = MeshContext & { subgraphEndpoint: string }, Args = derivedFromDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
 
-export type QueryResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']> = ResolversObject<{
+export type QueryResolvers<ContextType = MeshContext & { subgraphEndpoint: string }, ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']> = ResolversObject<{
   directDeposit?: Resolver<Maybe<ResolversTypes['DirectDeposit']>, ParentType, ContextType, RequireFields<QuerydirectDepositArgs, 'id' | 'subgraphError'>>;
   directDeposits?: Resolver<Array<ResolversTypes['DirectDeposit']>, ParentType, ContextType, RequireFields<QuerydirectDepositsArgs, 'skip' | 'first' | 'subgraphError'>>;
   lastSyncBlock?: Resolver<Maybe<ResolversTypes['LastSyncBlock']>, ParentType, ContextType, RequireFields<QuerylastSyncBlockArgs, 'id' | 'subgraphError'>>;
@@ -695,7 +695,7 @@ export type QueryResolvers<ContextType = MeshContext & { subgraphName: string },
   _meta?: Resolver<Maybe<ResolversTypes['_Meta_']>, ParentType, ContextType, Partial<Query_metaArgs>>;
 }>;
 
-export type SubscriptionResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['Subscription'] = ResolversParentTypes['Subscription']> = ResolversObject<{
+export type SubscriptionResolvers<ContextType = MeshContext & { subgraphEndpoint: string }, ParentType extends ResolversParentTypes['Subscription'] = ResolversParentTypes['Subscription']> = ResolversObject<{
   directDeposit?: SubscriptionResolver<Maybe<ResolversTypes['DirectDeposit']>, "directDeposit", ParentType, ContextType, RequireFields<SubscriptiondirectDepositArgs, 'id' | 'subgraphError'>>;
   directDeposits?: SubscriptionResolver<Array<ResolversTypes['DirectDeposit']>, "directDeposits", ParentType, ContextType, RequireFields<SubscriptiondirectDepositsArgs, 'skip' | 'first' | 'subgraphError'>>;
   lastSyncBlock?: SubscriptionResolver<Maybe<ResolversTypes['LastSyncBlock']>, "lastSyncBlock", ParentType, ContextType, RequireFields<SubscriptionlastSyncBlockArgs, 'id' | 'subgraphError'>>;
@@ -717,7 +717,7 @@ export interface BytesScalarConfig extends GraphQLScalarTypeConfig<ResolversType
   name: 'Bytes';
 }
 
-export type DirectDepositResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['DirectDeposit'] = ResolversParentTypes['DirectDeposit']> = ResolversObject<{
+export type DirectDepositResolvers<ContextType = MeshContext & { subgraphEndpoint: string }, ParentType extends ResolversParentTypes['DirectDeposit'] = ResolversParentTypes['DirectDeposit']> = ResolversObject<{
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   pending?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   completed?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
@@ -733,7 +733,7 @@ export type DirectDepositResolvers<ContextType = MeshContext & { subgraphName: s
   bnClosed?: Resolver<Maybe<ResolversTypes['BigInt']>, ParentType, ContextType>;
   tsClosed?: Resolver<Maybe<ResolversTypes['BigInt']>, ParentType, ContextType>;
   txClosed?: Resolver<Maybe<ResolversTypes['Bytes']>, ParentType, ContextType>;
-  subgraphName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  subgraphEndpoint?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
@@ -741,13 +741,13 @@ export interface Int8ScalarConfig extends GraphQLScalarTypeConfig<ResolversTypes
   name: 'Int8';
 }
 
-export type LastSyncBlockResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['LastSyncBlock'] = ResolversParentTypes['LastSyncBlock']> = ResolversObject<{
+export type LastSyncBlockResolvers<ContextType = MeshContext & { subgraphEndpoint: string }, ParentType extends ResolversParentTypes['LastSyncBlock'] = ResolversParentTypes['LastSyncBlock']> = ResolversObject<{
   id?: Resolver<ResolversTypes['Bytes'], ParentType, ContextType>;
   block?: Resolver<Maybe<ResolversTypes['BigInt']>, ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
-export type MessageResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['Message'] = ResolversParentTypes['Message']> = ResolversObject<{
+export type MessageResolvers<ContextType = MeshContext & { subgraphEndpoint: string }, ParentType extends ResolversParentTypes['Message'] = ResolversParentTypes['Message']> = ResolversObject<{
   id?: Resolver<ResolversTypes['Bytes'], ParentType, ContextType>;
   index?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   hash?: Resolver<ResolversTypes['Bytes'], ParentType, ContextType>;
@@ -758,21 +758,21 @@ export type MessageResolvers<ContextType = MeshContext & { subgraphName: string 
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
-export type _Block_Resolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['_Block_'] = ResolversParentTypes['_Block_']> = ResolversObject<{
+export type _Block_Resolvers<ContextType = MeshContext & { subgraphEndpoint: string }, ParentType extends ResolversParentTypes['_Block_'] = ResolversParentTypes['_Block_']> = ResolversObject<{
   hash?: Resolver<Maybe<ResolversTypes['Bytes']>, ParentType, ContextType>;
   number?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
   timestamp?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
-export type _Meta_Resolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['_Meta_'] = ResolversParentTypes['_Meta_']> = ResolversObject<{
+export type _Meta_Resolvers<ContextType = MeshContext & { subgraphEndpoint: string }, ParentType extends ResolversParentTypes['_Meta_'] = ResolversParentTypes['_Meta_']> = ResolversObject<{
   block?: Resolver<ResolversTypes['_Block_'], ParentType, ContextType>;
   deployment?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   hasIndexingErrors?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
-export type Resolvers<ContextType = MeshContext & { subgraphName: string }> = ResolversObject<{
+export type Resolvers<ContextType = MeshContext & { subgraphEndpoint: string }> = ResolversObject<{
   Query?: QueryResolvers<ContextType>;
   Subscription?: SubscriptionResolvers<ContextType>;
   BigDecimal?: GraphQLScalarType;
@@ -786,7 +786,7 @@ export type Resolvers<ContextType = MeshContext & { subgraphName: string }> = Re
   _Meta_?: _Meta_Resolvers<ContextType>;
 }>;
 
-export type DirectiveResolvers<ContextType = MeshContext & { subgraphName: string }> = ResolversObject<{
+export type DirectiveResolvers<ContextType = MeshContext & { subgraphEndpoint: string }> = ResolversObject<{
   entity?: entityDirectiveResolver<any, any, ContextType>;
   subgraphId?: subgraphIdDirectiveResolver<any, any, ContextType>;
   derivedFrom?: derivedFromDirectiveResolver<any, any, ContextType>;
@@ -837,7 +837,7 @@ const additionalEnvelopPlugins: MeshPlugin<any>[] = [];
 const zkbobBobGoerliTransforms = [];
 const zkbobBobGoerliHandler = new GraphqlHandler({
               name: "zkbob-bob-goerli",
-              config: {"endpoint":"https://api.thegraph.com/subgraphs/name/zkbob/{context.subgraphName:zkbob-bob-goerli}"},
+              config: {"endpoint":"{context.subgraphEndpoint:https://api.thegraph.com/subgraphs/name/zkbob/zkbob-bob-goerli}"},
               baseDir,
               cache,
               pubsub,
@@ -850,7 +850,7 @@ sources[0] = {
           handler: zkbobBobGoerliHandler,
           transforms: zkbobBobGoerliTransforms
         }
-const additionalTypeDefs = [parse("extend type DirectDeposit {\n  subgraphName: String!\n}"),] as any[];
+const additionalTypeDefs = [parse("extend type DirectDeposit {\n  subgraphEndpoint: String!\n}"),] as any[];
 const additionalResolvers = await Promise.all([
         import("../dd/dd-resolvers")
             .then(m => m.resolvers || m.default || m)

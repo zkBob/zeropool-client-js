@@ -1,7 +1,11 @@
 import { Resolvers, MeshContext } from '../.graphclient'
 
+export const hostedServiceDefaultURL = 'https://api.thegraph.com/subgraphs/name/zkbob/';
+export const defaultSubgraphName = 'zkbob-bob-goerli';
+export const defaultSubgraphEndpoint = `${hostedServiceDefaultURL}${defaultSubgraphName}`;
+
 export const resolvers: Resolvers = {
   DirectDeposit: {
-    subgraphName: (root, args, context, info) => context.subgraphName || 'zkbob-bob-goerli', // The value we provide in the config
+    subgraphEndpoint: (_root, _args, context, _info) => context.subgraphEndpoint || defaultSubgraphEndpoint,
   },
 }

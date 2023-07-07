@@ -2,11 +2,11 @@ sources:
   - name: zkbob-bob-goerli
     handler:
       graphql:
-        endpoint: https://api.thegraph.com/subgraphs/name/zkbob/{context.subgraphName:zkbob-bob-goerli}
+        endpoint: '{context.subgraphEndpoint:https://api.thegraph.com/subgraphs/name/zkbob/zkbob-bob-goerli}'
 
 additionalTypeDefs: |
   extend type DirectDeposit {
-    subgraphName: String!
+    subgraphEndpoint: String!
   }
 
 additionalResolvers:
@@ -16,4 +16,4 @@ documents:
   - ./dd/dd-query.graphql
 
 codegen:
-  contextType: 'MeshContext & { subgraphName: string }'
+  contextType: 'MeshContext & { subgraphEndpoint: string }'
