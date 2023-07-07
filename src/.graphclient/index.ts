@@ -1,5 +1,8 @@
 // @ts-nocheck
 import { GraphQLResolveInfo, SelectionSetNode, FieldNode, GraphQLScalarType, GraphQLScalarTypeConfig } from 'graphql';
+import { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core';
+import { gql } from '@graphql-mesh/utils';
+
 import type { GetMeshOptions } from '@graphql-mesh/runtime';
 import type { YamlConfig } from '@graphql-mesh/types';
 import { PubSub } from '@graphql-mesh/utils';
@@ -10,7 +13,9 @@ import { fetch as fetchFn } from '@whatwg-node/fetch';
 import { MeshResolvedSource } from '@graphql-mesh/runtime';
 import { MeshTransform, MeshPlugin } from '@graphql-mesh/types';
 import GraphqlHandler from "@graphql-mesh/graphql"
+import { parse } from 'graphql';
 import BareMerger from "@graphql-mesh/merger-bare";
+import { printWithCache } from '@graphql-mesh/utils';
 import { createMeshHTTPHandler, MeshHTTPHandler } from '@graphql-mesh/http';
 import { getMesh, ExecuteMeshFn, SubscribeMeshFn, MeshContext as BaseMeshContext, MeshInstance } from '@graphql-mesh/runtime';
 import { MeshStore, FsStoreStorageAdapter } from '@graphql-mesh/store';
@@ -40,6 +45,146 @@ export type Scalars = {
   Int8: any;
 };
 
+export type Query = {
+  directDeposit?: Maybe<DirectDeposit>;
+  directDeposits: Array<DirectDeposit>;
+  lastSyncBlock?: Maybe<LastSyncBlock>;
+  lastSyncBlocks: Array<LastSyncBlock>;
+  message?: Maybe<Message>;
+  messages: Array<Message>;
+  /** Access to subgraph metadata */
+  _meta?: Maybe<_Meta_>;
+};
+
+
+export type QuerydirectDepositArgs = {
+  id: Scalars['ID'];
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type QuerydirectDepositsArgs = {
+  skip?: InputMaybe<Scalars['Int']>;
+  first?: InputMaybe<Scalars['Int']>;
+  orderBy?: InputMaybe<DirectDeposit_orderBy>;
+  orderDirection?: InputMaybe<OrderDirection>;
+  where?: InputMaybe<DirectDeposit_filter>;
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type QuerylastSyncBlockArgs = {
+  id: Scalars['ID'];
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type QuerylastSyncBlocksArgs = {
+  skip?: InputMaybe<Scalars['Int']>;
+  first?: InputMaybe<Scalars['Int']>;
+  orderBy?: InputMaybe<LastSyncBlock_orderBy>;
+  orderDirection?: InputMaybe<OrderDirection>;
+  where?: InputMaybe<LastSyncBlock_filter>;
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type QuerymessageArgs = {
+  id: Scalars['ID'];
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type QuerymessagesArgs = {
+  skip?: InputMaybe<Scalars['Int']>;
+  first?: InputMaybe<Scalars['Int']>;
+  orderBy?: InputMaybe<Message_orderBy>;
+  orderDirection?: InputMaybe<OrderDirection>;
+  where?: InputMaybe<Message_filter>;
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type Query_metaArgs = {
+  block?: InputMaybe<Block_height>;
+};
+
+export type Subscription = {
+  directDeposit?: Maybe<DirectDeposit>;
+  directDeposits: Array<DirectDeposit>;
+  lastSyncBlock?: Maybe<LastSyncBlock>;
+  lastSyncBlocks: Array<LastSyncBlock>;
+  message?: Maybe<Message>;
+  messages: Array<Message>;
+  /** Access to subgraph metadata */
+  _meta?: Maybe<_Meta_>;
+};
+
+
+export type SubscriptiondirectDepositArgs = {
+  id: Scalars['ID'];
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type SubscriptiondirectDepositsArgs = {
+  skip?: InputMaybe<Scalars['Int']>;
+  first?: InputMaybe<Scalars['Int']>;
+  orderBy?: InputMaybe<DirectDeposit_orderBy>;
+  orderDirection?: InputMaybe<OrderDirection>;
+  where?: InputMaybe<DirectDeposit_filter>;
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type SubscriptionlastSyncBlockArgs = {
+  id: Scalars['ID'];
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type SubscriptionlastSyncBlocksArgs = {
+  skip?: InputMaybe<Scalars['Int']>;
+  first?: InputMaybe<Scalars['Int']>;
+  orderBy?: InputMaybe<LastSyncBlock_orderBy>;
+  orderDirection?: InputMaybe<OrderDirection>;
+  where?: InputMaybe<LastSyncBlock_filter>;
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type SubscriptionmessageArgs = {
+  id: Scalars['ID'];
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type SubscriptionmessagesArgs = {
+  skip?: InputMaybe<Scalars['Int']>;
+  first?: InputMaybe<Scalars['Int']>;
+  orderBy?: InputMaybe<Message_orderBy>;
+  orderDirection?: InputMaybe<OrderDirection>;
+  where?: InputMaybe<Message_filter>;
+  block?: InputMaybe<Block_height>;
+  subgraphError?: _SubgraphErrorPolicy_;
+};
+
+
+export type Subscription_metaArgs = {
+  block?: InputMaybe<Block_height>;
+};
+
 export type BlockChangedFilter = {
   number_gte: Scalars['Int'];
 };
@@ -66,6 +211,7 @@ export type DirectDeposit = {
   bnClosed?: Maybe<Scalars['BigInt']>;
   tsClosed?: Maybe<Scalars['BigInt']>;
   txClosed?: Maybe<Scalars['Bytes']>;
+  subgraphName: Scalars['String'];
 };
 
 export type DirectDeposit_filter = {
@@ -353,146 +499,6 @@ export type OrderDirection =
   | 'asc'
   | 'desc';
 
-export type Query = {
-  directDeposit?: Maybe<DirectDeposit>;
-  directDeposits: Array<DirectDeposit>;
-  lastSyncBlock?: Maybe<LastSyncBlock>;
-  lastSyncBlocks: Array<LastSyncBlock>;
-  message?: Maybe<Message>;
-  messages: Array<Message>;
-  /** Access to subgraph metadata */
-  _meta?: Maybe<_Meta_>;
-};
-
-
-export type QuerydirectDepositArgs = {
-  id: Scalars['ID'];
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type QuerydirectDepositsArgs = {
-  skip?: InputMaybe<Scalars['Int']>;
-  first?: InputMaybe<Scalars['Int']>;
-  orderBy?: InputMaybe<DirectDeposit_orderBy>;
-  orderDirection?: InputMaybe<OrderDirection>;
-  where?: InputMaybe<DirectDeposit_filter>;
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type QuerylastSyncBlockArgs = {
-  id: Scalars['ID'];
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type QuerylastSyncBlocksArgs = {
-  skip?: InputMaybe<Scalars['Int']>;
-  first?: InputMaybe<Scalars['Int']>;
-  orderBy?: InputMaybe<LastSyncBlock_orderBy>;
-  orderDirection?: InputMaybe<OrderDirection>;
-  where?: InputMaybe<LastSyncBlock_filter>;
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type QuerymessageArgs = {
-  id: Scalars['ID'];
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type QuerymessagesArgs = {
-  skip?: InputMaybe<Scalars['Int']>;
-  first?: InputMaybe<Scalars['Int']>;
-  orderBy?: InputMaybe<Message_orderBy>;
-  orderDirection?: InputMaybe<OrderDirection>;
-  where?: InputMaybe<Message_filter>;
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type Query_metaArgs = {
-  block?: InputMaybe<Block_height>;
-};
-
-export type Subscription = {
-  directDeposit?: Maybe<DirectDeposit>;
-  directDeposits: Array<DirectDeposit>;
-  lastSyncBlock?: Maybe<LastSyncBlock>;
-  lastSyncBlocks: Array<LastSyncBlock>;
-  message?: Maybe<Message>;
-  messages: Array<Message>;
-  /** Access to subgraph metadata */
-  _meta?: Maybe<_Meta_>;
-};
-
-
-export type SubscriptiondirectDepositArgs = {
-  id: Scalars['ID'];
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type SubscriptiondirectDepositsArgs = {
-  skip?: InputMaybe<Scalars['Int']>;
-  first?: InputMaybe<Scalars['Int']>;
-  orderBy?: InputMaybe<DirectDeposit_orderBy>;
-  orderDirection?: InputMaybe<OrderDirection>;
-  where?: InputMaybe<DirectDeposit_filter>;
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type SubscriptionlastSyncBlockArgs = {
-  id: Scalars['ID'];
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type SubscriptionlastSyncBlocksArgs = {
-  skip?: InputMaybe<Scalars['Int']>;
-  first?: InputMaybe<Scalars['Int']>;
-  orderBy?: InputMaybe<LastSyncBlock_orderBy>;
-  orderDirection?: InputMaybe<OrderDirection>;
-  where?: InputMaybe<LastSyncBlock_filter>;
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type SubscriptionmessageArgs = {
-  id: Scalars['ID'];
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type SubscriptionmessagesArgs = {
-  skip?: InputMaybe<Scalars['Int']>;
-  first?: InputMaybe<Scalars['Int']>;
-  orderBy?: InputMaybe<Message_orderBy>;
-  orderDirection?: InputMaybe<OrderDirection>;
-  where?: InputMaybe<Message_filter>;
-  block?: InputMaybe<Block_height>;
-  subgraphError?: _SubgraphErrorPolicy_;
-};
-
-
-export type Subscription_metaArgs = {
-  block?: InputMaybe<Block_height>;
-};
-
 export type _Block_ = {
   /** The hash of the block */
   hash?: Maybe<Scalars['Bytes']>;
@@ -610,6 +616,8 @@ export type DirectiveResolverFn<TResult = {}, TParent = {}, TContext = {}, TArgs
 
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = ResolversObject<{
+  Query: ResolverTypeWrapper<{}>;
+  Subscription: ResolverTypeWrapper<{}>;
   BigDecimal: ResolverTypeWrapper<Scalars['BigDecimal']>;
   BigInt: ResolverTypeWrapper<Scalars['BigInt']>;
   BlockChangedFilter: BlockChangedFilter;
@@ -630,9 +638,7 @@ export type ResolversTypes = ResolversObject<{
   Message_filter: Message_filter;
   Message_orderBy: Message_orderBy;
   OrderDirection: OrderDirection;
-  Query: ResolverTypeWrapper<{}>;
   String: ResolverTypeWrapper<Scalars['String']>;
-  Subscription: ResolverTypeWrapper<{}>;
   _Block_: ResolverTypeWrapper<_Block_>;
   _Meta_: ResolverTypeWrapper<_Meta_>;
   _SubgraphErrorPolicy_: _SubgraphErrorPolicy_;
@@ -640,6 +646,8 @@ export type ResolversTypes = ResolversObject<{
 
 /** Mapping between all available schema types and the resolvers parents */
 export type ResolversParentTypes = ResolversObject<{
+  Query: {};
+  Subscription: {};
   BigDecimal: Scalars['BigDecimal'];
   BigInt: Scalars['BigInt'];
   BlockChangedFilter: BlockChangedFilter;
@@ -656,28 +664,46 @@ export type ResolversParentTypes = ResolversObject<{
   LastSyncBlock_filter: LastSyncBlock_filter;
   Message: Message;
   Message_filter: Message_filter;
-  Query: {};
   String: Scalars['String'];
-  Subscription: {};
   _Block_: _Block_;
   _Meta_: _Meta_;
 }>;
 
 export type entityDirectiveArgs = { };
 
-export type entityDirectiveResolver<Result, Parent, ContextType = MeshContext, Args = entityDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
+export type entityDirectiveResolver<Result, Parent, ContextType = MeshContext & { subgraphName: string }, Args = entityDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
 
 export type subgraphIdDirectiveArgs = {
   id: Scalars['String'];
 };
 
-export type subgraphIdDirectiveResolver<Result, Parent, ContextType = MeshContext, Args = subgraphIdDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
+export type subgraphIdDirectiveResolver<Result, Parent, ContextType = MeshContext & { subgraphName: string }, Args = subgraphIdDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
 
 export type derivedFromDirectiveArgs = {
   field: Scalars['String'];
 };
 
-export type derivedFromDirectiveResolver<Result, Parent, ContextType = MeshContext, Args = derivedFromDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
+export type derivedFromDirectiveResolver<Result, Parent, ContextType = MeshContext & { subgraphName: string }, Args = derivedFromDirectiveArgs> = DirectiveResolverFn<Result, Parent, ContextType, Args>;
+
+export type QueryResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']> = ResolversObject<{
+  directDeposit?: Resolver<Maybe<ResolversTypes['DirectDeposit']>, ParentType, ContextType, RequireFields<QuerydirectDepositArgs, 'id' | 'subgraphError'>>;
+  directDeposits?: Resolver<Array<ResolversTypes['DirectDeposit']>, ParentType, ContextType, RequireFields<QuerydirectDepositsArgs, 'skip' | 'first' | 'subgraphError'>>;
+  lastSyncBlock?: Resolver<Maybe<ResolversTypes['LastSyncBlock']>, ParentType, ContextType, RequireFields<QuerylastSyncBlockArgs, 'id' | 'subgraphError'>>;
+  lastSyncBlocks?: Resolver<Array<ResolversTypes['LastSyncBlock']>, ParentType, ContextType, RequireFields<QuerylastSyncBlocksArgs, 'skip' | 'first' | 'subgraphError'>>;
+  message?: Resolver<Maybe<ResolversTypes['Message']>, ParentType, ContextType, RequireFields<QuerymessageArgs, 'id' | 'subgraphError'>>;
+  messages?: Resolver<Array<ResolversTypes['Message']>, ParentType, ContextType, RequireFields<QuerymessagesArgs, 'skip' | 'first' | 'subgraphError'>>;
+  _meta?: Resolver<Maybe<ResolversTypes['_Meta_']>, ParentType, ContextType, Partial<Query_metaArgs>>;
+}>;
+
+export type SubscriptionResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['Subscription'] = ResolversParentTypes['Subscription']> = ResolversObject<{
+  directDeposit?: SubscriptionResolver<Maybe<ResolversTypes['DirectDeposit']>, "directDeposit", ParentType, ContextType, RequireFields<SubscriptiondirectDepositArgs, 'id' | 'subgraphError'>>;
+  directDeposits?: SubscriptionResolver<Array<ResolversTypes['DirectDeposit']>, "directDeposits", ParentType, ContextType, RequireFields<SubscriptiondirectDepositsArgs, 'skip' | 'first' | 'subgraphError'>>;
+  lastSyncBlock?: SubscriptionResolver<Maybe<ResolversTypes['LastSyncBlock']>, "lastSyncBlock", ParentType, ContextType, RequireFields<SubscriptionlastSyncBlockArgs, 'id' | 'subgraphError'>>;
+  lastSyncBlocks?: SubscriptionResolver<Array<ResolversTypes['LastSyncBlock']>, "lastSyncBlocks", ParentType, ContextType, RequireFields<SubscriptionlastSyncBlocksArgs, 'skip' | 'first' | 'subgraphError'>>;
+  message?: SubscriptionResolver<Maybe<ResolversTypes['Message']>, "message", ParentType, ContextType, RequireFields<SubscriptionmessageArgs, 'id' | 'subgraphError'>>;
+  messages?: SubscriptionResolver<Array<ResolversTypes['Message']>, "messages", ParentType, ContextType, RequireFields<SubscriptionmessagesArgs, 'skip' | 'first' | 'subgraphError'>>;
+  _meta?: SubscriptionResolver<Maybe<ResolversTypes['_Meta_']>, "_meta", ParentType, ContextType, Partial<Subscription_metaArgs>>;
+}>;
 
 export interface BigDecimalScalarConfig extends GraphQLScalarTypeConfig<ResolversTypes['BigDecimal'], any> {
   name: 'BigDecimal';
@@ -691,7 +717,7 @@ export interface BytesScalarConfig extends GraphQLScalarTypeConfig<ResolversType
   name: 'Bytes';
 }
 
-export type DirectDepositResolvers<ContextType = MeshContext, ParentType extends ResolversParentTypes['DirectDeposit'] = ResolversParentTypes['DirectDeposit']> = ResolversObject<{
+export type DirectDepositResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['DirectDeposit'] = ResolversParentTypes['DirectDeposit']> = ResolversObject<{
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   pending?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   completed?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
@@ -707,6 +733,7 @@ export type DirectDepositResolvers<ContextType = MeshContext, ParentType extends
   bnClosed?: Resolver<Maybe<ResolversTypes['BigInt']>, ParentType, ContextType>;
   tsClosed?: Resolver<Maybe<ResolversTypes['BigInt']>, ParentType, ContextType>;
   txClosed?: Resolver<Maybe<ResolversTypes['Bytes']>, ParentType, ContextType>;
+  subgraphName?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
@@ -714,13 +741,13 @@ export interface Int8ScalarConfig extends GraphQLScalarTypeConfig<ResolversTypes
   name: 'Int8';
 }
 
-export type LastSyncBlockResolvers<ContextType = MeshContext, ParentType extends ResolversParentTypes['LastSyncBlock'] = ResolversParentTypes['LastSyncBlock']> = ResolversObject<{
+export type LastSyncBlockResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['LastSyncBlock'] = ResolversParentTypes['LastSyncBlock']> = ResolversObject<{
   id?: Resolver<ResolversTypes['Bytes'], ParentType, ContextType>;
   block?: Resolver<Maybe<ResolversTypes['BigInt']>, ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
-export type MessageResolvers<ContextType = MeshContext, ParentType extends ResolversParentTypes['Message'] = ResolversParentTypes['Message']> = ResolversObject<{
+export type MessageResolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['Message'] = ResolversParentTypes['Message']> = ResolversObject<{
   id?: Resolver<ResolversTypes['Bytes'], ParentType, ContextType>;
   index?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   hash?: Resolver<ResolversTypes['Bytes'], ParentType, ContextType>;
@@ -731,41 +758,23 @@ export type MessageResolvers<ContextType = MeshContext, ParentType extends Resol
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
-export type QueryResolvers<ContextType = MeshContext, ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']> = ResolversObject<{
-  directDeposit?: Resolver<Maybe<ResolversTypes['DirectDeposit']>, ParentType, ContextType, RequireFields<QuerydirectDepositArgs, 'id' | 'subgraphError'>>;
-  directDeposits?: Resolver<Array<ResolversTypes['DirectDeposit']>, ParentType, ContextType, RequireFields<QuerydirectDepositsArgs, 'skip' | 'first' | 'subgraphError'>>;
-  lastSyncBlock?: Resolver<Maybe<ResolversTypes['LastSyncBlock']>, ParentType, ContextType, RequireFields<QuerylastSyncBlockArgs, 'id' | 'subgraphError'>>;
-  lastSyncBlocks?: Resolver<Array<ResolversTypes['LastSyncBlock']>, ParentType, ContextType, RequireFields<QuerylastSyncBlocksArgs, 'skip' | 'first' | 'subgraphError'>>;
-  message?: Resolver<Maybe<ResolversTypes['Message']>, ParentType, ContextType, RequireFields<QuerymessageArgs, 'id' | 'subgraphError'>>;
-  messages?: Resolver<Array<ResolversTypes['Message']>, ParentType, ContextType, RequireFields<QuerymessagesArgs, 'skip' | 'first' | 'subgraphError'>>;
-  _meta?: Resolver<Maybe<ResolversTypes['_Meta_']>, ParentType, ContextType, Partial<Query_metaArgs>>;
-}>;
-
-export type SubscriptionResolvers<ContextType = MeshContext, ParentType extends ResolversParentTypes['Subscription'] = ResolversParentTypes['Subscription']> = ResolversObject<{
-  directDeposit?: SubscriptionResolver<Maybe<ResolversTypes['DirectDeposit']>, "directDeposit", ParentType, ContextType, RequireFields<SubscriptiondirectDepositArgs, 'id' | 'subgraphError'>>;
-  directDeposits?: SubscriptionResolver<Array<ResolversTypes['DirectDeposit']>, "directDeposits", ParentType, ContextType, RequireFields<SubscriptiondirectDepositsArgs, 'skip' | 'first' | 'subgraphError'>>;
-  lastSyncBlock?: SubscriptionResolver<Maybe<ResolversTypes['LastSyncBlock']>, "lastSyncBlock", ParentType, ContextType, RequireFields<SubscriptionlastSyncBlockArgs, 'id' | 'subgraphError'>>;
-  lastSyncBlocks?: SubscriptionResolver<Array<ResolversTypes['LastSyncBlock']>, "lastSyncBlocks", ParentType, ContextType, RequireFields<SubscriptionlastSyncBlocksArgs, 'skip' | 'first' | 'subgraphError'>>;
-  message?: SubscriptionResolver<Maybe<ResolversTypes['Message']>, "message", ParentType, ContextType, RequireFields<SubscriptionmessageArgs, 'id' | 'subgraphError'>>;
-  messages?: SubscriptionResolver<Array<ResolversTypes['Message']>, "messages", ParentType, ContextType, RequireFields<SubscriptionmessagesArgs, 'skip' | 'first' | 'subgraphError'>>;
-  _meta?: SubscriptionResolver<Maybe<ResolversTypes['_Meta_']>, "_meta", ParentType, ContextType, Partial<Subscription_metaArgs>>;
-}>;
-
-export type _Block_Resolvers<ContextType = MeshContext, ParentType extends ResolversParentTypes['_Block_'] = ResolversParentTypes['_Block_']> = ResolversObject<{
+export type _Block_Resolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['_Block_'] = ResolversParentTypes['_Block_']> = ResolversObject<{
   hash?: Resolver<Maybe<ResolversTypes['Bytes']>, ParentType, ContextType>;
   number?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
   timestamp?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
-export type _Meta_Resolvers<ContextType = MeshContext, ParentType extends ResolversParentTypes['_Meta_'] = ResolversParentTypes['_Meta_']> = ResolversObject<{
+export type _Meta_Resolvers<ContextType = MeshContext & { subgraphName: string }, ParentType extends ResolversParentTypes['_Meta_'] = ResolversParentTypes['_Meta_']> = ResolversObject<{
   block?: Resolver<ResolversTypes['_Block_'], ParentType, ContextType>;
   deployment?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   hasIndexingErrors?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
-export type Resolvers<ContextType = MeshContext> = ResolversObject<{
+export type Resolvers<ContextType = MeshContext & { subgraphName: string }> = ResolversObject<{
+  Query?: QueryResolvers<ContextType>;
+  Subscription?: SubscriptionResolvers<ContextType>;
   BigDecimal?: GraphQLScalarType;
   BigInt?: GraphQLScalarType;
   Bytes?: GraphQLScalarType;
@@ -773,13 +782,11 @@ export type Resolvers<ContextType = MeshContext> = ResolversObject<{
   Int8?: GraphQLScalarType;
   LastSyncBlock?: LastSyncBlockResolvers<ContextType>;
   Message?: MessageResolvers<ContextType>;
-  Query?: QueryResolvers<ContextType>;
-  Subscription?: SubscriptionResolvers<ContextType>;
   _Block_?: _Block_Resolvers<ContextType>;
   _Meta_?: _Meta_Resolvers<ContextType>;
 }>;
 
-export type DirectiveResolvers<ContextType = MeshContext> = ResolversObject<{
+export type DirectiveResolvers<ContextType = MeshContext & { subgraphName: string }> = ResolversObject<{
   entity?: entityDirectiveResolver<any, any, ContextType>;
   subgraphId?: subgraphIdDirectiveResolver<any, any, ContextType>;
   derivedFrom?: derivedFromDirectiveResolver<any, any, ContextType>;
@@ -828,10 +835,9 @@ const sources: MeshResolvedSource[] = [];
 const transforms: MeshTransform[] = [];
 const additionalEnvelopPlugins: MeshPlugin<any>[] = [];
 const zkbobBobGoerliTransforms = [];
-const additionalTypeDefs = [] as any[];
 const zkbobBobGoerliHandler = new GraphqlHandler({
               name: "zkbob-bob-goerli",
-              config: {"endpoint":"https://api.thegraph.com/subgraphs/name/zkbob/zkbob-bob-goerli"},
+              config: {"endpoint":"https://api.thegraph.com/subgraphs/name/zkbob/{context.subgraphName:zkbob-bob-goerli}"},
               baseDir,
               cache,
               pubsub,
@@ -844,7 +850,11 @@ sources[0] = {
           handler: zkbobBobGoerliHandler,
           transforms: zkbobBobGoerliTransforms
         }
-const additionalResolvers = [] as any[]
+const additionalTypeDefs = [parse("extend type DirectDeposit {\n  subgraphName: String!\n}"),] as any[];
+const additionalResolvers = await Promise.all([
+        import("../dd/dd-resolvers")
+            .then(m => m.resolvers || m.default || m)
+      ]);
 const merger = new(BareMerger as any)({
         cache,
         pubsub,
@@ -864,7 +874,13 @@ const merger = new(BareMerger as any)({
     additionalEnvelopPlugins,
     get documents() {
       return [
-      
+      {
+        document: PendingDirectDepositsDocument,
+        get rawSDL() {
+          return printWithCache(PendingDirectDepositsDocument);
+        },
+        location: 'PendingDirectDepositsDocument.graphql'
+      }
     ];
     },
     fetchFn,
@@ -898,3 +914,37 @@ export function getBuiltGraphClient(): Promise<MeshInstance> {
 export const execute: ExecuteMeshFn = (...args) => getBuiltGraphClient().then(({ execute }) => execute(...args));
 
 export const subscribe: SubscribeMeshFn = (...args) => getBuiltGraphClient().then(({ subscribe }) => subscribe(...args));
+export function getBuiltGraphSDK<TGlobalContext = any, TOperationContext = any>(globalContext?: TGlobalContext) {
+  const sdkRequester$ = getBuiltGraphClient().then(({ sdkRequesterFactory }) => sdkRequesterFactory(globalContext));
+  return getSdk<TOperationContext, TGlobalContext>((...args) => sdkRequester$.then(sdkRequester => sdkRequester(...args)));
+}
+export type PendingDirectDepositsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type PendingDirectDepositsQuery = { directDeposits: Array<Pick<DirectDeposit, 'id' | 'zkAddress_pk' | 'zkAddress_diversifier' | 'deposit' | 'fallbackUser' | 'tsInit' | 'txInit'>> };
+
+
+export const PendingDirectDepositsDocument = gql`
+    query PendingDirectDeposits {
+  directDeposits(orderBy: bnInit, where: {pending: true}) {
+    id
+    zkAddress_pk
+    zkAddress_diversifier
+    deposit
+    fallbackUser
+    tsInit
+    txInit
+  }
+}
+    ` as unknown as DocumentNode<PendingDirectDepositsQuery, PendingDirectDepositsQueryVariables>;
+
+
+export type Requester<C = {}, E = unknown> = <R, V>(doc: DocumentNode, vars?: V, options?: C) => Promise<R> | AsyncIterable<R>
+export function getSdk<C, E>(requester: Requester<C, E>) {
+  return {
+    PendingDirectDeposits(variables?: PendingDirectDepositsQueryVariables, options?: C): Promise<PendingDirectDepositsQuery> {
+      return requester<PendingDirectDepositsQuery, PendingDirectDepositsQueryVariables>(PendingDirectDepositsDocument, variables, options) as Promise<PendingDirectDepositsQuery>;
+    }
+  };
+}
+export type Sdk = ReturnType<typeof getSdk>;

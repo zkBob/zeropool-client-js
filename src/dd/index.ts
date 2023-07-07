@@ -1,20 +1,8 @@
-import { Pool } from "./config";
-import { InternalError } from "./errors";
-import { NetworkBackend, PreparedTransaction } from "./networks/network";
-import { execute } from "./.graphclient"
-import { ZkBobState } from "./state";
-
-const ddQuery = `{
-    directDeposits(orderBy: bnInit, where: {pending: true}) {
-        id
-        zkAddress_pk
-        zkAddress_diversifier
-        deposit
-    	fallbackUser
-        tsInit
-        txInit
-    }
-}`;
+import { Pool } from "../config";
+import { InternalError } from "../errors";
+import { NetworkBackend, PreparedTransaction } from "../networks/network";
+import { getBuiltGraphSDK } from "../.graphclient";
+import { ZkBobState } from "../state";
 
 const DD_FEE_LIFETIME = 3600;
 
@@ -52,6 +40,7 @@ export class DirectDepositProcessor {
     protected isNativeSupported: boolean;
     protected subgraphName?: string;
     protected state: ZkBobState;
+    protected sdk;
 
     protected cachedFee?: FeeFetch;
     
@@ -62,6 +51,10 @@ export class DirectDepositProcessor {
         this.isNativeSupported = pool.isNative ?? false;
         this.subgraphName = pool.ddSubgraph;
         this.state = state;
+
+        this.sdk = getBuiltGraphSDK({
+            subgraphName: pool.ddSubgraph,
+        })
     }
 
     public async getQueueContract(): Promise<string> {
@@ -117,29 +110,33 @@ export class DirectDepositProcessor {
     }
 
     public async pendingDirectDeposits(): Promise<DirectDeposit[]> {
-        if (this.subgraphName == 'zkbob-bob-goerli') {
-            const allPendingDDs = (await execute(ddQuery, {})).data.directDeposits;
+
+        if (this.subgraphName !== undefined) {
+            const allPendingDDs = await this.sdk.PendingDirectDeposits({}, {
+                subgraphName: this.subgraphName,
+            }).then((data) => data.directDeposits);
+
             if (Array.isArray(allPendingDDs)) {
-                const myPendingDDs: DirectDeposit[] = await allPendingDDs.reduce(async (result, dd) => {
-                    const d = BigInt(dd.zkAddress_diversifier);
-                    const p_d = BigInt(dd.zkAddress_pk);
+                const myPendingDDs = (await Promise.all(allPendingDDs.map(async (subgraphDD) => {
+                    const d = BigInt(subgraphDD.zkAddress_diversifier);
+                    const p_d = BigInt(subgraphDD.zkAddress_pk);
                     const zkAddress = await this.state.assembleAddress(d.toString(), p_d.toString());
                     const isOwn = await this.state.isOwnAddress(zkAddress);
-                    if (isOwn) {
-                        const ownDD: DirectDeposit =  {
-                            id: BigInt(dd.id),
-                            state: DirectDepositState.Queued,
-                            amount: BigInt(dd.deposit),
-                            destination: zkAddress,
-                            fallback: dd.fallbackUser,
-                            timestamp: Number(dd.tsInit),
-                            queueTxHash: dd.txInit,
-                        };
-                        (await result).push(ownDD);
-                    }
+                    
+                    const dd: DirectDeposit =  {
+                        id: BigInt(subgraphDD.id),
+                        state: DirectDepositState.Queued,
+                        amount: BigInt(subgraphDD.deposit),
+                        destination: zkAddress,
+                        fallback: subgraphDD.fallbackUser,
+                        timestamp: Number(subgraphDD.tsInit),
+                        queueTxHash: subgraphDD.txInit,
+                    };
 
-                    return result;
-                 }, []);
+                    return {dd, isOwn};
+                })))
+                .filter((dd) => dd.isOwn)
+                .map((myDD) => myDD.dd);
 
                 return myPendingDDs;
             } else {
