@@ -910,7 +910,7 @@ export class ZkBobClient extends ZkBobProvider {
   // Transfer shielded tokens from the gift-card account to the current account
   // NOTE: for simplicity we assume the multitransfer doesn't applicable for gift-cards
   // (i.e. any redemption can be done in a single transaction)
-  public async redeemGiftCard(giftCard: GiftCardProperties, prefferedProvingMode?: ProverMode): Promise<string> {
+  public async redeemGiftCard(giftCard: GiftCardProperties, preferredProvingMode?: ProverMode): Promise<string> {
     if (!this.account) {
       throw new InternalError(`Cannot redeem gift card to the uninitialized account`);
     }
@@ -922,7 +922,7 @@ export class ZkBobClient extends ZkBobProvider {
         sk: giftCard.sk,
         pool: giftCard.poolAlias,
         birthindex: giftCard.birthIndex,
-        proverMode: prefferedProvingMode ?? this.getProverMode(),
+        proverMode: preferredProvingMode ?? this.getProverMode(),
     }
     
     const accId = accountId(giftCardAcc);
