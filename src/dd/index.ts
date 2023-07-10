@@ -67,7 +67,6 @@ export class DirectDepositProcessor {
     }
 
     public async getFee(): Promise<bigint> {
-        const queue = await this.getQueueContract();
 
         let fee = this.cachedFee;
         if (!fee || fee.timestamp + DD_FEE_LIFETIME * 1000 < Date.now()) {
