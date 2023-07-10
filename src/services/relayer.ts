@@ -255,7 +255,10 @@ export class ZkBobRelayer implements IZkBobService {
         },
         oneByteFee: BigInt(res.oneByteFee ?? '0')
       };
-    } else if (typeof feeResp === 'string') {
+    } else if (typeof feeResp === 'string' || 
+                typeof feeResp === 'number' ||
+                typeof feeResp === 'bigint'
+    ) {
       return {
         fee: {
           deposit: BigInt(feeResp),
