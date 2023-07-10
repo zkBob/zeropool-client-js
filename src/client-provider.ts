@@ -243,6 +243,10 @@ export class ZkBobProvider {
             try {
                 const pool = this.pool();
                 denominator = await this.network().getDenominator(pool.poolAddress);
+                const negFlag = 1n << 255n;
+                if (denominator & negFlag) {
+                    denominator = -(denominator ^ negFlag);
+                }
                 this.poolDenominators[this.curPool] = denominator;
             } catch (err) {
                 console.error(`Cannot fetch denominator value from the pool contract: ${err}`);
@@ -327,20 +331,23 @@ export class ZkBobProvider {
     // Convert native pool amount to the base units
     public async shieldedAmountToWei(amountShielded: bigint): Promise<bigint> {
         const denominator = await this.denominator();
-        return amountShielded * denominator;
+        return denominator > 0 ? amountShielded * denominator : amountShielded / (-denominator);
     }
     
     // Convert base units to the native pool amount
     public async weiToShieldedAmount(amountWei: bigint): Promise<bigint> {
         const denominator = await this.denominator();
-        return amountWei / denominator;
+        return denominator > 0 ? amountWei / denominator : amountWei * (-denominator);
     }
 
     // Round up the fee if needed with fixed fee decimal places (after point)
     protected async roundFee(fee: bigint): Promise<bigint> {
         const feeDecimals = this.pool().feeDecimals;
         if (feeDecimals !== undefined) {
-            const denomLog = (await this.denominator()).toString().length - 1;
+            const denominator = await this.denominator();
+            const denomLog = denominator > 0 ? 
+                        denominator.toString().length - 1 :
+                        -((-denominator).toString().length - 1);
             const poolResDigits = (await this.decimals()) - denomLog;
             if (poolResDigits > feeDecimals) {
                 const rounder = 10n ** BigInt(poolResDigits - feeDecimals);
