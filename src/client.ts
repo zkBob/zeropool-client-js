@@ -1020,7 +1020,8 @@ export class ZkBobClient extends ZkBobProvider {
       // Deposit and BridgeDeposit cases are independent on the user balance
       // Fee got from the native coins, so any deposit can be make within single tx
       calldataTotalLength = estimateCalldataLength(txType, 0);
-      total = relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataTotalLength);
+      const baseFee = await this.executionTxFee(txType, relayerFee);
+      total = baseFee + relayerFee.oneByteFee * BigInt(calldataTotalLength);
       total = roundFee ? await this.roundFee(total) : total;
     }
 
@@ -1042,8 +1043,9 @@ export class ZkBobClient extends ZkBobProvider {
     const relayerFee = await this.getRelayerFee();
     const aggregateTxLen = BigInt(estimateCalldataLength(TxType.Transfer, 0)); // aggregation txs are always transfers
     const finalTxLen = BigInt(estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0));
-    const aggregateTxFee = await this.roundFee(relayerFee.fee + aggregateTxLen * relayerFee.oneByteFee);
-    const finalTxFee = await this.roundFee(relayerFee.fee + finalTxLen * relayerFee.oneByteFee);
+    const baseFee = await this.executionTxFee(txType, relayerFee);
+    const aggregateTxFee = await this.roundFee(baseFee + aggregateTxLen * relayerFee.oneByteFee);
+    const finalTxFee = await this.roundFee(baseFee + finalTxLen * relayerFee.oneByteFee);
 
     const groupedNotesBalances = await this.getGroupedNotes();
     let accountBalance = await state.accountBalance();
@@ -1120,7 +1122,8 @@ export class ZkBobClient extends ZkBobProvider {
       }
 
       const calldataLength = estimateCalldataLength(TxType.Transfer, 0);
-      const fee = await this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataLength));
+      const baseFee = await this.executionTxFee(TxType.Transfer, relayerFee);
+      const fee = await this.roundFee(baseFee + relayerFee.oneByteFee * BigInt(calldataLength));
 
       const inNotesBalance = groupedNotesBalances[i];
       if (accountBalance + inNotesBalance < fee) {
@@ -1160,7 +1163,8 @@ export class ZkBobClient extends ZkBobProvider {
 
       const numOfNotes = (txType == TxType.Transfer) ? transfers[i].requests.length : 0;
       const calldataLength = estimateCalldataLength(txType, numOfNotes);
-      const fee = await this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataLength));
+      const baseFee = await this.executionTxFee(txType, relayerFee);
+      const fee = await this.roundFee(baseFee + relayerFee.oneByteFee * BigInt(calldataLength));
 
       if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
         // We haven't enough funds to perform such tx

@@ -48,7 +48,12 @@ const isRelayerInfo = (obj: any): obj is RelayerInfo => {
 }
 
 export interface RelayerFee {
-  fee: bigint;
+  fee: {
+    deposit: bigint;
+    transfer: bigint;
+    withdrawal: bigint;
+    permittableDeposit: bigint;
+  };
   oneByteFee: bigint;
 }
 
@@ -217,9 +222,16 @@ export class ZkBobRelayer implements IZkBobService {
   }
   
   public async fee(): Promise<RelayerFee> {
-    const url = new URL('/fee', this.url());
     const headers = defaultHeaders(this.supportId);
-    const res = await fetchJson(url.toString(), {headers}, this.type());
+    const url = new URL('/fee/v2', this.url());
+    const fallbackUrl = new URL('/fee', this.url());
+
+    let res;
+    try {
+      res = await fetchJson(url.toString(), {headers}, this.type());
+    } catch (err) {
+      res = await fetchJson(fallbackUrl.toString(), {headers}, this.type());
+    }
 
     if (typeof res !== 'object' || res === null || 
         (!res.hasOwnProperty('fee') && !res.hasOwnProperty('baseFee')))
@@ -227,10 +239,35 @@ export class ZkBobRelayer implements IZkBobService {
       throw new ServiceError(this.type(), 200, 'Incorrect response for dynamic fees');
     }
 
-    return {
-      fee: BigInt(res.fee ?? res.baseFee),
-      oneByteFee: BigInt(res.oneByteFee ?? '0')
-    };
+    const feeResp = res.fee ?? res.baseFee;
+    if (typeof feeResp === 'object' &&
+        feeResp.hasOwnProperty('deposit') &&
+        feeResp.hasOwnProperty('transfer') &&
+        feeResp.hasOwnProperty('withdrawal') &&
+        feeResp.hasOwnProperty('permittableDeposit')
+    ){
+      return {
+        fee: {
+          deposit: BigInt(feeResp.deposit),
+          transfer: BigInt(feeResp.transfer),
+          withdrawal: BigInt(feeResp.withdrawal),
+          permittableDeposit: BigInt(feeResp.permittableDeposit),
+        },
+        oneByteFee: BigInt(res.oneByteFee ?? '0')
+      };
+    } else if (typeof feeResp === 'string') {
+      return {
+        fee: {
+          deposit: BigInt(feeResp),
+          transfer: BigInt(feeResp),
+          withdrawal: BigInt(feeResp),
+          permittableDeposit: BigInt(feeResp),
+        },
+        oneByteFee: BigInt(res.oneByteFee ?? '0')
+      };
+    } else {
+      throw new ServiceError(this.type(), 200, 'Incorrect fee field');
+    }
   }
   
   public async limits(address: string | undefined): Promise<LimitsFetch> {

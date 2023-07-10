@@ -367,13 +367,25 @@ export class ZkBobProvider {
         return cachedFee.fee;
     }
 
+    protected async executionTxFee(txType: TxType, relayerFee?: RelayerFee): Promise<bigint> {
+        const fee = relayerFee ?? await this.getRelayerFee();
+        switch (txType) {
+            case TxType.Deposit: return fee.fee.deposit;
+            case TxType.Transfer: return fee.fee.transfer;
+            case TxType.Withdraw: return fee.fee.withdrawal;
+            case TxType.BridgeDeposit: return fee.fee.permittableDeposit;
+            default: throw new InternalError(`Unknown TxType: ${txType}`);
+        }
+    }
+
     // Min transaction fee in pool resolution (for regular transaction without any payload overhead)
     // To estimate fee for the concrete tx use account-based method (feeEstimate from client.ts)
     public async atomicTxFee(txType: TxType): Promise<bigint> {
         const relayerFee = await this.getRelayerFee();
         const calldataBytesCnt = estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0);
-
-        return this.roundFee(relayerFee.fee + relayerFee.oneByteFee * BigInt(calldataBytesCnt));
+        const baseFee = await this.executionTxFee(txType, relayerFee);
+        
+        return this.roundFee(baseFee + relayerFee.oneByteFee * BigInt(calldataBytesCnt));
     }
     
     // Max supported token swap during withdrawal, in token resolution (Gwei)
