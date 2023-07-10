@@ -10,18 +10,20 @@ import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
 import { 
-  InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
+  InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
 import { JobInfo, RelayerFee } from './services/relayer';
 import { TreeState, ZkBobProvider } from './client-provider';
 import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
+import { PERMIT2_CONTRACT } from './signers/permit2-signer';
+import { DirectDeposit, DirectDepositProcessor, DirectDepositType } from './dd';
 
 import { isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
 import { wrap } from 'comlink';
-import { PERMIT2_CONTRACT } from './signers/permit2-signer';
+import { PreparedTransaction } from './networks/network';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
@@ -70,6 +72,8 @@ export class ZkBobClient extends ZkBobProvider {
   private zpStates: { [poolAlias: string]: ZkBobState } = {};
   // Holds gift cards temporary states (id - gift card unique ID based on sk and pool)
   private auxZpStates: { [id: string]: ZkBobState } = {};
+  // Direct deposit processors are used to create DD and fetch DD pending txs
+  private ddProcessors: { [poolAlias: string]: DirectDepositProcessor } = {};
   // The single worker for the all pools
   // Currently we assume parameters are the same for the all pools
   private worker: any;
@@ -206,7 +210,7 @@ export class ZkBobClient extends ZkBobProvider {
         }
       }
 
-      this.zpStates[newPoolAlias] = await ZkBobState.create(
+      const state = await ZkBobState.create(
           this.account.sk,
           this.account.birthindex,
           networkName,
@@ -216,6 +220,8 @@ export class ZkBobClient extends ZkBobProvider {
           pool.tokenAddress,
           this.worker
         );
+      this.zpStates[newPoolAlias] = state;
+      this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state)
 
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {
@@ -340,6 +346,10 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     return await this.zpState().history?.getAllHistory() ?? [];
+  }
+
+  public async getPendingDDs(): Promise<DirectDeposit[]> {
+    return this.ddProcessor().pendingDirectDeposits();
   }
 
   // Generate compliance report
@@ -702,6 +712,42 @@ export class ZkBobClient extends ZkBobProvider {
       const depositSigner = DepositSignerFactory.createSigner(this.network(), pool.depositScheme);
       return depositSigner.signRequest(privKey, signingRequest);
     }, fromAddress.address, actualFee);
+  }
+
+  // Deposit funds 
+  public async directDeposit(
+    type: DirectDepositType,
+    fromAddress: string,
+    amount: bigint, // in pool resolution
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>, // txHash
+  ): Promise<void> {
+    const pool = this.pool();
+    const processor = this.ddProcessor();
+    const ddQueueAddress = await processor.getQueueContract();
+    const zkAddress = await this.generateAddress();
+
+    const limits = await this.getLimits(fromAddress);
+    if (amount > limits.dd.total) {
+      throw new TxLimitError(amount, limits.dd.total);
+    }
+
+    const fee = await processor.getFee();
+    let fullAmountNative = await this.shieldedAmountToWei(amount + fee);
+
+    if (type == DirectDepositType.Token) {
+      // For the token-based DD we should check allowance first
+      const curAllowance = await this.network().allowance(pool.tokenAddress, fromAddress, ddQueueAddress);
+      if (curAllowance < fullAmountNative) {
+        throw new TxDepositAllowanceTooLow(fullAmountNative, curAllowance, ddQueueAddress);
+      }
+    }
+    
+    const rawTx = await processor.prepareDirectDeposit(type, zkAddress, fullAmountNative, fromAddress, true);
+    const txHash = await sendTxCallback(rawTx);
+
+    console.log(`DD transaction sent: ${txHash}`)
+
+    return;
   }
 
   // Transfer shielded funds to the shielded address
@@ -1358,6 +1404,7 @@ export class ZkBobClient extends ZkBobProvider {
     return ephPool.getEphemeralAddressPrivateKey(index);
   }
 
+
   // ----------------=========< Statistic Routines >=========-----------------
   // | Calculating sync time                                                 |
   // -------------------------------------------------------------------------
@@ -1380,6 +1427,27 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     return undefined; // relevant stat doesn't found
+  }
+
+  // ------------------=========< Direct Deposits >=========------------------
+  // | Calculating sync time                                                 |
+  // -------------------------------------------------------------------------
+
+  protected ddProcessor(): DirectDepositProcessor {
+    const proccessor = this.ddProcessors[this.curPool];
+    if (!proccessor) {
+        throw new InternalError(`No direct deposit processer initialized for the pool ${this.curPool}`);
+    }
+
+    return proccessor;
+  }
+
+  public async directDepositContract(): Promise<string> {
+      return this.ddProcessor().getQueueContract();
+  }
+
+  public async directDepositFee(): Promise<bigint> {
+    return this.ddProcessor().getFee();
   }
   
 }

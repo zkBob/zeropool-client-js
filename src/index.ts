@@ -16,5 +16,6 @@ export { EvmNetwork } from './networks/evm'
 export { deriveSpendingKeyZkBob } from './utils'
 export { IAddressComponents } from 'libzkbob-rs-wasm-web';
 export { SignatureType } from './signers/abstract-signer'
+export { DirectDepositType, DirectDeposit } from './dd'
 
 export * from './errors'

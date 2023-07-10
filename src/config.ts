@@ -32,10 +32,12 @@ export interface Pool {
   tokenAddress: string,
   relayerUrls: string[];
   delegatedProverUrls: string[];
+  depositScheme: DepositType;
   coldStorageConfigPath?: string;
   minTxAmount?: bigint;
   feeDecimals?: number;
-  depositScheme: DepositType;
+  isNative?: boolean;
+  ddSubgraph?: string;
 }
 
 export enum ProverMode {
