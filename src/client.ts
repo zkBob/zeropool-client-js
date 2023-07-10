@@ -935,6 +935,10 @@ export class ZkBobClient extends ZkBobProvider {
 
     const bigIntMin = (...args) => args.reduce((m, e) => e < m ? e : m);
     const redeemAmount =  bigIntMin((giftCardBalance - minFee), giftCard.balance);
+    if (redeemAmount < giftCard.balance) {
+      console.error(`Gift card: redeem amount ${redeemAmount} is less than card value ${giftCard.balance} (actual card balance: ${giftCardBalance}). SupportID: ${this.supportId}`);
+    }
+
     const dstAddr = await this.generateAddress(); // getting address from the current account
     const actualFee = giftCardBalance - redeemAmount; // fee can be greater than needed to make redemption amount equals to nominal
     const oneTx: ITransferData = {
