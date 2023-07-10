@@ -44,7 +44,7 @@ export class EphemeralPool {
     private web3: Web3;
     private token: Contract;
     private rpcUrl: string;
-    private poolDenominator: bigint; // we represent all amounts in that library as in pool (Gwei currently)
+    private poolDenominator: bigint; // we represent all amounts in that library as in pool
 
     // save last scanned address to decrease scan time
     private startScanIndex = 0;
@@ -333,18 +333,20 @@ export class EphemeralPool {
         return existing;
     }
 
-    // in pool dimension (Gwei)
+    // in pool dimension
     private async getNativeBalance(address: string): Promise<bigint> {
         const result = await this.web3.eth.getBalance(address);
         
-        return BigInt(result) / this.poolDenominator;
+        return BigInt(result);
     }
     
-    // in pool dimension (Gwei)
+    // in pool dimension
     private async getTokenBalance(address: string): Promise<bigint> {
         const result = await this.token.methods.balanceOf(address).call();
         
-        return BigInt(result) / this.poolDenominator;
+        return this.poolDenominator > 0 ?
+                BigInt(result) / this.poolDenominator :
+                BigInt(result) * (-this.poolDenominator);
     }
 
     // number of outgoing transfers via permit
