@@ -380,12 +380,35 @@ export class ZkBobProvider {
 
     // Min transaction fee in pool resolution (for regular transaction without any payload overhead)
     // To estimate fee for the concrete tx use account-based method (feeEstimate from client.ts)
-    public async atomicTxFee(txType: TxType): Promise<bigint> {
+    public async atomicTxFee(txType: TxType, withdrawSwap: bigint = 0n): Promise<bigint> {
         const relayerFee = await this.getRelayerFee();
-        const calldataBytesCnt = estimateCalldataLength(txType, txType == TxType.Transfer ? 1 : 0);
-        const baseFee = await this.executionTxFee(txType, relayerFee);
         
-        return this.roundFee(baseFee + relayerFee.oneByteFee * BigInt(calldataBytesCnt));
+        return this.singleTxFeeInternal(relayerFee, txType, txType == TxType.Transfer ? 1 : 0)
+    }
+
+    // dynamic fee calculation routine
+    protected async singleTxFeeInternal(
+        relayerFee: RelayerFee,
+        txType: TxType,
+        notesCnt: number,
+        extraDataLen: number = 0,
+        withdrawSwapAmount: bigint = 0n,
+        roundFee?: boolean,
+    ): Promise<bigint> {
+        const calldataBytesCnt = estimateCalldataLength(txType, notesCnt, extraDataLen);
+        const baseFee = await this.executionTxFee(txType, relayerFee);
+
+        let totalFee = baseFee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
+        if (txType == TxType.Withdraw && withdrawSwapAmount > 0n) {
+            // swapping tokens during withdrawal may require additional fee
+            totalFee += relayerFee.nativeConvertFee;
+        }
+
+        if (roundFee === undefined || roundFee == true) {
+            totalFee = await this.roundFee(totalFee);
+        }
+        
+        return totalFee;
     }
     
     // Max supported token swap during withdrawal, in token resolution (Gwei)
