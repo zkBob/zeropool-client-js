@@ -726,7 +726,7 @@ export class ZkBobClient extends ZkBobProvider {
     const txParts = await this.getTransactionParts(TxType.Transfer, transfers, usedFee);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(TxType.Transfer, 0n, false);
+      const available = await this.calcMaxAvailableTransfer(TxType.Transfer, usedFee, 0n, false);
       const amounts = transfers.map((aTx) => aTx.amountGwei);
       const totalAmount = amounts.reduce((acc, cur) => acc + cur, BigInt(0));
       const feeEst = await this.feeEstimateInternal(amounts, TxType.Transfer, usedFee, 0n, false, true);
@@ -829,7 +829,7 @@ export class ZkBobClient extends ZkBobProvider {
     const txParts = await this.getTransactionParts(TxType.Withdraw, [{amountGwei, destination: address}], usedFee);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(TxType.Withdraw, swapAmount, false);
+      const available = await this.calcMaxAvailableTransfer(TxType.Withdraw, usedFee, swapAmount, false);
       const feeEst = await this.feeEstimateInternal([amountGwei], TxType.Withdraw, usedFee, swapAmount, false, true);
       throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
@@ -1029,7 +1029,7 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Account + notes balance excluding fee needed to transfer or withdraw it
   // TODO: need to optimize for edge cases (account limit calculating)
-  public async calcMaxAvailableTransfer(txType: TxType, withdrawSwap: bigint = 0n, updateState: boolean = true): Promise<bigint> {
+  public async calcMaxAvailableTransfer(txType: TxType, relayerFee?: RelayerFee, withdrawSwap: bigint = 0n, updateState: boolean = true): Promise<bigint> {
     if (txType != TxType.Transfer && txType != TxType.Withdraw) {
       throw new InternalError(`Attempting to invoke \'calcMaxAvailableTransfer\' for ${txTypeToString(txType)} tx (only transfer\\withdraw are supported)`);
     }
@@ -1039,9 +1039,9 @@ export class ZkBobClient extends ZkBobProvider {
       await this.updateState();
     }
 
-    const relayerFee = await this.getRelayerFee();
-    const aggregateTxFee = await this.singleTxFeeInternal(relayerFee, TxType.Transfer, 0, 0, 0n);
-    const finalTxFee = await this.singleTxFeeInternal(relayerFee, txType, txType == TxType.Transfer ? 1 : 0, 0, withdrawSwap);
+    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const aggregateTxFee = await this.singleTxFeeInternal(usedFee, TxType.Transfer, 0, 0, 0n);
+    const finalTxFee = await this.singleTxFeeInternal(usedFee, txType, txType == TxType.Transfer ? 1 : 0, 0, withdrawSwap);
 
     const groupedNotesBalances = await this.getGroupedNotes();
     let accountBalance = await state.accountBalance();
@@ -1071,7 +1071,7 @@ export class ZkBobClient extends ZkBobProvider {
   public async getTransactionParts(
     txType: TxType,
     transfers: TransferRequest[],
-    relayerFee: RelayerFee,
+    relayerFee?: RelayerFee,
     withdrawSwap: bigint = 0n,
     updateState: boolean = true,
     allowPartial: boolean = false,
@@ -1104,13 +1104,15 @@ export class ZkBobClient extends ZkBobProvider {
 
     let aggregationParts: Array<TransferConfig> = [];
     let txParts: Array<TransferConfig> = [];
+
+    const usedFee = relayerFee ?? await this.getRelayerFee();
     
     let i = 0;
     do {
       txParts = await this.tryToPrepareTransfers(
                         txType,
                         accountBalance,
-                        relayerFee,
+                        usedFee,
                         groupedNotesBalances.slice(i, i + aggregatedTransfers.length),
                         aggregatedTransfers,
                         withdrawSwap
@@ -1125,7 +1127,7 @@ export class ZkBobClient extends ZkBobProvider {
         break;
       }
 
-      const aggregateTxFee = await this.singleTxFeeInternal(relayerFee, TxType.Transfer, 0, 0, 0n);
+      const aggregateTxFee = await this.singleTxFeeInternal(usedFee, TxType.Transfer, 0, 0, 0n);
 
       const inNotesBalance = groupedNotesBalances[i];
       if (accountBalance + inNotesBalance < aggregateTxFee) {
