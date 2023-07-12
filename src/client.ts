@@ -10,18 +10,20 @@ import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
 import { 
-  InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositDeadlineExpiredError,
+  InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
 import { JobInfo, RelayerFee } from './services/relayer';
-import { TreeState, ZkBobProvider } from './client-provider';
+import { GiftCardProperties, TreeState, ZkBobProvider } from './client-provider';
 import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
+import { PERMIT2_CONTRACT } from './signers/permit2-signer';
+import { DirectDeposit, DirectDepositProcessor, DirectDepositType } from './dd';
 
 import { isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
 import { wrap } from 'comlink';
-import { PERMIT2_CONTRACT } from './signers/permit2-signer';
+import { PreparedTransaction } from './networks/network';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
@@ -70,6 +72,8 @@ export class ZkBobClient extends ZkBobProvider {
   private zpStates: { [poolAlias: string]: ZkBobState } = {};
   // Holds gift cards temporary states (id - gift card unique ID based on sk and pool)
   private auxZpStates: { [id: string]: ZkBobState } = {};
+  // Direct deposit processors are used to create DD and fetch DD pending txs
+  private ddProcessors: { [poolAlias: string]: DirectDepositProcessor } = {};
   // The single worker for the all pools
   // Currently we assume parameters are the same for the all pools
   private worker: any;
@@ -206,7 +210,7 @@ export class ZkBobClient extends ZkBobProvider {
         }
       }
 
-      this.zpStates[newPoolAlias] = await ZkBobState.create(
+      const state = await ZkBobState.create(
           this.account.sk,
           this.account.birthindex,
           networkName,
@@ -216,6 +220,8 @@ export class ZkBobClient extends ZkBobProvider {
           pool.tokenAddress,
           this.worker
         );
+      this.zpStates[newPoolAlias] = state;
+      this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state)
 
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {
@@ -299,9 +305,20 @@ export class ZkBobClient extends ZkBobProvider {
     return confirmedBalance + pendingDelta;
   }
 
+  public async giftCardBalance(giftCard: GiftCardProperties): Promise<bigint> {
+    const giftCardAcc: AccountConfig = {
+      sk: giftCard.sk,
+      pool: giftCard.poolAlias,
+      birthindex: giftCard.birthIndex,
+      proverMode: this.getProverMode(),
+    }
+
+    return this.giftCardBalanceInternal(giftCardAcc);
+  }
+
   // `giftCardAccount` fields should be set with the gift card associated properties:
   // (sk, birthIndex, pool); proverMode field doesn't affect here
-  public async giftCardBalance(giftCardAcc: AccountConfig): Promise<bigint> {
+  private async giftCardBalanceInternal(giftCardAcc: AccountConfig): Promise<bigint> {
     if (giftCardAcc.pool != this.currentPool()) {
       throw new InternalError(`The current pool (${this.currentPool()}) doesn't match gift-card's one (${giftCardAcc.pool})`);
     }
@@ -340,6 +357,10 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     return await this.zpState().history?.getAllHistory() ?? [];
+  }
+
+  public async getPendingDDs(): Promise<DirectDeposit[]> {
+    return this.ddProcessor().pendingDirectDeposits();
   }
 
   // Generate compliance report
@@ -704,6 +725,42 @@ export class ZkBobClient extends ZkBobProvider {
     }, fromAddress.address, actualFee);
   }
 
+  // Deposit funds 
+  public async directDeposit(
+    type: DirectDepositType,
+    fromAddress: string,
+    amount: bigint, // in pool resolution
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>, // txHash
+  ): Promise<void> {
+    const pool = this.pool();
+    const processor = this.ddProcessor();
+    const ddQueueAddress = await processor.getQueueContract();
+    const zkAddress = await this.generateAddress();
+
+    const limits = await this.getLimits(fromAddress);
+    if (amount > limits.dd.total) {
+      throw new TxLimitError(amount, limits.dd.total);
+    }
+
+    const fee = await processor.getFee();
+    let fullAmountNative = await this.shieldedAmountToWei(amount + fee);
+
+    if (type == DirectDepositType.Token) {
+      // For the token-based DD we should check allowance first
+      const curAllowance = await this.network().allowance(pool.tokenAddress, fromAddress, ddQueueAddress);
+      if (curAllowance < fullAmountNative) {
+        throw new TxDepositAllowanceTooLow(fullAmountNative, curAllowance, ddQueueAddress);
+      }
+    }
+    
+    const rawTx = await processor.prepareDirectDeposit(type, zkAddress, fullAmountNative, fromAddress, true);
+    const txHash = await sendTxCallback(rawTx);
+
+    console.log(`DD transaction sent: ${txHash}`)
+
+    return;
+  }
+
   // Transfer shielded funds to the shielded address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // Returns jobIds from the relayer or throw an Error
@@ -896,31 +953,43 @@ export class ZkBobClient extends ZkBobProvider {
     return jobsIds;
   }
 
-  // Transfer shielded tokens from the another account to the current account
-  // It's suitable for gift-cards redeeming
+  // Transfer shielded tokens from the gift-card account to the current account
   // NOTE: for simplicity we assume the multitransfer doesn't applicable for gift-cards
   // (i.e. any redemption can be done in a single transaction)
-  public async redeemGiftCard(giftCardAcc: AccountConfig): Promise<string> {
+  public async redeemGiftCard(giftCard: GiftCardProperties, preferredProvingMode?: ProverMode): Promise<string> {
     if (!this.account) {
       throw new InternalError(`Cannot redeem gift card to the uninitialized account`);
     }
-    if (giftCardAcc.pool != this.curPool) {
-      throw new InternalError(`Cannot redeem gift card due to unsuitable pool (gift-card pool: ${giftCardAcc.pool}, current pool: ${this.curPool})`);
+    if (giftCard.poolAlias != this.curPool) {
+      throw new InternalError(`Cannot redeem gift card due to unsuitable pool (gift-card pool: ${giftCard.poolAlias}, current pool: ${this.curPool})`);
+    }
+    
+    const giftCardAcc: AccountConfig = {
+        sk: giftCard.sk,
+        pool: giftCard.poolAlias,
+        birthindex: giftCard.birthIndex,
+        proverMode: preferredProvingMode ?? this.getProverMode(),
     }
     
     const accId = accountId(giftCardAcc);
-    const giftCardBalance = await this.giftCardBalance(giftCardAcc);
-    const fee = await this.atomicTxFee(TxType.Transfer);
+    const giftCardBalance = await this.giftCardBalanceInternal(giftCardAcc);
+    const minFee = await this.atomicTxFee(TxType.Transfer);
     const minTxAmount = await this.minTxAmount();
-    if (giftCardBalance - fee < minTxAmount) {
-      throw new TxInsufficientFundsError(minTxAmount + fee, giftCardBalance)
+    if (giftCardBalance - minFee < minTxAmount) {
+      throw new TxInsufficientFundsError(minTxAmount + minFee, giftCardBalance)
     }
 
-    const redeemAmount = giftCardBalance - fee; // full redemption
+    const bigIntMin = (...args) => args.reduce((m, e) => e < m ? e : m);
+    const redeemAmount =  bigIntMin((giftCardBalance - minFee), giftCard.balance);
+    if (redeemAmount < giftCard.balance) {
+      console.error(`Gift card: redeem amount ${redeemAmount} is less than card value ${giftCard.balance} (actual card balance: ${giftCardBalance}). SupportID: ${this.supportId}`);
+    }
+
     const dstAddr = await this.generateAddress(); // getting address from the current account
+    const actualFee = giftCardBalance - redeemAmount; // fee can be greater than needed to make redemption amount equals to nominal
     const oneTx: ITransferData = {
       outputs: [{to: dstAddr, amount: `${redeemAmount}`}],
-      fee: fee.toString(),
+      fee: actualFee.toString(),
     };
     const giftCardState = this.auxZpStates[accId];
     const txData = await giftCardState.createTransferOptimistic(oneTx, this.zeroOptimisticState());
@@ -939,7 +1008,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     // Temporary save transaction in the history module for the current account
     const ts = Math.floor(Date.now() / 1000);
-    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], fee, ts, '0', true);
+    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], actualFee, ts, '0', true);
     this.zpState().history?.keepQueuedTransactions([rec], jobId);
 
     // forget the gift card state 
@@ -1365,6 +1434,7 @@ export class ZkBobClient extends ZkBobProvider {
     return ephPool.getEphemeralAddressPrivateKey(index);
   }
 
+
   // ----------------=========< Statistic Routines >=========-----------------
   // | Calculating sync time                                                 |
   // -------------------------------------------------------------------------
@@ -1387,6 +1457,27 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     return undefined; // relevant stat doesn't found
+  }
+
+  // ------------------=========< Direct Deposits >=========------------------
+  // | Calculating sync time                                                 |
+  // -------------------------------------------------------------------------
+
+  protected ddProcessor(): DirectDepositProcessor {
+    const proccessor = this.ddProcessors[this.curPool];
+    if (!proccessor) {
+        throw new InternalError(`No direct deposit processer initialized for the pool ${this.curPool}`);
+    }
+
+    return proccessor;
+  }
+
+  public async directDepositContract(): Promise<string> {
+      return this.ddProcessor().getQueueContract();
+  }
+
+  public async directDepositFee(): Promise<bigint> {
+    return this.ddProcessor().getFee();
   }
   
 }

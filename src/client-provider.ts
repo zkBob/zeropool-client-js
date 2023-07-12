@@ -9,6 +9,7 @@ import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
 import { estimateCalldataLength, TxType } from "./tx";
+import { DirectDepositProcessor } from "./dd";
 
 const bs58 = require('bs58')
 
@@ -51,6 +52,13 @@ export interface PoolLimits { // all values are in Gwei
         total: bigint;
         components: {
             dailyForAll: Limit;
+        };
+    }
+    dd: {
+        total: bigint;
+        components: {
+            singleOperation: bigint;
+            dailyForAddress: Limit;
         };
     }
     tier: number;
@@ -126,8 +134,9 @@ export class ZkBobProvider {
                 this.provers[alias] = ZkBobDelegatedProver.create(pool.delegatedProverUrls, supportId);
             }
 
+            const network = this.chains[pool.chainId].backend;
             if (alias == currentPool) {
-                this.chains[pool.chainId].backend.setEnabled(true);
+                network.setEnabled(true);
             }
 
             this.proverModes[alias] = ProverMode.Local;
@@ -234,6 +243,10 @@ export class ZkBobProvider {
             try {
                 const pool = this.pool();
                 denominator = await this.network().getDenominator(pool.poolAddress);
+                const negFlag = 1n << 255n;
+                if (denominator & negFlag) {
+                    denominator = -(denominator ^ negFlag);
+                }
                 this.poolDenominators[this.curPool] = denominator;
             } catch (err) {
                 console.error(`Cannot fetch denominator value from the pool contract: ${err}`);
@@ -318,20 +331,23 @@ export class ZkBobProvider {
     // Convert native pool amount to the base units
     public async shieldedAmountToWei(amountShielded: bigint): Promise<bigint> {
         const denominator = await this.denominator();
-        return amountShielded * denominator;
+        return denominator > 0 ? amountShielded * denominator : amountShielded / (-denominator);
     }
     
     // Convert base units to the native pool amount
     public async weiToShieldedAmount(amountWei: bigint): Promise<bigint> {
         const denominator = await this.denominator();
-        return amountWei / denominator;
+        return denominator > 0 ? amountWei / denominator : amountWei * (-denominator);
     }
 
     // Round up the fee if needed with fixed fee decimal places (after point)
     protected async roundFee(fee: bigint): Promise<bigint> {
         const feeDecimals = this.pool().feeDecimals;
         if (feeDecimals !== undefined) {
-            const denomLog = (await this.denominator()).toString().length - 1;
+            const denominator = await this.denominator();
+            const denomLog = denominator > 0 ? 
+                        denominator.toString().length - 1 :
+                        -((-denominator).toString().length - 1);
             const poolResDigits = (await this.decimals()) - denomLog;
             if (poolResDigits > feeDecimals) {
                 const rounder = 10n ** BigInt(poolResDigits - feeDecimals);
@@ -430,10 +446,6 @@ export class ZkBobProvider {
         return cachedAmount.amount;
     }
 
-    public async directDepositFee(): Promise<bigint> {
-        return this.network().getDirectDepositFee(this.pool().poolAddress);
-    }
-
     public async minTxAmount(): Promise<bigint> {
         return this.pool().minTxAmount ?? MIN_TX_AMOUNT;
     }
@@ -442,12 +454,12 @@ export class ZkBobProvider {
     // https://docs.zkbob.com/bob-protocol/deposit-and-withdrawal-limits
     // Global limits are fetched from the relayer (except personal deposit limit from the specified address)
     public async getLimits(address: string | undefined, directRequest: boolean = false): Promise<PoolLimits> {
-        const token = this.pool();
+        const pool = this.pool();
         const network = this.network();
         const relayer = this.relayer();
 
         async function fetchLimitsFromContract(network: NetworkBackend): Promise<LimitsFetch> {
-            const poolLimits = await network.poolLimits(token.poolAddress, address);
+            const poolLimits = await network.poolLimits(pool.poolAddress, address);
             return {
                 deposit: {
                     singleOperation: BigInt(poolLimits.depositCap),
@@ -468,6 +480,13 @@ export class ZkBobProvider {
                     dailyForAll: {
                         total:      BigInt(poolLimits.dailyWithdrawalCap),
                         available:  BigInt(poolLimits.dailyWithdrawalCap) - BigInt(poolLimits.dailyWithdrawalCapUsage),
+                    },
+                },
+                dd: {
+                    singleOperation: BigInt(poolLimits.directDepositCap),
+                    dailyForAddress: {
+                        total: BigInt(poolLimits.dailyUserDirectDepositCap),
+                        available: BigInt(poolLimits.dailyUserDirectDepositCap) - BigInt(poolLimits.dailyUserDirectDepositCapUsage),
                     },
                 },
                 tier: poolLimits.tier === undefined ? 0 : Number(poolLimits.tier)
@@ -496,6 +515,13 @@ export class ZkBobProvider {
                     dailyForAll: {
                         total:      BigInt(100000000000000),  // 100k tokens
                         available:  BigInt(100000000000000),  // 100k tokens
+                    },
+                },
+                dd: {
+                    singleOperation: BigInt(10000000000000),  // 10k tokens
+                    dailyForAddress: {
+                        total: BigInt(10000000000000),  // 10k tokens
+                        available: BigInt(10000000000000),  // 10k tokens
                     },
                 },
                 tier: 0
@@ -546,14 +572,25 @@ export class ZkBobProvider {
         const allWithdrawLimits = [ currentLimits.withdraw.dailyForAll.available ];
         const totalWithdrawLimit = bigIntMin(...allWithdrawLimits);
 
+        // Calculate direct deposit limits
+        const allDdLimits = [
+            currentLimits.dd.singleOperation,
+            currentLimits.dd.dailyForAddress.available,
+        ];
+        const totalDdLimit = bigIntMin(...allDdLimits);
+
         return {
             deposit: {
-                total: totalDepositLimit >= 0 ? totalDepositLimit : BigInt(0),
+                total: totalDepositLimit >= 0 ? totalDepositLimit : 0n,
                 components: currentLimits.deposit,
             },
             withdraw: {
-                total: totalWithdrawLimit >= 0 ? totalWithdrawLimit : BigInt(0),
+                total: totalWithdrawLimit >= 0 ? totalWithdrawLimit : 0n,
                 components: currentLimits.withdraw,
+            },
+            dd: {
+                total: totalDdLimit >=0 ? totalDdLimit : 0n,
+                components: currentLimits.dd,
             },
             tier: currentLimits.tier
         }
@@ -701,5 +738,9 @@ export class ZkBobProvider {
         }
 
         return { sk: hexToBuf(sk), birthIndex, balance, poolAlias };
+    }
+
+    public async tokenSellerContract(): Promise<string> {
+        return this.network().getTokenSellerContract(this.pool().poolAddress);
     }
 }

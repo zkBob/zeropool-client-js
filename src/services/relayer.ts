@@ -73,6 +73,10 @@ export interface LimitsFetch {
   withdraw: {
     dailyForAll: Limit;
   }
+  dd: {
+    singleOperation: bigint;
+    dailyForAddress: Limit;
+  }
   tier: number;
 }
 
@@ -97,6 +101,13 @@ function LimitsFromJson(json: any): LimitsFetch {
       dailyForAll: {
         total:      BigInt(json.withdraw.dailyForAll.total),
         available:  BigInt(json.withdraw.dailyForAll.available),
+      },
+    },
+    dd: {
+      singleOperation: BigInt(json.dd.singleOperation),
+      dailyForAddress: {
+        total:     BigInt(json.dd.dailyForAddress.total),
+        available: BigInt(json.dd.dailyForAddress.available),
       },
     },
     tier: json.tier === undefined ? 0 : Number(json.tier)
