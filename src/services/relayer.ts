@@ -235,15 +235,9 @@ export class ZkBobRelayer implements IZkBobService {
   
   public async fee(): Promise<RelayerFee> {
     const headers = defaultHeaders(this.supportId);
-    const url = new URL('/fee/v2', this.url());
-    const fallbackUrl = new URL('/fee', this.url());
+    const url = new URL('/fee', this.url());
 
-    let res;
-    try {
-      res = await fetchJson(url.toString(), {headers}, this.type());
-    } catch (err) {
-      res = await fetchJson(fallbackUrl.toString(), {headers}, this.type());
-    }
+    const res = await fetchJson(url.toString(), {headers}, this.type());
 
     if (typeof res !== 'object' || res === null || 
         (!res.hasOwnProperty('fee') && !res.hasOwnProperty('baseFee')))
