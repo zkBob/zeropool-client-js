@@ -1115,7 +1115,7 @@ export class ZkBobClient extends ZkBobProvider {
     const groupedNotesBalances = await this.getGroupedNotes();
     let accountBalance = await state.accountBalance();
 
-    let maxAmount = accountBalance > aggregateTxFee ? accountBalance - aggregateTxFee : 0n;
+    let maxAmount = accountBalance > aggregateTxFee ? accountBalance - finalTxFee : 0n;
     for (var i = 0; i < groupedNotesBalances.length; i++) { 
       const inNotesBalance = groupedNotesBalances[i];
       const txFee = (i == groupedNotesBalances.length - 1) ? finalTxFee : aggregateTxFee;
