@@ -1008,7 +1008,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     // Temporary save transaction in the history module for the current account
     const ts = Math.floor(Date.now() / 1000);
-    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], actualFee, ts, '0', true);
+    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], 0n, ts, '0', true);
     this.zpState().history?.keepQueuedTransactions([rec], jobId);
 
     // forget the gift card state 
@@ -1117,7 +1117,7 @@ export class ZkBobClient extends ZkBobProvider {
     const groupedNotesBalances = await this.getGroupedNotes();
     let accountBalance = await state.accountBalance();
 
-    let maxAmount = accountBalance > aggregateTxFee ? accountBalance - aggregateTxFee : 0n;
+    let maxAmount = accountBalance > finalTxFee ? accountBalance - finalTxFee : 0n;
     for (var i = 0; i < groupedNotesBalances.length; i++) { 
       const inNotesBalance = groupedNotesBalances[i];
       const txFee = (i == groupedNotesBalances.length - 1) ? finalTxFee : aggregateTxFee;
