@@ -1008,7 +1008,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     // Temporary save transaction in the history module for the current account
     const ts = Math.floor(Date.now() / 1000);
-    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], actualFee, ts, '0', true);
+    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], 0n, ts, '0', true);
     this.zpState().history?.keepQueuedTransactions([rec], jobId);
 
     // forget the gift card state 
