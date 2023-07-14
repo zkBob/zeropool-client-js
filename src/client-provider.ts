@@ -399,7 +399,7 @@ export class ZkBobProvider {
     public async atomicTxFee(txType: TxType, withdrawSwap: bigint = 0n): Promise<bigint> {
         const relayerFee = await this.getRelayerFee();
         
-        return this.singleTxFeeInternal(relayerFee, txType, txType == TxType.Transfer ? 1 : 0)
+        return this.singleTxFeeInternal(relayerFee, txType, txType == TxType.Transfer ? 1 : 0, 0, withdrawSwap, true);
     }
 
     // dynamic fee calculation routine
