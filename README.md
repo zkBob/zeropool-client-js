@@ -10,7 +10,7 @@ import { ZkBobClient, ClientConfig, AccountConfig,
 } from 'zkbob-client-js';
 
 
-export async function zkBobExample(): Promise<void> {
+async function zkBobExample(): Promise<void> {
     // Client configuration includes set of pools, chains, parameters and other options
     const clientConfig: ClientConfig = {
     pools: {
