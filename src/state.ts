@@ -348,8 +348,6 @@ export class ZkBobState {
           
           const txHashes: Record<number, string> = {};
           const indexedTxs: IndexedTx[] = [];
-
-          const txHashesPending: Record<number, string> = {};
           const indexedTxsPending: IndexedTx[] = [];
 
           let maxMinedIndex = -1;
@@ -371,15 +369,14 @@ export class ZkBobState {
 
             // 3. Get txHash
             const txHash = tx.slice(1, 65);
+            txHashes[memo_idx] = '0x' + txHash;
 
             // 4. Get mined flag
             if (tx.slice(0, 1) === '1') {
               indexedTxs.push(indexedTx);
-              txHashes[memo_idx] = '0x' + txHash;
               maxMinedIndex = Math.max(maxMinedIndex, memo_idx);
             } else {
               indexedTxsPending.push(indexedTx);
-              txHashesPending[memo_idx] = '0x' + txHash;
               maxPendingIndex = Math.max(maxPendingIndex, memo_idx);
             }
           }
@@ -405,7 +402,7 @@ export class ZkBobState {
             for (let idx = 0; idx < decryptedPendingMemos.length; ++idx) {
               // save memos corresponding to the our account to restore history
               const myMemo = decryptedPendingMemos[idx];
-              myMemo.txHash = txHashesPending[myMemo.index];
+              myMemo.txHash = txHashes[myMemo.index];
               this.history?.saveDecryptedMemo(myMemo, true);
 
               if (myMemo.acc != undefined) {
@@ -521,6 +518,51 @@ export class ZkBobState {
     }
 
     return readyToTransact;
+  }
+
+  private async parseIndexedTxs(
+    startIndex: number,
+    indexedTxs: IndexedTx[],
+    indexedTxsPending: IndexedTx[],
+    txHashes: Record<number, string>,
+    batchState: Map<number, StateUpdate>,
+  ): Promise<boolean> {
+    let readyToTransact = true;
+
+    if (indexedTxs.length > 0) {
+      const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, indexedTxs);
+      const decryptedMemos = parseResult.decryptedMemos;
+      batchState.set(startIndex, parseResult.stateUpdate);
+      //if (LOG_STATE_HOTSYNC) {
+      //  this.logStateSync(i, i + txs.length * OUTPLUSONE, decryptedMemos);
+      //}
+      for (let decryptedMemoIndex = 0; decryptedMemoIndex < decryptedMemos.length; ++decryptedMemoIndex) {
+        // save memos corresponding to the our account to restore history
+        const myMemo = decryptedMemos[decryptedMemoIndex];
+        myMemo.txHash = txHashes[myMemo.index];
+        this.history?.saveDecryptedMemo(myMemo, false);
+      }
+    }
+
+    if (indexedTxsPending.length > 0) {
+      const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, indexedTxsPending);
+      const decryptedPendingMemos = parseResult.decryptedMemos;
+      for (let idx = 0; idx < decryptedPendingMemos.length; ++idx) {
+        // save memos corresponding to the our account to restore history
+        const myMemo = decryptedPendingMemos[idx];
+        myMemo.txHash = txHashes[myMemo.index];
+        this.history?.saveDecryptedMemo(myMemo, true);
+
+        if (myMemo.acc != undefined) {
+          // There is a pending transaction initiated by ourselfs
+          // So we cannot create new transactions in that case
+          readyToTransact = false;
+        }
+      }
+    }
+
+    return readyToTransact;
+    //return {txCount: txs.length, maxMinedIndex, maxPendingIndex, state: batchState}
   }
 
   // Just fetch and process the new state without local state updating
