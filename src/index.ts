@@ -1,6 +1,6 @@
 export { ClientConfig, AccountConfig, accountId,
         ProverMode, Chain, Pool, Chains, Pools,
-        SnarkConfigParams,
+        SnarkConfigParams, DepositType
       } from './config';
 export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount } from './client';
 export { ZkBobProvider as ZkBobAccountlessClient, GiftCardProperties } from './client-provider';
@@ -15,5 +15,7 @@ export { TreeNode } from 'libzkbob-rs-wasm-web';
 export { EvmNetwork } from './networks/evm'
 export { deriveSpendingKeyZkBob } from './utils'
 export { IAddressComponents } from 'libzkbob-rs-wasm-web';
+export { SignatureType } from './signers/abstract-signer'
+export { DirectDepositType, DirectDeposit } from './dd'
 
 export * from './errors'

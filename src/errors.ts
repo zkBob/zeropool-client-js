@@ -17,24 +17,14 @@ export class InternalError extends BobError {
 }
 
 export class TxSmallAmount extends BobError {
-    public amount: bigint;
-    public minAmount: bigint;
-
-    constructor(amount, minAmount) {
+    constructor(public amount: bigint, public minAmount: bigint) {
         super(`Transaction amount is too small (${amount.toString()} < ${minAmount.toString()})`);
-        this.amount = amount;
-        this.minAmount = minAmount;
     }
 }
 
 export class TxLimitError extends BobError {
-    public amount: bigint;
-    public limitAvailable: bigint;
-
-    constructor(amount, limitAvailable) {
+    constructor(public amount: bigint, public limitAvailable: bigint) {
         super(`Transaction exceed current limit (${amount.toString()} > ${limitAvailable.toString()})`);
-        this.amount = amount;
-        this.limitAvailable = limitAvailable;
     }
 }
 
@@ -51,73 +41,61 @@ export class TxInvalidArgumentError extends BobError {
 }
 
 export class SignatureError extends BobError {
-    constructor(message: string) {
+    constructor(public message: string) {
         super(message);
     }
 }
 
 export class TxDepositDeadlineExpiredError extends BobError {
-    public deadline: number;
-    constructor(deadline: number) {
+    constructor(public deadline: number) {
         super(`Deposit permit deadline is about to be expired`);
-        this.deadline = deadline;
+    }
+}
+
+export class TxDepositAllowanceTooLow extends BobError {
+    constructor(public needed: bigint, public current: bigint, public spender: string) {
+        super(`Token allowance for ${spender} is too low (needed ${needed.toString()}, current ${current.toString()})`);
+    }
+}
+
+export class TxDepositNonceAlreadyUsed extends BobError {
+    constructor(public nonce: string, public contract: string) {
+        super(`Nonce ${nonce} already used on contract ${contract}`);
     }
 }
 
 export class TxInsufficientFundsError extends BobError {
-    public needed: bigint;
-    public available: bigint;
-    constructor(needed: bigint, available: bigint) {
+    constructor(public needed: bigint, public available: bigint) {
         super(`Insufficient funds for transaction (needed ${needed.toString()}, available ${available.toString()})`);
-        this.needed = needed;
-        this.available = available;
     }
 }
 
 export class TxSwapTooHighError extends BobError {
-    public requested: bigint;
-    public supported: bigint;
-    constructor(requested: bigint, supported: bigint) {
-        super(`The pool doesn't support requested swap amount (requested ${requested.toString()}, supported ${supported.toString()})`);
-        this.requested = requested;
-        this.supported = supported;
+    constructor(public requested: bigint, public supported: bigint) {
+        super(`The pool doesn't support requested swap amount (requested ${requested.toString()}, supported ${supported.toString()})`);52
     }
 }
 
 export class ServiceError extends BobError {
-    public code: number;
-    public service: ServiceType;
-    constructor(service: ServiceType, code: number, message: string) {
+    constructor(public service: ServiceType, public code: number, public message: string) {
         super(`${service} response incorrect (code ${code}): ${message}`);
-        this.code = code;
-        this.service = service;
     }
 }
 
 export class NetworkError extends BobError {
-    constructor(cause?: Error, host?: string) {
+    constructor(public cause?: Error, public host?: string) {
         super(`Unable connect to the host ${host !== undefined ? host : ''} (${cause?.message})`);
     }
 }
 
 export class RelayerJobError extends BobError {
-    public jobId: number;
-    public reason: string;
-    constructor(jobId: number, reason: string) {
+    constructor(public jobId: number, public reason: string) {
         super(`Job ${jobId} failed with reason: ${reason}`);
-        this.jobId = jobId;
-        this.reason = reason;
     }
 }
 
 export class PoolJobError extends BobError {
-    public jobId: number;
-    public txHash: string;
-    public reason: string;
-    constructor(jobId: number, txHash: string, reason: string) {
+    constructor(public jobId: number, public txHash: string, public reason: string) {
         super(`Tx ${txHash} (job ${jobId}) was reverted on the contract with reason: ${reason}`);
-        this.jobId = jobId;
-        this.txHash = txHash;
-        this.reason = reason;
     }
 }

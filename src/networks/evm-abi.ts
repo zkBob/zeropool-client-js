@@ -66,7 +66,94 @@ export const tokenABI: AbiItem[] = [
         payable: false,
         stateMutability: 'view',
         type: 'function'
-    }
+    }, {
+        inputs: [
+          {
+            internalType: 'address',
+            name: '',
+            type: 'address'
+          },
+          {
+            internalType: 'address',
+            name: '',
+            type: 'address'
+          }
+        ],
+        name: 'allowance',
+        outputs: [
+          {
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+          }
+        ],
+        stateMutability: 'view',
+        type: 'function'
+    }, {
+        inputs: [{
+            internalType: 'address',
+            name: 'spender',
+            type: 'address'
+          }, {
+            internalType: 'uint256',
+            name: 'amount',
+            type: 'uint256'
+          }],
+        name: 'approve',
+        outputs: [{
+            internalType: 'bool',
+            name: '',
+            type: 'bool'
+        }],
+        stateMutability: 'nonpayable',
+        type: 'function'
+    }, {
+        inputs: [{ 
+            internalType: 'address',
+            name: '',
+            type: 'address'
+        }, {
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        name: 'nonceBitmap',
+        outputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    }, {
+        inputs: [{
+            internalType: 'address',
+            name: 'authorizer',
+            type: 'address'
+        }, {
+            internalType: 'bytes32',
+            name: 'nonce',
+            type: 'bytes32'
+        }],
+        name: 'authorizationState',
+        outputs: [{
+            internalType: 'uin256',
+            name: '',
+            type: 'uint256'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    }, {
+        inputs: [],
+        stateMutability: 'view',
+        type: 'function',
+        name: 'DOMAIN_SEPARATOR',
+        outputs: [{
+            internalType: 'bytes32',
+            name: '',
+            type: 'bytes32',
+        }],
+    },
 ];
 
 export const poolContractABI: AbiItem[] = [
@@ -163,9 +250,21 @@ export const poolContractABI: AbiItem[] = [
                 name: 'depositCap',
                 type: 'uint256',
             }, {
-            internalType: 'uint8',
-            name: 'tier',
-            type: 'uint8',
+                internalType: 'uint8',
+                name: 'tier',
+                type: 'uint8',
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'directDepositCap',
+                type: 'uint256'
             }],
             internalType: 'struct ZkBobAccounting.Limits',
             name: '',
@@ -179,6 +278,17 @@ export const poolContractABI: AbiItem[] = [
         name: 'direct_deposit_queue',
         outputs: [{
             internalType: 'contract IZkBobDirectDepositQueue',
+            name: '',
+            type: 'address'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    },
+    {
+        inputs: [],
+        name: 'tokenSeller',
+        outputs: [{
+            internalType: 'contract ITokenSeller',
             name: '',
             type: 'address'
         }],
@@ -198,5 +308,47 @@ export const ddContractABI: AbiItem[] = [
         }],
         stateMutability: 'view',
         type: 'function'
-    }
+    },
+    {
+        inputs: [{
+            internalType: 'address',
+            name: '_fallbackUser',
+            type: 'address'
+        }, {
+            internalType: 'uint256',
+            name: '_amount',
+            type: 'uint256'
+        }, {
+            internalType: 'bytes',
+            name: '_rawZkAddress',
+            type: 'bytes'
+        }],
+        name: 'directDeposit',
+        outputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        stateMutability: 'nonpayable',
+        type: 'function'
+    },
+    {
+        inputs: [ {
+            internalType: 'address',
+            name: '_fallbackUser',
+            type: 'address'
+        }, {
+            internalType: 'bytes',
+            name: '_rawZkAddress',
+            type: 'bytes'
+        }],
+        name: 'directNativeDeposit',
+        outputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        stateMutability: 'payable',
+        type: 'function'
+    },
 ];

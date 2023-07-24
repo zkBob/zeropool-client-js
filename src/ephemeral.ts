@@ -1,6 +1,6 @@
 import Web3 from 'web3';
-import { AbiItem } from 'web3-utils';
 import { Contract } from 'web3-eth-contract'
+import { TransactionConfig } from 'web3-core';
 import { hash } from 'tweetnacl';
 import { addHexPrefix, bufToHex, concatenateBuffers, hexToBuf } from './utils';
 import { entropyToMnemonic, mnemonicToSeedSync } from '@scure/bip39';
@@ -8,10 +8,11 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
 import { NetworkType } from './network-type';
-
-import { signTypedData, SignTypedDataVersion } from '@metamask/eth-sig-util'
+import { tokenABI } from './networks/evm-abi';
 
 const util = require('ethereumjs-util');
+
+const GAS_PRICE_MULTIPLIER = 1.1;
 
 // The interface used to describe address with preloaded properties
 export interface EphemeralAddress {
@@ -38,11 +39,12 @@ interface TransfersInfo {
 // The pool should be initialized with zk-account spending key which will produce entropy
 // This class should be used directly inside this library only
 export class EphemeralPool {
+    private tokenAddress: string;
     private hdwallet: HDKey;
     private web3: Web3;
     private token: Contract;
     private rpcUrl: string;
-    private poolDenominator: bigint; // we represent all amounts in that library as in pool (Gwei currently)
+    private poolDenominator: bigint; // we represent all amounts in that library as in pool
 
     // save last scanned address to decrease scan time
     private startScanIndex = 0;
@@ -71,6 +73,7 @@ export class EphemeralPool {
         rpcUrl: string,
         poolDenominator: bigint
     ) {
+        this.tokenAddress = tokenAddress;
         this.poolDenominator = poolDenominator;
         this.rpcUrl = rpcUrl;
         this.web3 = new Web3(this.rpcUrl);
@@ -82,55 +85,7 @@ export class EphemeralPool {
         let ephemeralWalletPath = `${NetworkType.chainPath(network)}/0'/0`;
         this.hdwallet = HDKey.fromMasterSeed(seed).derive(ephemeralWalletPath);
 
-        // ERC-20 balanceOf() and Transfer event ABI
-        const balanceOfABI: AbiItem[] = [{
-            constant: true,
-            inputs: [{
-                name: '_owner',
-                type: 'address'
-            }],
-            name: 'balanceOf',
-            outputs: [{
-                name: 'balance',
-                type: 'uint256'
-            }],
-            payable: false,
-            stateMutability: 'view',
-            type: 'function'
-        }, {
-            inputs: [{
-                internalType: 'address',
-                name: '',
-                type: 'address'
-            }],
-            name: 'nonces',
-            outputs: [{
-                internalType: 'uint256',
-                name: '',
-                type: 'uint256'
-            }],
-            stateMutability: 'view',
-            type: 'function'
-        }, {
-            anonymous: false,
-            inputs: [{
-                indexed: true,
-                name: 'from',
-                type: 'address'
-            }, {
-                indexed: true,
-                name: 'to',
-                type: 'address'
-            }, {
-                indexed: false,
-                name: 'value',
-                type: 'uint256'
-            }],
-            name: 'Transfer',
-            type: 'event'
-        }];
-
-        this.token = new this.web3.eth.Contract(balanceOfABI, tokenAddress) as unknown as Contract;
+        this.token = new this.web3.eth.Contract(tokenABI, tokenAddress) as unknown as Contract;
     }
   
     static async init(
@@ -282,29 +237,34 @@ export class EphemeralPool {
         return info.txCount;
     }
 
-    // Sign permittable deposit with desired data
-    // data should be object in format as described in https://eips.ethereum.org/EIPS/eip-712
-    public async signTypedData(data: any, index: number): Promise<string> {
-        let key = this.hdwallet.deriveChild(index);
-        if (key.privateKey) {
-            let privateKey = Buffer.from(key.privateKey);
-            let typedSig;
-            try {
-                // typedSig is canonical signature (65 bytes long, LSByte: 1b or 1c)
-                typedSig = signTypedData({privateKey, data, version: SignTypedDataVersion.V4});
-            } catch (err) {
-                key.wipePrivateData();
-                throw new InternalError(`Cannot sign typed data with ephemeral account #${index}: ${err}`);
-            }
-            
-            // cleanup intermediate sensitive data
-            key.wipePrivateData();
-            privateKey.fill(0);
-            
-            return typedSig;
-        } else {
-            throw new InternalError(`Derived ephemeral address #${index} has no private key`);
-        }
+    public async allowance(index: number, spender: string): Promise<bigint> {
+        const address = this.getAddress(index);
+        const result = await this.token.methods.allowance(address, spender).call();;
+
+        return BigInt(result);
+    }
+
+    public async approve(index: number, spender: string, amount: bigint): Promise<string> {
+        const address = await this.getAddress(index);
+        const encodedTx = await this.token.methods.approve(spender, BigInt(amount)).encodeABI();
+        let txObject: TransactionConfig = {
+            from: address,
+            to: this.tokenAddress,
+            data: encodedTx,
+        };
+
+        const gas = await this.web3.eth.estimateGas(txObject);
+        const gasPrice = Number(await this.web3.eth.getGasPrice());
+        const nonce = await this.web3.eth.getTransactionCount(address);
+        txObject.gas = gas;
+        txObject.gasPrice = `0x${BigInt(Math.ceil(gasPrice * GAS_PRICE_MULTIPLIER)).toString(16)}`;
+        txObject.nonce = nonce;
+
+        const privKey = this.getEphemeralAddressPrivateKey(index);
+        const signedTx = await this.web3.eth.accounts.signTransaction(txObject, privKey);
+        const receipt = await this.web3.eth.sendSignedTransaction(signedTx.rawTransaction ?? '');
+
+        return receipt.transactionHash;
     }
 
     // ------------------=========< Private Routines >=========--------------------
@@ -356,7 +316,11 @@ export class EphemeralPool {
         let promises = [
             this.getTokenBalance(existing.address),
             this.getNativeBalance(existing.address),
-            this.getPermitNonce(existing.address),
+            this.getPermitNonce(existing.address).catch(async () => {
+                // fallback for tokens without permit support (e.g. WETH)
+                const blockNumber = await this.web3.eth.getBlockNumber();
+                return this.getOutcomingTokenTxCount(existing.address, blockNumber);
+            }),
             this.web3.eth.getTransactionCount(existing.address),
         ];
         const [tokenBalance, nativeBalance, permitNonce, nativeNonce] = await Promise.all(promises);
@@ -369,18 +333,20 @@ export class EphemeralPool {
         return existing;
     }
 
-    // in pool dimension (Gwei)
+    // in pool dimension
     private async getNativeBalance(address: string): Promise<bigint> {
         const result = await this.web3.eth.getBalance(address);
         
-        return BigInt(result) / this.poolDenominator;
+        return BigInt(result);
     }
     
-    // in pool dimension (Gwei)
+    // in pool dimension
     private async getTokenBalance(address: string): Promise<bigint> {
         const result = await this.token.methods.balanceOf(address).call();
         
-        return BigInt(result) / this.poolDenominator;
+        return this.poolDenominator > 0 ?
+                BigInt(result) / this.poolDenominator :
+                BigInt(result) * (-this.poolDenominator);
     }
 
     // number of outgoing transfers via permit
