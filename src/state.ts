@@ -13,6 +13,7 @@ import { ColdStorageConfig } from './coldstorage';
 import { InternalError } from './errors';
 import { ZkBobRelayer } from './services/relayer';
 import { CONSTANTS } from './constants';
+import { NetworkBackend } from './networks/network';
 
 const LOG_STATE_HOTSYNC = false;
 
@@ -61,6 +62,7 @@ export class ZkBobState {
   public stateId: string; // should depends on pool and sk
   private sk: Uint8Array;
   private birthIndex?: number;
+  private network: NetworkBackend;
   public history?: HistoryStorage; // should work synchronically with the state
   private ephemeralAddrPool?: EphemeralPool; // depends on sk so we placed it here
   private worker: any;
@@ -81,6 +83,7 @@ export class ZkBobState {
   public static async create(
     sk: Uint8Array,
     birthIndex: number | undefined,
+    network: NetworkBackend,
     networkName: string,
     rpcUrl: string,
     denominator: bigint,
@@ -95,13 +98,15 @@ export class ZkBobState {
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
 
+    zpState.network = network;
+
     await worker.createAccount(zpState.stateId, zpState.sk, poolId, networkName);
     zpState.worker = worker;
     
     zpState.history = await HistoryStorage.init(zpState.stateId, rpcUrl, zpState);
 
-    let network = networkName as NetworkType;
-    zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, network, rpcUrl, denominator);
+
+    zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, networkName as NetworkType, rpcUrl, denominator);
 
     return zpState;
   }
@@ -343,8 +348,6 @@ export class ZkBobState {
       for (let i = startIndex; i <= optimisticIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
         const oneBatch = relayer.fetchTransactionsOptimistic(BigInt(i), BATCH_SIZE).then( async txs => {
           console.log(`🔥[HotSync] got ${txs.length} transactions from index ${i}`);
-
-          const batchState = new Map<number, StateUpdate>();
           
           const txHashes: Record<number, string> = {};
           const indexedTxs: IndexedTx[] = [];
@@ -380,6 +383,12 @@ export class ZkBobState {
               maxPendingIndex = Math.max(maxPendingIndex, memo_idx);
             }
           }
+
+          //const processed = await this.parseIndexedTxs(i, indexedTxs, indexedTxsPending, txHashes);
+          //readyToTransact &&= processed.readyToTransact;
+          //return {txCount: txs.length, maxMinedIndex, maxPendingIndex, state: processed.state};
+
+          const batchState = new Map<number, StateUpdate>();
 
           if (indexedTxs.length > 0) {
             const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, indexedTxs);
@@ -520,15 +529,20 @@ export class ZkBobState {
     return readyToTransact;
   }
 
+  // The heaviest work: parse txs batch
+  // updates batchState
+  // returns false in case of pending transactions from our account
   private async parseIndexedTxs(
-    startIndex: number,
-    indexedTxs: IndexedTx[],
-    indexedTxsPending: IndexedTx[],
-    txHashes: Record<number, string>,
-    batchState: Map<number, StateUpdate>,
-  ): Promise<boolean> {
+    startIndex: number, // start batch index within Merkle tree
+    indexedTxs: IndexedTx[],  // input data for wasm worker (memo + commitments)
+    indexedTxsPending: IndexedTx[], // input data for wasm worker (memo + commitments, optimistic state)
+    txHashes: Record<number, string>, // txHashes to create HistoryRecord
+  ): Promise<{txCount: number, state: Map<number, StateUpdate>, readyToTransact: boolean}> {
     let readyToTransact = true;
 
+    const batchState = new Map<number, StateUpdate>();
+
+    // process mined transactions 
     if (indexedTxs.length > 0) {
       const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, indexedTxs);
       const decryptedMemos = parseResult.decryptedMemos;
@@ -544,6 +558,7 @@ export class ZkBobState {
       }
     }
 
+    // process pending transactions from the optimisstic state
     if (indexedTxsPending.length > 0) {
       const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, indexedTxsPending);
       const decryptedPendingMemos = parseResult.decryptedMemos;
@@ -561,8 +576,11 @@ export class ZkBobState {
       }
     }
 
-    return readyToTransact;
-    //return {txCount: txs.length, maxMinedIndex, maxPendingIndex, state: batchState}
+    return {
+      txCount: indexedTxs.length + indexedTxsPending.length,
+      state: batchState,
+      readyToTransact,
+    };
   }
 
   // Just fetch and process the new state without local state updating

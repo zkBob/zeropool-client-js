@@ -213,6 +213,7 @@ export class ZkBobClient extends ZkBobProvider {
       const state = await ZkBobState.create(
           this.account.sk,
           this.account.birthindex,
+          network,
           networkName,
           network.getRpcUrl(),
           denominator,
