@@ -360,7 +360,7 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   public async verifyComplianceReport(report:ComplianceHistoryRecord[]):Promise<number>{
-     
+     return Promise.resolve(0)
   }
   public async getPendingDDs(): Promise<DirectDeposit[]> {
     return this.ddProcessor().pendingDirectDeposits();
@@ -381,7 +381,7 @@ export class ZkBobClient extends ZkBobProvider {
       throw new InternalError('Account is not set');
     }
     
-    return await this.zpState().history?.getComplianceReport(fromTimestamp, toTimestamp) ?? {records:[], previousTxHash:""};     
+    return await this.zpState().history?.getComplianceReport(fromTimestamp, toTimestamp) ?? {fromTimestamp, toTimestamp, records:[], preceedingTxHash:""};     
 
   }
 

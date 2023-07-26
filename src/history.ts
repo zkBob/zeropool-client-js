@@ -161,8 +161,10 @@ class HistoryRecordIdx {
   }
 }
 export class ComplianceReport {
+  fromTimestamp: number | null;
+  toTimestamp: number | null;
   records: ComplianceHistoryRecord[];
-  previousTxHash: string|undefined
+  preceedingTxHash: string | undefined
 }
 export class ComplianceHistoryRecord extends HistoryRecord {
   // the first leaf (account) index
@@ -642,8 +644,8 @@ export class HistoryStorage {
   // the history should be synced before invoking that method
   // timestamps are milliseconds, low bound is inclusively
   public async getComplianceReport(fromTimestamp: number | null, toTimestamp: number | null): Promise<ComplianceReport> {
-    let complienceRecords: ComplianceHistoryRecord[] = [];
-    let extraRecordBeforeStart:[number, HistoryRecord|undefined] = [0, undefined];
+    let complianceRecords: ComplianceHistoryRecord[] = [];
+    let preceedingTx: [number, HistoryRecord | undefined] = [0, undefined];
     for (const [treeIndex, value] of  this.currentHistory.entries()) {
       const recTs = value.timestamp * 1000;
       if (recTs >= (fromTimestamp ?? 0) &&
@@ -656,6 +658,8 @@ export class HistoryStorage {
             const txSelector = calldata.input.slice(2, 10).toLowerCase();
             if (txSelector == PoolSelector.Transact) {
               const tx = ShieldedTx.decode(calldata.input);
+              console.log('decoded tx', value.txHash)
+              console.log(tx);
               const memoblock = hexToBuf(tx.ciphertext);
 
               let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
@@ -725,14 +729,14 @@ export class HistoryStorage {
               // --- END-OF-TEST-CASE ---
               
               const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, nextNullifier, decryptedMemo, chunks, inputs);
-              complienceRecords.push(aRec);
+              complianceRecords.push(aRec);
             } else if(txSelector == PoolSelector.AppendDirectDeposit) {
               // Here is direct deposit transaction
               // It isn't encrypted so we do not need any extra info
               let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
               if (decryptedMemo) {
                 const aRec = new ComplianceHistoryRecord(value, treeIndex, undefined, undefined, decryptedMemo, [], undefined);
-                complienceRecords.push(aRec);
+                complianceRecords.push(aRec);
               }
 
             } else {
@@ -745,16 +749,22 @@ export class HistoryStorage {
         } else {
           console.warn(`[HistoryStorage]: cannot get calldata for tx at index ${treeIndex}`);
         }
-      } else if( extraRecordBeforeStart[0] < treeIndex ) {
-        extraRecordBeforeStart = [treeIndex,value]
+      } else if (preceedingTx[0] < treeIndex) {
+        preceedingTx = [treeIndex, value]
       }
     };
-    if (extraRecordBeforeStart[1]) {
-      // complienceRecords.push(extraRecordBeforeStart[1])
+
+    if(preceedingTx)
+    {
+      const calldata = await this.getNativeTx(preceedingTx[0], preceedingTx[1]?.txHash);
+      const tx = ShieldedTx.decode(calldata.input);
+      console.log('preceeding tx:', tx)
     }
     return  {
-      records: complienceRecords,
-      previousTxHash: extraRecordBeforeStart[1]?.txHash
+      fromTimestamp,
+      toTimestamp,
+      records: complianceRecords,
+      preceedingTxHash: preceedingTx[1]?.txHash
     }
   }
 
@@ -765,17 +775,35 @@ export class HistoryStorage {
   public async verifyComplianceReport(report: ComplianceReport): Promise<number>{
 
 
-    /*
-    In order to check that there are no transaction ommited between start of the period and first record in the report we need to reconstruct previous transaction commitment using input account from first record and compare it with the commitment in blockchain
-    */ 
 
-    const previousTxHash = report.previousTxHash;
-    const previousTxCalldata = this.web3.getTransaction(previousTxHash);
-    const txSelector = previousTxCalldata.input.slice(2, 10).toLowerCase();
+    //the report doesn't have a starting point, so it must contain transaction from the very first one, including a first deposit, where nullifier is a dummy nullifier for a zero account
+    if (report.fromTimestamp == null && !report.preceedingTxHash) {
+      // TODO: check that first account is zero account
+    }
+
+    /*
+    If the report has a starting point then in order to check that there are no transaction ommited between start of the period and first record in the report we need one extra transaction that preceeds the report period.
+    We have to reconstruct preceeding transaction commitment using input account from first record and compare it with the commitment stored on-chain
+    Memo contains output account hash and also hashes of output notes - this should be enough to recreate transaction commitment. We also could check that output account hash corresponds to the first record of the report but it would be less reliable, beacause memo is not binding in any manner and the user can write anything, OTOH the transaction commitment is a public parameter for snark and this makes it much more suitable for consistency check.
+    */ 
+    else if (report.fromTimestamp != null && report.preceedingTxHash) {
+
+      const preceedingTxHash = report.preceedingTxHash;
+    const preceedingTxCalldata = this.web3.getTransaction(preceedingTxHash);
+    const txSelector = preceedingTxCalldata.input.slice(2, 10).toLowerCase();
             if (txSelector == PoolSelector.Transact) {
-              const tx = ShieldedTx.decode(previousTxCalldata.input);
+              const tx = ShieldedTx.decode(preceedingTxCalldata.input);
+              const onchainTxCommitment = preceedingTxCalldata.slice(72,64)
+              const firstRecord:ComplianceHistoryRecord = report.records[0];
+              const acc = firstRecord.acc;
+              if (acc) {
+                this.state.check_out_commitment(onchainTxCommitment,acc,tx.memo);  
+              } 
             }
+    }
     
+    return Promise.resolve(0)
+
   }
 
   public async rollbackHistory(rollbackIndex: number): Promise<void> {

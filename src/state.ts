@@ -752,4 +752,8 @@ export class ZkBobState {
   public async decryptNote(symkey: Uint8Array, encrypted: Uint8Array): Promise<Note> {
     return this.worker.decryptNote(symkey, encrypted);
   }
+
+  public async check_out_commitment(commitment: string, account: Account, memo: string): Promise<boolean> {
+    return this.worker.check_out_commitment(commitment, account, memo)
+  }
 }

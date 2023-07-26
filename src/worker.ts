@@ -224,6 +224,10 @@ const obj = {
 
   async parseAddress(accountId: string, shieldedAddress: string): Promise<IAddressComponents> {
     return zpAccounts[accountId].parseAddress(shieldedAddress);
+  },
+
+  async check_out_commitment(commitment: string, account: Account, memo: string): Promise<boolean> {
+    return txParser.check_out_commitment(commitment, account, memo)
   }
 };
 
