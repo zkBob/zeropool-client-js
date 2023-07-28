@@ -1,11 +1,11 @@
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
 import { Chains, Pools, SnarkConfigParams, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
-          toTwosComplementHex, bufToHex
+          toTwosComplementHex, bufToHex, bigintToArrayLe
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
-import { CALLDATA_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
+import { CALLDATA_BASE_LENGTH, CALLDATA_MEMO_NOTE_LENGTH, CALLDATA_MEMO_TRANSFER_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
@@ -24,6 +24,7 @@ import { isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
 import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks/network';
+import { Privkey } from 'hdwallet-babyjub';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
@@ -77,6 +78,8 @@ export class ZkBobClient extends ZkBobProvider {
   // The single worker for the all pools
   // Currently we assume parameters are the same for the all pools
   private worker: any;
+  // Performance estimation (msec per tx)
+  private wasmSpeed: number | undefined;
   // Active account config. It can be undefined util user isn't login
   // If it's undefined the ZkBobClient acts as accountless client
   // (client-oriented methods will throw error)
@@ -131,6 +134,10 @@ export class ZkBobClient extends ZkBobProvider {
 
     client.zpStates = {};
     client.worker = worker;
+
+    client.estimateSyncSpeed().then((speed) => {
+      client.wasmSpeed = speed;
+    });
     
     return client;
   }
@@ -1458,6 +1465,33 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     return undefined; // relevant stat doesn't found
+  }
+
+  // in microseconds per tx
+  private async estimateSyncSpeed(): Promise<number> {
+    const samplesNum = 1000;
+
+    const genRanHex = size => [...Array(size)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
+
+    const sk = bigintToArrayLe(Privkey("test test test test test test test test test test test tell", "m/0'/0'"));
+    const samples = Array.from({length: samplesNum}, (_value, index) => index * (CONSTANTS.OUT + 1));
+    const txs: IndexedTx[] = samples.map((index) => {
+      return {
+        index,
+        memo: '02000000ff73d841b6d0027b689346b50aee18ef8263e2a27b0da325aba9774c46ffd4000d2e19298339b722fa126acedf1bcb300ebe0f8a0e96589b0c92612c96346d0db314014936ed9f11a60f15de2704dfa3f0a735242720637e0136d9b79d06342de5604968cb42d9ba3f57d9c2a591d1ca448e1f24b675b9de375f2086a6f17fd35c5e6318e0694d7bddce27e259acdb03e5943fa1f794149fadd45b3fcb15e7d9e0b16eefae48e2221bb405fd0ced6baf1d09baa042b864d7c73c7d642d8b143903d4f434ce811eb25bc4b988202318e16fbe15e259a5a7636d2713c0bee2b9579901fe559e4dde2be00b723843decaa18febc1b48a349b9f4c29074692c5af0c8a828df1f8e8f9fd8d7d752470bb63f132892f7669d5a305460b6c4c1ac76d0fc2ee164eae1c30ee8ea9ec666296c0d7e205386d1cf8356e88bc8ebb5786ed47bca1910598ea1e2adbae1663b90b00697d4f499e1955fd05c998be29dd9824dccc20e47fc1c81e3e13e20e9fda4e21514a5d', //`01000000${'00'.repeat(CALLDATA_MEMO_TRANSFER_BASE_LENGTH + CALLDATA_MEMO_NOTE_LENGTH - 8)}`,
+        commitment: '0bc0c8fe774470d73f8695bd60aa3de479ce516e357d07f3e120ca8534cebd26'
+      }
+    });
+
+    const startTime = Date.now();
+    const res = await this.worker.parseTxs(sk, txs);
+    const fullTime = Date.now() - startTime;
+
+    const avgSpeed = fullTime / samplesNum;
+
+    console.info(`[EstimateWasm] Parsed ${samplesNum} samples in ${fullTime / 1000} sec: ${avgSpeed} msec\\tx`);
+    
+    return avgSpeed;
   }
 
   // ------------------=========< Direct Deposits >=========------------------
