@@ -68,6 +68,28 @@ export interface FeeAmount { // all values are in Gwei
   insufficientFunds: boolean; // true when the local balance is insufficient for requested tx amount
 }
 
+export enum ClientState {
+  Initializing = 0,
+  AccountlessMode,
+  SwitchingPool,
+  AttachingAccount,
+  // the following routines belongs to the full mode
+  FullMode, // ready to operate
+  StateUpdating,  // short state sync
+  StateUpdatingContinuous,  // sync which takes longer than threshold
+  HistoryUpdating,
+  HistoryUpdatingContinuous,
+  TxCreating,
+  TxProving,
+  TxSending,
+}
+const continuosStates = [
+  ClientState.StateUpdatingContinuous,
+  ClientState.HistoryUpdatingContinuous
+];
+
+export type ClientStateCallback = (state: ClientState, progress?: number) => void;
+
 export class ZkBobClient extends ZkBobProvider {
   // States for the current account in the different pools
   private zpStates: { [poolAlias: string]: ZkBobState } = {};
@@ -89,13 +111,41 @@ export class ZkBobClient extends ZkBobProvider {
   private monitoredJobs = new Map<string, JobInfo>();
   private jobsMonitors  = new Map<string, Promise<JobInfo>>();
 
+  // Library state info
+  private state: ClientState;
+  private stateProgress: number;
+  public getState(): ClientState { return this.state }
+  public getProgress(): number | undefined {
+    return continuosStates.includes(this.state) ? this.stateProgress : undefined;
+  }
+  private setState(newState: ClientState, progress?: number) {
+    const isContunious = continuosStates.includes(newState);
+    if (this.state != newState || isContunious) {
+      this.state = newState;
+      this.stateProgress = (isContunious && progress !== undefined) ? progress : -1;
+      if (this.stateCallback) { // invoke callback if defined
+        this.stateCallback(this.getState(), this.getProgress());
+      }
+    }
+  }
+  public stateCallback?: ClientStateCallback;
+
   // ------------------------=========< Lifecycle >=========------------------------
   // | Init and free client, login/logout, switching between pools                 |
   // -------------------------------------------------------------------------------
 
-  private constructor(pools: Pools, chains: Chains, initialPool: string, supportId: string | undefined) {
+  private constructor(
+    pools: Pools,
+    chains: Chains,
+    initialPool: string,
+    supportId?: string,
+    callback?: ClientStateCallback
+  ) {
     super(pools, chains, initialPool, supportId);
     this.account = undefined;
+    this.state = ClientState.Initializing;
+    this.stateProgress = -1;
+    this.stateCallback = callback;
   }
 
   private async workerInit(
@@ -124,11 +174,18 @@ export class ZkBobClient extends ZkBobProvider {
     return worker;
   }
 
-  public static async create(config: ClientConfig, activePoolAlias: string): Promise<ZkBobClient> {
+  public static async create(
+    config: ClientConfig,
+    activePoolAlias: string,
+    callback?: ClientStateCallback
+  ): Promise<ZkBobClient> {
     if (Object.keys(config.pools).length == 0) {
       throw new InternalError(`Cannot initialize library without pools`);
     }
-    const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "");
+    if (callback) {
+      callback(ClientState.Initializing);
+    }
+    const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "", callback);
 
     const worker = await client.workerInit(config.snarkParams);
 
@@ -138,6 +195,8 @@ export class ZkBobClient extends ZkBobProvider {
     client.estimateSyncSpeed().then((speed) => {
       client.wasmSpeed = speed;
     });
+
+    client.setState(ClientState.AccountlessMode);
     
     return client;
   }
@@ -173,11 +232,13 @@ export class ZkBobClient extends ZkBobProvider {
   public async logout() {
     this.free();
     this.account = undefined;
+    this.setState(ClientState.AccountlessMode);
   }
 
   // Swithing to the another pool without logout with the same spending key
   // Also available before login (just switch pool to use the instance as an accoutless client)
   public async switchToPool(poolAlias: string, birthindex?: number) {
+    this.setState(this.account ? ClientState.AttachingAccount : ClientState.SwitchingPool);
     // remove currently activated state if exist [to reduce memory consumption]
     const oldPoolAlias = super.currentPool();
     this.freePoolState(oldPoolAlias);
@@ -188,8 +249,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     // the following values needed to initialize ZkBobState
     const pool = this.pool();
-    const denominator = await this.denominator();
-    const poolId = await this.poolId();
+    const [denominator, poolId] = await Promise.all([this.denominator(), this.poolId()]);
     const network = this.network();
     const networkName = this.networkName();
 
@@ -235,6 +295,8 @@ export class ZkBobClient extends ZkBobProvider {
     } else {
       console.log(`Pool was switched to ${newPoolAlias} but account is not set yet`);
     }
+
+    this.setState(this.account ? ClientState.FullMode : ClientState.AccountlessMode);
   }
 
   public hasAccount(): boolean {
@@ -282,7 +344,7 @@ export class ZkBobClient extends ZkBobProvider {
   public async getOptimisticTotalBalance(updateState: boolean = true): Promise<bigint> {
 
     const confirmedBalance = await this.getTotalBalance(updateState);
-    const historyRecords = await this.getAllHistory(updateState);
+    const historyRecords = await this.getAllHistory(false);
 
     let pendingDelta = BigInt(0);
     for (const oneRecord of historyRecords) {
