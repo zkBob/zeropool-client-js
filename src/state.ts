@@ -45,6 +45,12 @@ interface RawTxsBatch {
   maxPendingIndex: number;
 }
 
+export interface StateSyncInfo {
+  txCount: number;
+  startTimestamp: number;
+  endTimestamp?: number;
+}
+
 
 // Used to collect state synchronization statistic
 // It could be helpful to monitor average sync time
@@ -88,6 +94,10 @@ export class ZkBobState {
   // Mapping shieldedAddress -> isOwnAddress (local cache)
   // need to decrease time in isOwnAddress() function 
   private shieldedAddressCache = new Map<string, Promise<boolean>>();
+
+  // Sync info
+  private lastSyncInfo?: StateSyncInfo;
+
 
   // Create regular state with the provided spending key
   // and other parameters
@@ -142,6 +152,15 @@ export class ZkBobState {
     zpState.worker = worker;
 
     return zpState;
+  }
+
+  // returns undefined if state sync not in progress
+  public curSyncInfo(): StateSyncInfo | undefined {
+    if (this.updateStatePromise && this.lastSyncInfo) {
+      return this.lastSyncInfo
+    }
+
+    return undefined;
   }
 
   public ephemeralPool(): EphemeralPool {
@@ -312,6 +331,7 @@ export class ZkBobState {
     coldConfig?: ColdStorageConfig,
     coldBaseAddr?: string,
   ): Promise<boolean> {
+    this.lastSyncInfo = {txCount: 0, startTimestamp: Date.now()}
     let startIndex = Number(await this.getNextIndex());
 
     const stateInfo = await relayer.info();
@@ -339,7 +359,10 @@ export class ZkBobState {
       }
 
       // Getting start sync operation timestamp
-      const startTime = Date.now();
+      const startSyncTime = Date.now();
+
+      // now we got actual txs count to sync => update info
+      this.lastSyncInfo.txCount = (optimisticIndex - startIndex) /  OUTPLUSONE;
 
       // Try to using the cold storage if possible
       const coldResultPromise = this.loadColdStorageTxs(getPoolRoot, coldConfig, coldBaseAddr, startIndex);
@@ -408,7 +431,7 @@ export class ZkBobState {
       this.history?.setLastPendingTxIndex(totalRes.maxPendingIndex);
 
 
-      const fullSyncTime = Date.now() - startTime;
+      const fullSyncTime = Date.now() - startSyncTime;
       const fullSyncTimePerTx = fullSyncTime / (coldResult.txCount + totalRes.txCount);
 
       curStat.txCount = totalRes.txCount + coldResult.txCount;
@@ -468,6 +491,9 @@ export class ZkBobState {
       }
     }
 
+    // set finish sync timestamp
+    this.lastSyncInfo.endTimestamp = Date.now();
+
     return isReadyToTransact;
   }
 
@@ -491,7 +517,7 @@ export class ZkBobState {
     return Promise.all(hotSyncPromises);
   }
 
-  // Get the transactions from the relayer from the specified index
+  // Get the transactions from the relayer starting from the specified index
   private async fetchBatch(relayer: ZkBobRelayer, fromIndex: number, count: number): Promise<RawTxsBatch> {
     const startDownloadTime = Date.now();
     return relayer.fetchTransactionsOptimistic(BigInt(fromIndex), count).then( async txs => {      
@@ -546,8 +572,7 @@ export class ZkBobState {
   }
 
   // The heaviest work: parse txs batch
-  // updates batchState
-  // returns false in case of pending transactions from our account
+  // and returns batch result
   private async parseBatch(batch: RawTxsBatch): Promise<BatchResult> {
     let hasOwnOptimisticTxs = false;
 

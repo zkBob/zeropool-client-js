@@ -1463,12 +1463,16 @@ export class ZkBobClient extends ZkBobProvider {
   // Request the latest state from the relayer
   // Returns isReadyToTransact flag
   public async updateState(): Promise<boolean> {
-    return await this.zpState().updateState(
+    this.setState(ClientState.StateUpdating);
+    
+    const res = await this.zpState().updateState(
       this.relayer(),
       async (index) => (await this.getPoolState(index)).root,
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );
+
+    return res;
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------
