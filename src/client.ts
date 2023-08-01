@@ -32,6 +32,9 @@ const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
 
+const CONTINUOUS_STATE_UPD_INTERVAL = 200; // updating client's state timer interval for continuous states (in ms)
+const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous after that interval (in ms)
+
 // Transfer destination + amount
 // Used as input in `transferMulti` method
 // Please note the request could be fragmented
@@ -1464,15 +1467,36 @@ export class ZkBobClient extends ZkBobProvider {
   // Returns isReadyToTransact flag
   public async updateState(): Promise<boolean> {
     this.setState(ClientState.StateUpdating);
-    
-    const res = await this.zpState().updateState(
+
+    const updPromise = this.zpState().updateState(
       this.relayer(),
       async (index) => (await this.getPoolState(index)).root,
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );
 
-    return res;
+    const timerId = setInterval(() => {
+      const syncInfo = this.zpState().curSyncInfo();
+      if (syncInfo) {
+        // sync in progress
+        const timeElapsedMs = Date.now() - syncInfo.startTimestamp;
+        if (timeElapsedMs < CONTINUOUS_STATE_THRESHOLD) {
+          this.setState(ClientState.StateUpdating);
+        } else {
+          const estTimeMs = syncInfo.txCount * (this.wasmSpeed ?? 10.0);
+          const progress = timeElapsedMs / estTimeMs;
+          this.setState(ClientState.StateUpdatingContinuous, progress < 1.0 ? progress : 1.0);
+        }
+      }
+    }, CONTINUOUS_STATE_UPD_INTERVAL);
+
+    const hasOwnTxsInOptimisticState = await updPromise;
+
+    clearInterval(timerId);
+
+    this.setState(ClientState.FullMode);
+
+    return hasOwnTxsInOptimisticState;
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------

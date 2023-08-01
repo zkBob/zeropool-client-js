@@ -505,12 +505,7 @@ export class ZkBobState {
     for (let i = fromIndex; i <= toIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
       hotSyncPromises.push(this.fetchBatch(relayer, i, BATCH_SIZE).then(async (aBatch) => {
         // batch fetched, let's parse it!
-        const startParseTime = Date.now();
-        const result = await this.parseBatch(aBatch);
-        const parseTime = (Date.now() - startParseTime) / 1000;
-        console.log(`Parsed: ${aBatch.count} transactions from index ${aBatch.fromIndex} [${parseTime.toFixed(2)} sec]`);
-
-        return result;
+        return await this.parseBatch(aBatch);
       }));
     }
 
@@ -519,7 +514,6 @@ export class ZkBobState {
 
   // Get the transactions from the relayer starting from the specified index
   private async fetchBatch(relayer: ZkBobRelayer, fromIndex: number, count: number): Promise<RawTxsBatch> {
-    const startDownloadTime = Date.now();
     return relayer.fetchTransactionsOptimistic(BigInt(fromIndex), count).then( async txs => {      
       const txHashes: Record<number, string> = {};
       const indexedTxs: IndexedTx[] = [];
@@ -556,8 +550,7 @@ export class ZkBobState {
         }
       }
 
-      const downloadTime = (Date.now() - startDownloadTime) / 1000;
-      console.log(`🔥[HotSync] got batch of ${txs.length} transactions from index ${fromIndex} in ${downloadTime.toFixed(2)} sec`);
+      console.log(`🔥[HotSync] got batch of ${txs.length} transactions from index ${fromIndex}`);
 
       return {
         fromIndex: fromIndex,

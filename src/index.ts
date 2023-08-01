@@ -2,7 +2,9 @@ export { ClientConfig, AccountConfig, accountId,
         ProverMode, Chain, Pool, Chains, Pools,
         SnarkConfigParams, DepositType
       } from './config';
-export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount } from './client';
+export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount,
+        ClientState, ClientStateCallback
+      } from './client';
 export { ZkBobProvider as ZkBobAccountlessClient, GiftCardProperties } from './client-provider';
 export { SyncStat } from './state';
 export { TxType } from './tx';
