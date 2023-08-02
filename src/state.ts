@@ -403,6 +403,8 @@ export class ZkBobState {
         }
       }, initRes);
 
+      const startSavingTime = Date.now();
+      console.log(`🔥[HotSync] all batches were processed. Saving...`);
       // Saving parsed transaction from the hot sync in the local Merkle tree
       const idxs = [...totalRes.state.keys()].sort((i1, i2) => i1 - i2);
       for (const idx of idxs) {
@@ -425,6 +427,8 @@ export class ZkBobState {
           throw new InternalError(`Cannot find state batch at index ${idx}`);
         }
       }
+
+      console.log(`🔥[HotSync] Saved local state in ${Date.now() - startSavingTime} ms`);
 
       // remove unneeded pending records
       this.history?.setLastMinedTxIndex(totalRes.maxMinedIndex);
@@ -503,9 +507,9 @@ export class ZkBobState {
   private async startHotSync(relayer: ZkBobRelayer, fromIndex: number, toIndex: number): Promise<BatchResult[]> {
     let hotSyncPromises: Promise<BatchResult>[] = [];
     for (let i = fromIndex; i <= toIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
-      hotSyncPromises.push(this.fetchBatch(relayer, i, BATCH_SIZE).then(async (aBatch) => {
+      hotSyncPromises.push(this.fetchBatch(relayer, i, BATCH_SIZE).then((aBatch) => {
         // batch fetched, let's parse it!
-        return await this.parseBatch(aBatch);
+        return this.parseBatch(aBatch);
       }));
     }
 
