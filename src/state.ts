@@ -47,6 +47,7 @@ interface RawTxsBatch {
 
 export interface StateSyncInfo {
   txCount: number;
+  processedTxCount: number;
   startTimestamp: number;
   endTimestamp?: number;
 }
@@ -331,7 +332,7 @@ export class ZkBobState {
     coldConfig?: ColdStorageConfig,
     coldBaseAddr?: string,
   ): Promise<boolean> {
-    this.lastSyncInfo = {txCount: 0, startTimestamp: Date.now()}
+    this.lastSyncInfo = {txCount: 0, processedTxCount: 0, startTimestamp: Date.now()}
     let startIndex = Number(await this.getNextIndex());
 
     const stateInfo = await relayer.info();
@@ -365,7 +366,7 @@ export class ZkBobState {
       this.lastSyncInfo.txCount = (optimisticIndex - startIndex) /  OUTPLUSONE;
 
       // Try to using the cold storage if possible
-      const coldResultPromise = this.loadColdStorageTxs(getPoolRoot, coldConfig, coldBaseAddr, startIndex);
+      const coldResultPromise = this.startColdSync(getPoolRoot, coldConfig, coldBaseAddr, startIndex);
 
       // Start the hot sync simultaneously with the cold sync
       const assumedNextIndex = this.nextIndexAfterColdSync(coldConfig, startIndex);
@@ -507,9 +508,11 @@ export class ZkBobState {
   private async startHotSync(relayer: ZkBobRelayer, fromIndex: number, toIndex: number): Promise<BatchResult[]> {
     let hotSyncPromises: Promise<BatchResult>[] = [];
     for (let i = fromIndex; i <= toIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
-      hotSyncPromises.push(this.fetchBatch(relayer, i, BATCH_SIZE).then((aBatch) => {
+      hotSyncPromises.push(this.fetchBatch(relayer, i, BATCH_SIZE).then(async (aBatch) => {
         // batch fetched, let's parse it!
-        return this.parseBatch(aBatch);
+        const res = await this.parseBatch(aBatch);
+        if (this.lastSyncInfo) this.lastSyncInfo.processedTxCount += aBatch.count;
+        return res;
       }));
     }
 
@@ -740,7 +743,7 @@ export class ZkBobState {
     return fromIndex ?? 0;
   }
 
-  private async loadColdStorageTxs(
+  private async startColdSync(
     getPoolRoot: (index: bigint) => Promise<bigint>,
     coldConfig?: ColdStorageConfig,
     coldStorageBaseAddr?: string,
@@ -800,6 +803,7 @@ export class ZkBobState {
             this.history?.saveDecryptedMemo(aMemo, false);
           });
 
+          if (this.lastSyncInfo) this.lastSyncInfo.processedTxCount += result.txCnt;
 
           syncResult.txCount = result.txCnt;
           syncResult.decryptedLeafs = result.decryptedLeafsCnt;
@@ -811,6 +815,7 @@ export class ZkBobState {
           if (!isStateCorrect) {
             console.warn(`🧊[ColdSync] Merkle tree root at index ${await this.getNextIndex()} mistmatch! Wiping the state...`);
             await this.clean();  // rollback to 0
+            if (this.lastSyncInfo) this.lastSyncInfo.processedTxCount = 0;
             this.skipColdStorage = true;  // prevent cold storage usage
 
             syncResult.txCount = 0;

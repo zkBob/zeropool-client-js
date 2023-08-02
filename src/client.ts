@@ -81,15 +81,11 @@ export enum ClientState {
   StateUpdating,  // short state sync
   StateUpdatingContinuous,  // sync which takes longer than threshold
   HistoryUpdating,
-  HistoryUpdatingContinuous,
   TxCreating,
   TxProving,
   TxSending,
 }
-const continuosStates = [
-  ClientState.StateUpdatingContinuous,
-  ClientState.HistoryUpdatingContinuous
-];
+const continuosStates = [ ClientState.StateUpdatingContinuous ];
 
 export type ClientStateCallback = (state: ClientState, progress?: number) => void;
 
@@ -429,7 +425,11 @@ export class ZkBobClient extends ZkBobProvider {
       await this.updateState();
     }
 
-    return await this.zpState().history?.getAllHistory() ?? [];
+    this.setState(ClientState.HistoryUpdating);
+    const res = await this.zpState().history?.getAllHistory() ?? [];
+    this.setState(ClientState.FullMode);
+
+    return res;
   }
 
   public async getPendingDDs(): Promise<DirectDeposit[]> {
@@ -1484,7 +1484,9 @@ export class ZkBobClient extends ZkBobProvider {
           this.setState(ClientState.StateUpdating);
         } else {
           const estTimeMs = syncInfo.txCount * (this.wasmSpeed ?? 10.0);
-          const progress = timeElapsedMs / estTimeMs;
+          const progressByTime = timeElapsedMs / estTimeMs;
+          const progressByTxs = syncInfo.txCount > 0 ? syncInfo.processedTxCount / syncInfo.txCount : 0;
+          const progress = progressByTxs; //progressByTxs > 0 ? progressByTxs : progressByTime;
           this.setState(ClientState.StateUpdatingContinuous, progress < 1.0 ? progress : 1.0);
         }
       }
