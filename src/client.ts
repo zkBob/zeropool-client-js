@@ -25,6 +25,8 @@ import { isAddress } from 'web3-utils';
 import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks/network';
 import { Privkey } from 'hdwallet-babyjub';
+import { IDBPDatabase, openDB } from 'idb';
+import { stat } from 'fs';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
@@ -34,6 +36,9 @@ const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx p
 
 const CONTINUOUS_STATE_UPD_INTERVAL = 200; // updating client's state timer interval for continuous states (in ms)
 const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous after that interval (in ms)
+
+// Common databasse table's name
+const SYNC_PERFORMANCE = 'SYNC_PERFORMANCE';
 
 // Transfer destination + amount
 // Used as input in `transferMulti` method
@@ -101,6 +106,8 @@ export class ZkBobClient extends ZkBobProvider {
   private worker: any;
   // Performance estimation (msec per tx)
   private wasmSpeed: number | undefined;
+  // Sync stat database
+  private statDb?: IDBPDatabase;
   // Active account config. It can be undefined util user isn't login
   // If it's undefined the ZkBobClient acts as accountless client
   // (client-oriented methods will throw error)
@@ -138,13 +145,15 @@ export class ZkBobClient extends ZkBobProvider {
     chains: Chains,
     initialPool: string,
     supportId?: string,
-    callback?: ClientStateCallback
+    callback?: ClientStateCallback,
+    statDb?: IDBPDatabase
   ) {
     super(pools, chains, initialPool, supportId);
     this.account = undefined;
     this.state = ClientState.Initializing;
     this.stateProgress = -1;
     this.stateCallback = callback;
+    this.statDb = statDb;
   }
 
   private async workerInit(
@@ -184,7 +193,14 @@ export class ZkBobClient extends ZkBobProvider {
     if (callback) {
       callback(ClientState.Initializing);
     }
-    const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "", callback);
+
+    const commonDb = await openDB(`zkb.common`, 1, {
+      upgrade(db) {
+        db.createObjectStore(SYNC_PERFORMANCE);   // table holds state synchronization measurements
+      }
+    });
+    
+    const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "", callback, commonDb);
 
     const worker = await client.workerInit(config.snarkParams);
 
@@ -1558,6 +1574,8 @@ export class ZkBobClient extends ZkBobProvider {
 
     return undefined; // relevant stat doesn't found
   }
+
+  
 
   // in microseconds per tx
   private async estimateSyncSpeed(): Promise<number> {
