@@ -23,7 +23,7 @@ const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to 
 const CORRUPT_STATE_ROLLBACK_ATTEMPTS = 2; // number of state restore attempts (via rollback)
 const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via wipe)
 const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
-const MIN_TX_COUNT_FOR_STAT = 10;
+const MIN_TX_COUNT_FOR_STAT = 100;
 
 
 export interface BatchResult {

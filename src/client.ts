@@ -86,9 +86,6 @@ export enum ClientState {
   StateUpdating,  // short state sync
   StateUpdatingContinuous,  // sync which takes longer than threshold
   HistoryUpdating,
-  TxCreating,
-  TxProving,
-  TxSending,
 }
 const continuosStates = [ ClientState.StateUpdatingContinuous ];
 
@@ -207,9 +204,8 @@ export class ZkBobClient extends ZkBobProvider {
     client.zpStates = {};
     client.worker = worker;
 
-    client.estimateSyncSpeed().then((speed) => {
-      client.wasmSpeed = speed;
-    });
+    // starts performance estimation if needed
+    client.getPoolAvgTimePerTx();
 
     client.setState(ClientState.AccountlessMode);
     
@@ -1491,6 +1487,8 @@ export class ZkBobClient extends ZkBobProvider {
       this.coldStorageBaseURL(),
     );
 
+    const timePerTx = await this.getPoolAvgTimePerTx();
+    let maxShowedProgress = 0;
     const timerId = setInterval(() => {
       const syncInfo = this.zpState().curSyncInfo();
       if (syncInfo) {
@@ -1499,11 +1497,19 @@ export class ZkBobClient extends ZkBobProvider {
         if (timeElapsedMs < CONTINUOUS_STATE_THRESHOLD) {
           this.setState(ClientState.StateUpdating);
         } else {
-          const estTimeMs = syncInfo.txCount * (this.wasmSpeed ?? 10.0);
+          // progress evaluation based on the saved stats or synthetic test
+          const estTimeMs = syncInfo.txCount * timePerTx;
           const progressByTime = timeElapsedMs / estTimeMs;
+          const ePowProg = Math.pow(Math.E, 4 * progressByTime);
+          const asymptProgressByTime = (ePowProg - 1) / (ePowProg + 1);  // asymptotic to 1
+          // actual progress (may work poor for parallel workers)
           const progressByTxs = syncInfo.txCount > 0 ? syncInfo.processedTxCount / syncInfo.txCount : 0;
-          const progress = progressByTxs; //progressByTxs > 0 ? progressByTxs : progressByTime;
-          this.setState(ClientState.StateUpdatingContinuous, progress < 1.0 ? progress : 1.0);
+          // final progress
+          const progress = Math.min(progressByTxs ? progressByTxs : asymptProgressByTime, 1.0);
+          if (progress > maxShowedProgress) {
+            this.setState(ClientState.StateUpdatingContinuous, progress);
+            maxShowedProgress = progress;
+          }
         }
       }
     }, CONTINUOUS_STATE_UPD_INTERVAL);
@@ -1511,6 +1517,9 @@ export class ZkBobClient extends ZkBobProvider {
     const hasOwnTxsInOptimisticState = await updPromise;
 
     clearInterval(timerId);
+
+    // get and save sync speed stat if needed
+    this.updatePoolPerformanceStatistic(this.pool().poolAddress, this.zpState().syncStatistics());
 
     this.setState(ClientState.FullMode);
 
@@ -1575,14 +1584,47 @@ export class ZkBobClient extends ZkBobProvider {
     return undefined; // relevant stat doesn't found
   }
 
-  
+  // overall statistic for the current pool (saved/synthetic_tets)
+  private async getPoolAvgTimePerTx(): Promise<number> {
+    if (this.statDb) {
+      // try to get saved performance indicator first
+      const poolAddr = this.pool().poolAddress;
+      const statTime = await this.statDb.get(SYNC_PERFORMANCE, poolAddr);
+      if (typeof statTime === 'number') {
+        console.log(`[PoolPerformance]: using saved performance ${statTime} ms\\tx`);
+        return statTime;
+      }
+    }
+    
+    // returns synthetic test performance if real estimation is unavailable
+    return this.wasmSpeed ?? await this.estimateSyncSpeed().then((speed) => {
+      this.wasmSpeed = speed;
+      return speed;
+    });
+  }
+
+  private async updatePoolPerformanceStatistic(poolAddr: string, stats: SyncStat[]): Promise<void> {
+    if (this.statDb && stats.length > 0) {
+      const fullSyncStats = stats.filter((aStat) => aStat.fullSync);
+      const fullSyncTime = fullSyncStats.length > 0 ?
+        fullSyncStats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / fullSyncStats.length :
+        undefined;
+      const allSyncTime = stats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / stats.length
+
+      const statTime = await this.statDb.get(SYNC_PERFORMANCE, poolAddr);
+      if (typeof statTime === 'number') {
+        // if stat already exist for that pool - update performace just in case of full sync  
+        await this.statDb.put(SYNC_PERFORMANCE, fullSyncTime ?? ((allSyncTime + statTime) / 2), poolAddr);
+      } else {
+        // if no sync exist - set the mean time (saved & current)
+        await this.statDb.put(SYNC_PERFORMANCE, fullSyncTime ?? allSyncTime, poolAddr);
+      }
+    }
+  }
 
   // in microseconds per tx
-  private async estimateSyncSpeed(): Promise<number> {
-    const samplesNum = 1000;
-
-    const genRanHex = size => [...Array(size)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
-
+  private async estimateSyncSpeed(samplesNum: number = 1000): Promise<number> {
+    //const genRanHex = size => [...Array(size)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
     const sk = bigintToArrayLe(Privkey("test test test test test test test test test test test tell", "m/0'/0'"));
     const samples = Array.from({length: samplesNum}, (_value, index) => index * (CONSTANTS.OUT + 1));
     const txs: IndexedTx[] = samples.map((index) => {
