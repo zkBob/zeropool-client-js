@@ -1613,10 +1613,11 @@ export class ZkBobClient extends ZkBobProvider {
 
       const statTime = await this.statDb.get(SYNC_PERFORMANCE, poolAddr);
       if (typeof statTime === 'number') {
-        // if stat already exist for that pool - update performace just in case of full sync  
+        // if stat already exist for that pool - set new performace just in case of full sync
+        // Set the mean performance (saved & current) when the full sync stat isn't available
         await this.statDb.put(SYNC_PERFORMANCE, fullSyncTime ?? ((allSyncTime + statTime) / 2), poolAddr);
       } else {
-        // if no sync exist - set the mean time (saved & current)
+        // if no statistic exist - set current avg sync time (full sync is always prioritized)
         await this.statDb.put(SYNC_PERFORMANCE, fullSyncTime ?? allSyncTime, poolAddr);
       }
     }
