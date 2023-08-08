@@ -37,7 +37,7 @@ const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx p
 const CONTINUOUS_STATE_UPD_INTERVAL = 200; // updating client's state timer interval for continuous states (in ms)
 const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous after that interval (in ms)
 
-// Common databasse table's name
+// Common database table's name
 const SYNC_PERFORMANCE = 'SYNC_PERFORMANCE';
 
 // Transfer destination + amount
@@ -87,7 +87,7 @@ export enum ClientState {
   StateUpdatingContinuous,  // sync which takes longer than threshold
   HistoryUpdating,
 }
-const continuosStates = [ ClientState.StateUpdatingContinuous ];
+const continuousStates = [ ClientState.StateUpdatingContinuous ];
 
 export type ClientStateCallback = (state: ClientState, progress?: number) => void;
 
