@@ -39,6 +39,7 @@ const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous af
 
 // Common database table's name
 const SYNC_PERFORMANCE = 'SYNC_PERFORMANCE';
+const WRITE_DB_TIME_PERF_TABLE_KEY = 'average.db.writing.time.per.tx';
 
 // Transfer destination + amount
 // Used as input in `transferMulti` method
@@ -119,10 +120,10 @@ export class ZkBobClient extends ZkBobProvider {
   private stateProgress: number;
   public getState(): ClientState { return this.state }
   public getProgress(): number | undefined {
-    return continuosStates.includes(this.state) ? this.stateProgress : undefined;
+    return continuousStates.includes(this.state) ? this.stateProgress : undefined;
   }
   private setState(newState: ClientState, progress?: number) {
-    const isContunious = continuosStates.includes(newState);
+    const isContunious = continuousStates.includes(newState);
     if (this.state != newState || isContunious) {
       this.state = newState;
       this.stateProgress = (isContunious && progress !== undefined) ? progress : -1;
@@ -1487,7 +1488,8 @@ export class ZkBobClient extends ZkBobProvider {
       this.coldStorageBaseURL(),
     );
 
-    const timePerTx = await this.getPoolAvgTimePerTx();
+    const timePerTx = await this.getPoolAvgTimePerTx(); // process + save in the most cases
+    const saveTimePerTx = await this.getAvgSavingTxTime();  // saving time
     let maxShowedProgress = 0;
     const timerId = setInterval(() => {
       const syncInfo = this.zpState().curSyncInfo();
@@ -1497,13 +1499,21 @@ export class ZkBobClient extends ZkBobProvider {
         if (timeElapsedMs < CONTINUOUS_STATE_THRESHOLD) {
           this.setState(ClientState.StateUpdating);
         } else {
+          var asymptoticTo1 = (value: number) => {  // returns value limited by 1
+            const ePowProg = Math.pow(Math.E, 4 * value);
+            return (ePowProg - 1) / (ePowProg + 1);
+          }
           // progress evaluation based on the saved stats or synthetic test
           const estTimeMs = syncInfo.txCount * timePerTx;
           const progressByTime = timeElapsedMs / estTimeMs;
-          const ePowProg = Math.pow(Math.E, 4 * progressByTime);
-          const asymptProgressByTime = (ePowProg - 1) / (ePowProg + 1);  // asymptotic to 1
+          const asymptProgressByTime = asymptoticTo1(timeElapsedMs / estTimeMs)
           // actual progress (may work poor for parallel workers)
-          const progressByTxs = syncInfo.txCount > 0 ? syncInfo.processedTxCount / syncInfo.txCount : 0;
+          const estSavingTime = syncInfo.hotSyncCount * saveTimePerTx;
+          const savingFraction = Math.min(estSavingTime / estTimeMs, 1);
+          const savingProgressAsympt = syncInfo.startDbTimestamp ?
+            asymptoticTo1((Date.now() - syncInfo.startDbTimestamp) / estSavingTime) : 0;
+          let progressByTxs = syncInfo.txCount > 0 ? (syncInfo.processedTxCount / syncInfo.txCount) : 0;
+          progressByTxs = Math.max(progressByTxs - savingFraction * (1 - savingProgressAsympt), 0);
           // final progress
           const progress = Math.min(progressByTxs ? progressByTxs : asymptProgressByTime, 1.0);
           if (progress > maxShowedProgress) {
@@ -1574,7 +1584,7 @@ export class ZkBobClient extends ZkBobProvider {
     return undefined; // relevant stat doesn't found
   }
 
-  // in milliseconds
+  // in milliseconds, based on the current state statistic (saved stats isn't included)
   public getAverageTimePerTx(): number | undefined {
     const stats = this.zpState().syncStatistics();
     if (stats.length > 0) {
@@ -1584,7 +1594,7 @@ export class ZkBobClient extends ZkBobProvider {
     return undefined; // relevant stat doesn't found
   }
 
-  // overall statistic for the current pool (saved/synthetic_tets)
+  // overall statistic for the current pool (saved/synthetic_tets, tx processing time)
   private async getPoolAvgTimePerTx(): Promise<number> {
     if (this.statDb) {
       // try to get saved performance indicator first
@@ -1603,14 +1613,35 @@ export class ZkBobClient extends ZkBobProvider {
     });
   }
 
+  // get average saving time for tx (in ms)
+  private async getAvgSavingTxTime(): Promise<number> {
+    const DEFAULT_TX_SAVING_TIME = 0.1;
+    if (this.statDb) {
+      const avgTime = await this.statDb.get(SYNC_PERFORMANCE, WRITE_DB_TIME_PERF_TABLE_KEY);
+      return avgTime && typeof avgTime === 'number' && avgTime > 0 ? avgTime : DEFAULT_TX_SAVING_TIME;
+    }
+
+    return DEFAULT_TX_SAVING_TIME;
+  }
+
   private async updatePoolPerformanceStatistic(poolAddr: string, stats: SyncStat[]): Promise<void> {
     if (this.statDb && stats.length > 0) {
+      // tx decrypting time
       const fullSyncStats = stats.filter((aStat) => aStat.fullSync);
       const fullSyncTime = fullSyncStats.length > 0 ?
         fullSyncStats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / fullSyncStats.length :
         undefined;
       const allSyncTime = stats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / stats.length
+      // tx saving time
+      const statsWithRelevantSavingTime = stats.filter((aStat) => (aStat.txCount - aStat.cdnTxCnt) > 1000 && aStat.writeStateTime > 0);
+      const avgSavingTime = statsWithRelevantSavingTime.length > 0 ?
+        statsWithRelevantSavingTime
+          .map((aStat) => aStat.writeStateTime / (aStat.txCount - aStat.cdnTxCnt))
+          .reduce((acc, cur) => acc + cur) / statsWithRelevantSavingTime.length :
+        undefined;
 
+
+      // save transaction decrypt time for the current pool 
       const statTime = await this.statDb.get(SYNC_PERFORMANCE, poolAddr);
       if (typeof statTime === 'number') {
         // if stat already exist for that pool - set new performace just in case of full sync
@@ -1620,10 +1651,15 @@ export class ZkBobClient extends ZkBobProvider {
         // if no statistic exist - set current avg sync time (full sync is always prioritized)
         await this.statDb.put(SYNC_PERFORMANCE, fullSyncTime ?? allSyncTime, poolAddr);
       }
+
+      // update database performance value (global value, pool-independent)
+      if (avgSavingTime) {
+        await this.statDb.put(SYNC_PERFORMANCE, avgSavingTime, WRITE_DB_TIME_PERF_TABLE_KEY);
+      }
     }
   }
 
-  // in microseconds per tx
+  // synthetic benchmark, result in microseconds per tx
   private async estimateSyncSpeed(samplesNum: number = 1000): Promise<number> {
     //const genRanHex = size => [...Array(size)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
     const sk = bigintToArrayLe(Privkey("test test test test test test test test test test test tell", "m/0'/0'"));

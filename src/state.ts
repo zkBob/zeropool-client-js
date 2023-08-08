@@ -46,9 +46,11 @@ interface RawTxsBatch {
 }
 
 export interface StateSyncInfo {
-  txCount: number;
+  txCount: number;  // total (cold + hot)
+  hotSyncCount: number; // hot sync only
   processedTxCount: number;
   startTimestamp: number;
+  startDbTimestamp?: number;
   endTimestamp?: number;
 }
 
@@ -64,10 +66,11 @@ export interface SyncStat {
 
   totalTime: number; // msec
   timePerTx: number;  // msec
+  writeStateTime: number; // writing database time during the hot sync (ms)
 }
 
-export interface PartialSyncResult {
-  txCount: number;  // total txs count (relayer + CDN)
+interface ColdSyncResult {
+  txCount: number;  // txs count
   decryptedLeafs: number; // deposit/withdrawal = 1 leaf,
                           // transfer = 1 + notes_cnt leafs
   firstIndex: number; // first index of the synced range
@@ -332,7 +335,7 @@ export class ZkBobState {
     coldConfig?: ColdStorageConfig,
     coldBaseAddr?: string,
   ): Promise<boolean> {
-    this.lastSyncInfo = {txCount: 0, processedTxCount: 0, startTimestamp: Date.now()}
+    this.lastSyncInfo = {txCount: 0, hotSyncCount: 0, processedTxCount: 0, startTimestamp: Date.now()}
     let startIndex = Number(await this.getNextIndex());
 
     const stateInfo = await relayer.info();
@@ -370,6 +373,7 @@ export class ZkBobState {
 
       // Start the hot sync simultaneously with the cold sync
       const assumedNextIndex = this.nextIndexAfterColdSync(coldConfig, startIndex);
+      this.lastSyncInfo.hotSyncCount = (optimisticIndex - assumedNextIndex) /  OUTPLUSONE;
       let hotSyncPromise = this.startHotSync(relayer, assumedNextIndex, optimisticIndex);
 
       // Waiting while cold sync finished (local state becomes updated)
@@ -379,6 +383,7 @@ export class ZkBobState {
       if (coldResult.nextIndex != assumedNextIndex) {
         // ... restarting the hot sync with the appropriate index otherwise 
         console.error(`🧊[ColdSync] next index not as assumed after sync (next index = ${coldResult.nextIndex}, assumed ${assumedNextIndex}) => starting hot sync again`);
+        this.lastSyncInfo.hotSyncCount = (optimisticIndex - coldResult.nextIndex) /  OUTPLUSONE;
         hotSyncPromise = this.startHotSync(relayer, coldResult.nextIndex, optimisticIndex);
       }
 
@@ -389,6 +394,7 @@ export class ZkBobState {
         fullSync: startIndex == 0 ? true : false,
         totalTime: coldResult.totalTime,
         timePerTx: 0,
+        writeStateTime: 0,
       };
 
       // Waiting while batches for hot sync are ready
@@ -405,6 +411,7 @@ export class ZkBobState {
       }, initRes);
 
       const startSavingTime = Date.now();
+      this.lastSyncInfo.startDbTimestamp = startSavingTime;
       console.log(`🔥[HotSync] all batches were processed. Saving...`);
       // Saving parsed transaction from the hot sync in the local Merkle tree
       const idxs = [...totalRes.state.keys()].sort((i1, i2) => i1 - i2);
@@ -428,8 +435,8 @@ export class ZkBobState {
           throw new InternalError(`Cannot find state batch at index ${idx}`);
         }
       }
-
-      console.log(`🔥[HotSync] Saved local state in ${Date.now() - startSavingTime} ms`);
+      const savingTime = Date.now() - startSavingTime;
+      console.log(`🔥[HotSync] Saved local state in ${savingTime} ms (${(savingTime / totalRes.txCount).toFixed(4)} ms/tx)`);
 
       // remove unneeded pending records
       this.history?.setLastMinedTxIndex(totalRes.maxMinedIndex);
@@ -443,6 +450,7 @@ export class ZkBobState {
       curStat.cdnTxCnt = coldResult.txCount;
       curStat.totalTime = fullSyncTime;
       curStat.timePerTx = fullSyncTimePerTx;
+      curStat.writeStateTime = savingTime;
 
       // save relevant stats only
       if (curStat.txCount >= MIN_TX_COUNT_FOR_STAT) {
@@ -452,7 +460,7 @@ export class ZkBobState {
       isReadyToTransact = !totalRes.hasOwnOptimisticTxs;
 
       const syncType = coldResult.txCount > 0 ? '🧊🔥[TotalSync]' : '🔥[HotSync]'
-      console.log(`${syncType} finished in ${curStat.totalTime / 1000} sec | ${curStat.txCount} tx, avg speed ${curStat.timePerTx.toFixed(1)} ms/tx`);
+      console.log(`${syncType} finished in ${curStat.totalTime / 1000} sec | ${curStat.txCount} tx, avg speed ${curStat.timePerTx.toFixed(2)} ms/tx`);
     } else {
       this.history?.setLastMinedTxIndex(nextIndex - OUTPLUSONE);
       this.history?.setLastPendingTxIndex(-1);
@@ -749,11 +757,11 @@ export class ZkBobState {
     coldStorageBaseAddr?: string,
     fromIndex?: number,
     toIndex?: number
-  ): Promise<PartialSyncResult> {
+  ): Promise<ColdSyncResult> {
     const startRange = fromIndex ?? 0;  // inclusively
     const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
 
-    const syncResult: PartialSyncResult = {
+    const syncResult: ColdSyncResult = {
       txCount: 0,
       decryptedLeafs: 0,
       firstIndex: startRange,
