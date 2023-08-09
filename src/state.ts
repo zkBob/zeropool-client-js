@@ -800,12 +800,8 @@ export class ZkBobState {
                   return new Uint8Array(aBulk);
                 }
 
-                //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: got ${aBulk.byteLength} bytes, expected ${bulkInfo.bytes} bytes`);
-                //return new Uint8Array();
                 throw new InternalError(`Cold storage corrupted (invalid file size: ${aBulk.byteLength})`)
               } else {
-                //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: response code ${response.status} (${response.statusText})`);
-                //return new Uint8Array();
                 throw new InternalError(`Couldn't load cold storage (invalid response code: ${response.status})`)
               }
             });
