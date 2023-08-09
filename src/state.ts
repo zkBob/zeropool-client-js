@@ -413,27 +413,34 @@ export class ZkBobState {
       const startSavingTime = Date.now();
       this.lastSyncInfo.startDbTimestamp = startSavingTime;
       console.log(`🔥[HotSync] all batches were processed. Saving...`);
-      // Saving parsed transaction from the hot sync in the local Merkle tree
+      // Merging state updates into the single StateUpdate object
       const idxs = [...totalRes.state.keys()].sort((i1, i2) => i1 - i2);
+      const hotStateUpdate: StateUpdate = {newAccounts: [], newLeafs: [], newCommitments: [], newNotes: []};
       for (const idx of idxs) {
         const oneStateUpdate = totalRes.state.get(idx);
         if (oneStateUpdate !== undefined) {
-          try {
-            await this.worker.updateState(this.stateId, oneStateUpdate, siblings);
-          } catch (err) {
-            const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
-            console.warn(`🔥[HotSync] cannot update state from index ${idx}${siblingsDescr}`);
-            if (siblings != undefined) {
-              // if we try to update state with siblings and got an error - do not use partial sync again
-              this.birthIndex = undefined;
-            }
-            throw new InternalError(`Unable to synchronize pool state`);
-          }
+          hotStateUpdate.newAccounts = [...hotStateUpdate.newAccounts, ...oneStateUpdate.newAccounts];
+          hotStateUpdate.newLeafs = [...hotStateUpdate.newLeafs, ...oneStateUpdate.newLeafs];
+          hotStateUpdate.newCommitments = [...hotStateUpdate.newCommitments, ...oneStateUpdate.newCommitments];
+          hotStateUpdate.newNotes = [...hotStateUpdate.newNotes, ...oneStateUpdate.newNotes];
 
           curStat.decryptedLeafs += oneStateUpdate.newLeafs.length;
         } else {
           throw new InternalError(`Cannot find state batch at index ${idx}`);
         }
+      }
+
+      // Saving parsed transaction from the hot sync in the local Merkle tree
+      try {
+        await this.worker.updateState(this.stateId, hotStateUpdate, siblings);
+      } catch (err) {
+        const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
+        console.warn(`🔥[HotSync] cannot update state from index ${idxs[0]}${siblingsDescr}`);
+        if (siblings != undefined) {
+          // if we try to update state with siblings and got an error - do not use partial sync again
+          this.birthIndex = undefined;
+        }
+        throw new InternalError(`Unable to synchronize pool state`);
       }
       const savingTime = Date.now() - startSavingTime;
       console.log(`🔥[HotSync] Saved local state in ${savingTime} ms (${(savingTime / totalRes.txCount).toFixed(4)} ms/tx)`);

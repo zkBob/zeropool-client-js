@@ -26,7 +26,6 @@ import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks/network';
 import { Privkey } from 'hdwallet-babyjub';
 import { IDBPDatabase, openDB } from 'idb';
-import { stat } from 'fs';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
@@ -1601,7 +1600,6 @@ export class ZkBobClient extends ZkBobProvider {
       const poolAddr = this.pool().poolAddress;
       const statTime = await this.statDb.get(SYNC_PERFORMANCE, poolAddr);
       if (typeof statTime === 'number') {
-        console.log(`[PoolPerformance]: using saved performance ${statTime} ms\\tx`);
         return statTime;
       }
     }
