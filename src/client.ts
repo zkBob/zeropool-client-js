@@ -1480,13 +1480,6 @@ export class ZkBobClient extends ZkBobProvider {
   public async updateState(): Promise<boolean> {
     this.setState(ClientState.StateUpdating);
 
-    const updPromise = this.zpState().updateState(
-      this.relayer(),
-      async (index) => (await this.getPoolState(index)).root,
-      await this.coldStorageConfig(),
-      this.coldStorageBaseURL(),
-    );
-
     const timePerTx = await this.getPoolAvgTimePerTx(); // process + save in the most cases
     const saveTimePerTx = await this.getAvgSavingTxTime();  // saving time
     let maxShowedProgress = 0;
@@ -1523,7 +1516,12 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }, CONTINUOUS_STATE_UPD_INTERVAL);
 
-    const hasOwnTxsInOptimisticState = await updPromise;
+    const hasOwnTxsInOptimisticState = await this.zpState().updateState(
+      this.relayer(),
+      async (index) => (await this.getPoolState(index)).root,
+      await this.coldStorageConfig(),
+      this.coldStorageBaseURL(),
+    );
 
     clearInterval(timerId);
 
