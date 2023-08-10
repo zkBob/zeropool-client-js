@@ -182,10 +182,12 @@ const obj = {
   },
 
   async updateState(accountId: string, stateUpdate: StateUpdate, siblings?: TreeNode[]): Promise<void> {
+    console.debug('Web worker: updateState');
     return zpAccounts[accountId].updateState(stateUpdate, siblings);
   },
 
   async updateStateColdStorage(accountId: string, bulks: Uint8Array[], indexFrom?: bigint, indexTo?: bigint): Promise<ParseTxsColdStorageResult> {
+    console.debug('Web worker: updateStateColdStorage');
     return zpAccounts[accountId].updateStateColdStorage(bulks, indexFrom, indexTo);
   },
 

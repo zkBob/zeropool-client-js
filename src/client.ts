@@ -1,11 +1,11 @@
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents } from 'libzkbob-rs-wasm-web';
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
 import { Chains, Pools, SnarkConfigParams, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
-          toTwosComplementHex, bufToHex
+          toTwosComplementHex, bufToHex, bigintToArrayLe
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
-import { CALLDATA_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
+import { CALLDATA_BASE_LENGTH, CALLDATA_MEMO_NOTE_LENGTH, CALLDATA_MEMO_TRANSFER_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
@@ -24,12 +24,21 @@ import { isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
 import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks/network';
+import { Privkey } from 'hdwallet-babyjub';
+import { IDBPDatabase, openDB } from 'idb';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
+
+const CONTINUOUS_STATE_UPD_INTERVAL = 200; // updating client's state timer interval for continuous states (in ms)
+const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous after that interval (in ms)
+
+// Common database table's name
+const SYNC_PERFORMANCE = 'SYNC_PERFORMANCE';
+const WRITE_DB_TIME_PERF_TABLE_KEY = 'average.db.writing.time.per.tx';
 
 // Transfer destination + amount
 // Used as input in `transferMulti` method
@@ -67,6 +76,21 @@ export interface FeeAmount { // all values are in Gwei
   insufficientFunds: boolean; // true when the local balance is insufficient for requested tx amount
 }
 
+export enum ClientState {
+  Initializing = 0,
+  AccountlessMode,
+  SwitchingPool,
+  AttachingAccount,
+  // the following routines belongs to the full mode
+  FullMode, // ready to operate
+  StateUpdating,  // short state sync
+  StateUpdatingContinuous,  // sync which takes longer than threshold
+  HistoryUpdating,
+}
+const continuousStates = [ ClientState.StateUpdatingContinuous ];
+
+export type ClientStateCallback = (state: ClientState, progress?: number) => void;
+
 export class ZkBobClient extends ZkBobProvider {
   // States for the current account in the different pools
   private zpStates: { [poolAlias: string]: ZkBobState } = {};
@@ -77,6 +101,10 @@ export class ZkBobClient extends ZkBobProvider {
   // The single worker for the all pools
   // Currently we assume parameters are the same for the all pools
   private worker: any;
+  // Performance estimation (msec per tx)
+  private wasmSpeed: number | undefined;
+  // Sync stat database
+  private statDb?: IDBPDatabase;
   // Active account config. It can be undefined util user isn't login
   // If it's undefined the ZkBobClient acts as accountless client
   // (client-oriented methods will throw error)
@@ -86,13 +114,43 @@ export class ZkBobClient extends ZkBobProvider {
   private monitoredJobs = new Map<string, JobInfo>();
   private jobsMonitors  = new Map<string, Promise<JobInfo>>();
 
+  // Library state info
+  private state: ClientState;
+  private stateProgress: number;
+  public getState(): ClientState { return this.state }
+  public getProgress(): number | undefined {
+    return continuousStates.includes(this.state) ? this.stateProgress : undefined;
+  }
+  private setState(newState: ClientState, progress?: number) {
+    const isContunious = continuousStates.includes(newState);
+    if (this.state != newState || isContunious) {
+      this.state = newState;
+      this.stateProgress = (isContunious && progress !== undefined) ? progress : -1;
+      if (this.stateCallback) { // invoke callback if defined
+        this.stateCallback(this.getState(), this.getProgress());
+      }
+    }
+  }
+  public stateCallback?: ClientStateCallback;
+
   // ------------------------=========< Lifecycle >=========------------------------
   // | Init and free client, login/logout, switching between pools                 |
   // -------------------------------------------------------------------------------
 
-  private constructor(pools: Pools, chains: Chains, initialPool: string, supportId: string | undefined) {
+  private constructor(
+    pools: Pools,
+    chains: Chains,
+    initialPool: string,
+    supportId?: string,
+    callback?: ClientStateCallback,
+    statDb?: IDBPDatabase
+  ) {
     super(pools, chains, initialPool, supportId);
     this.account = undefined;
+    this.state = ClientState.Initializing;
+    this.stateProgress = -1;
+    this.stateCallback = callback;
+    this.statDb = statDb;
   }
 
   private async workerInit(
@@ -121,16 +179,35 @@ export class ZkBobClient extends ZkBobProvider {
     return worker;
   }
 
-  public static async create(config: ClientConfig, activePoolAlias: string): Promise<ZkBobClient> {
+  public static async create(
+    config: ClientConfig,
+    activePoolAlias: string,
+    callback?: ClientStateCallback
+  ): Promise<ZkBobClient> {
     if (Object.keys(config.pools).length == 0) {
       throw new InternalError(`Cannot initialize library without pools`);
     }
-    const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "");
+    if (callback) {
+      callback(ClientState.Initializing);
+    }
+
+    const commonDb = await openDB(`zkb.common`, 1, {
+      upgrade(db) {
+        db.createObjectStore(SYNC_PERFORMANCE);   // table holds state synchronization measurements
+      }
+    });
+    
+    const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "", callback, commonDb);
 
     const worker = await client.workerInit(config.snarkParams);
 
     client.zpStates = {};
     client.worker = worker;
+
+    // starts performance estimation if needed
+    client.getPoolAvgTimePerTx();
+
+    client.setState(ClientState.AccountlessMode);
     
     return client;
   }
@@ -166,11 +243,13 @@ export class ZkBobClient extends ZkBobProvider {
   public async logout() {
     this.free();
     this.account = undefined;
+    this.setState(ClientState.AccountlessMode);
   }
 
   // Swithing to the another pool without logout with the same spending key
   // Also available before login (just switch pool to use the instance as an accoutless client)
   public async switchToPool(poolAlias: string, birthindex?: number) {
+    this.setState(this.account ? ClientState.AttachingAccount : ClientState.SwitchingPool);
     // remove currently activated state if exist [to reduce memory consumption]
     const oldPoolAlias = super.currentPool();
     this.freePoolState(oldPoolAlias);
@@ -181,8 +260,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     // the following values needed to initialize ZkBobState
     const pool = this.pool();
-    const denominator = await this.denominator();
-    const poolId = await this.poolId();
+    const [denominator, poolId] = await Promise.all([this.denominator(), this.poolId()]);
     const network = this.network();
     const networkName = this.networkName();
 
@@ -213,6 +291,7 @@ export class ZkBobClient extends ZkBobProvider {
       const state = await ZkBobState.create(
           this.account.sk,
           this.account.birthindex,
+          network,
           networkName,
           network.getRpcUrl(),
           denominator,
@@ -227,6 +306,8 @@ export class ZkBobClient extends ZkBobProvider {
     } else {
       console.log(`Pool was switched to ${newPoolAlias} but account is not set yet`);
     }
+
+    this.setState(this.account ? ClientState.FullMode : ClientState.AccountlessMode);
   }
 
   public hasAccount(): boolean {
@@ -274,7 +355,7 @@ export class ZkBobClient extends ZkBobProvider {
   public async getOptimisticTotalBalance(updateState: boolean = true): Promise<bigint> {
 
     const confirmedBalance = await this.getTotalBalance(updateState);
-    const historyRecords = await this.getAllHistory(updateState);
+    const historyRecords = await this.getAllHistory(false);
 
     let pendingDelta = BigInt(0);
     for (const oneRecord of historyRecords) {
@@ -356,7 +437,11 @@ export class ZkBobClient extends ZkBobProvider {
       await this.updateState();
     }
 
-    return await this.zpState().history?.getAllHistory() ?? [];
+    this.setState(ClientState.HistoryUpdating);
+    const res = await this.zpState().history?.getAllHistory() ?? [];
+    this.setState(ClientState.FullMode);
+
+    return res;
   }
 
   public async getPendingDDs(): Promise<DirectDeposit[]> {
@@ -1393,12 +1478,59 @@ export class ZkBobClient extends ZkBobProvider {
   // Request the latest state from the relayer
   // Returns isReadyToTransact flag
   public async updateState(): Promise<boolean> {
-    return await this.zpState().updateState(
+    this.setState(ClientState.StateUpdating);
+
+    const timePerTx = await this.getPoolAvgTimePerTx(); // process + save in the most cases
+    const saveTimePerTx = await this.getAvgSavingTxTime();  // saving time
+    let maxShowedProgress = 0;
+    const timerId = setInterval(() => {
+      const syncInfo = this.zpState().curSyncInfo();
+      if (syncInfo) {
+        // sync in progress
+        const timeElapsedMs = Date.now() - syncInfo.startTimestamp;
+        if (timeElapsedMs < CONTINUOUS_STATE_THRESHOLD) {
+          this.setState(ClientState.StateUpdating);
+        } else {
+          var asymptoticTo1 = (value: number) => {  // returns value limited by 1
+            const ePowProg = Math.pow(Math.E, 4 * value);
+            return (ePowProg - 1) / (ePowProg + 1);
+          }
+          // progress evaluation based on the saved stats or synthetic test
+          const estTimeMs = syncInfo.txCount * timePerTx;
+          const progressByTime = timeElapsedMs / estTimeMs;
+          const asymptProgressByTime = asymptoticTo1(timeElapsedMs / estTimeMs)
+          // actual progress (may work poor for parallel workers)
+          const estSavingTime = syncInfo.hotSyncCount * saveTimePerTx;
+          const savingFraction = Math.min(estSavingTime / estTimeMs, 1);
+          const savingProgressAsympt = syncInfo.startDbTimestamp ?
+            asymptoticTo1((Date.now() - syncInfo.startDbTimestamp) / estSavingTime) : 0;
+          let progressByTxs = syncInfo.txCount > 0 ? (syncInfo.processedTxCount / syncInfo.txCount) : 0;
+          progressByTxs = Math.max(progressByTxs - savingFraction * (1 - savingProgressAsympt), 0);
+          // final progress
+          const progress = Math.min(progressByTxs ? progressByTxs : asymptProgressByTime, 1.0);
+          if (progress > maxShowedProgress) {
+            this.setState(ClientState.StateUpdatingContinuous, progress);
+            maxShowedProgress = progress;
+          }
+        }
+      }
+    }, CONTINUOUS_STATE_UPD_INTERVAL);
+
+    const hasOwnTxsInOptimisticState = await this.zpState().updateState(
       this.relayer(),
       async (index) => (await this.getPoolState(index)).root,
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );
+
+    clearInterval(timerId);
+
+    // get and save sync speed stat if needed
+    this.updatePoolPerformanceStatistic(this.pool().poolAddress, this.zpState().syncStatistics());
+
+    this.setState(ClientState.FullMode);
+
+    return hasOwnTxsInOptimisticState;
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------
@@ -1449,7 +1581,7 @@ export class ZkBobClient extends ZkBobProvider {
     return undefined; // relevant stat doesn't found
   }
 
-  // in milliseconds
+  // in milliseconds, based on the current state statistic (saved stats isn't included)
   public getAverageTimePerTx(): number | undefined {
     const stats = this.zpState().syncStatistics();
     if (stats.length > 0) {
@@ -1457,6 +1589,93 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     return undefined; // relevant stat doesn't found
+  }
+
+  // overall statistic for the current pool (saved/synthetic_tets, tx processing time)
+  private async getPoolAvgTimePerTx(): Promise<number> {
+    if (this.statDb) {
+      // try to get saved performance indicator first
+      const poolAddr = this.pool().poolAddress;
+      const statTime = await this.statDb.get(SYNC_PERFORMANCE, poolAddr);
+      if (typeof statTime === 'number') {
+        return statTime;
+      }
+    }
+    
+    // returns synthetic test performance if real estimation is unavailable
+    return this.wasmSpeed ?? await this.estimateSyncSpeed().then((speed) => {
+      this.wasmSpeed = speed;
+      return speed;
+    });
+  }
+
+  // get average saving time for tx (in ms)
+  private async getAvgSavingTxTime(): Promise<number> {
+    const DEFAULT_TX_SAVING_TIME = 0.1;
+    if (this.statDb) {
+      const avgTime = await this.statDb.get(SYNC_PERFORMANCE, WRITE_DB_TIME_PERF_TABLE_KEY);
+      return avgTime && typeof avgTime === 'number' && avgTime > 0 ? avgTime : DEFAULT_TX_SAVING_TIME;
+    }
+
+    return DEFAULT_TX_SAVING_TIME;
+  }
+
+  private async updatePoolPerformanceStatistic(poolAddr: string, stats: SyncStat[]): Promise<void> {
+    if (this.statDb && stats.length > 0) {
+      // tx decrypting time
+      const fullSyncStats = stats.filter((aStat) => aStat.fullSync);
+      const fullSyncTime = fullSyncStats.length > 0 ?
+        fullSyncStats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / fullSyncStats.length :
+        undefined;
+      const allSyncTime = stats.map((aStat) => aStat.timePerTx).reduce((acc, cur) => acc + cur) / stats.length
+      // tx saving time
+      const statsWithRelevantSavingTime = stats.filter((aStat) => (aStat.txCount - aStat.cdnTxCnt) > 1000 && aStat.writeStateTime > 0);
+      const avgSavingTime = statsWithRelevantSavingTime.length > 0 ?
+        statsWithRelevantSavingTime
+          .map((aStat) => aStat.writeStateTime / (aStat.txCount - aStat.cdnTxCnt))
+          .reduce((acc, cur) => acc + cur) / statsWithRelevantSavingTime.length :
+        undefined;
+
+
+      // save transaction decrypt time for the current pool 
+      const statTime = await this.statDb.get(SYNC_PERFORMANCE, poolAddr);
+      if (typeof statTime === 'number') {
+        // if stat already exist for that pool - set new performace just in case of full sync
+        // Set the mean performance (saved & current) when the full sync stat isn't available
+        await this.statDb.put(SYNC_PERFORMANCE, fullSyncTime ?? ((allSyncTime + statTime) / 2), poolAddr);
+      } else {
+        // if no statistic exist - set current avg sync time (full sync is always prioritized)
+        await this.statDb.put(SYNC_PERFORMANCE, fullSyncTime ?? allSyncTime, poolAddr);
+      }
+
+      // update database performance value (global value, pool-independent)
+      if (avgSavingTime) {
+        await this.statDb.put(SYNC_PERFORMANCE, avgSavingTime, WRITE_DB_TIME_PERF_TABLE_KEY);
+      }
+    }
+  }
+
+  // synthetic benchmark, result in microseconds per tx
+  private async estimateSyncSpeed(samplesNum: number = 1000): Promise<number> {
+    const sk = bigintToArrayLe(Privkey("test test test test test test test test test test test tell", "m/0'/0'"));
+    const samples = Array.from({length: samplesNum}, (_value, index) => index * (CONSTANTS.OUT + 1));
+    const txs: IndexedTx[] = samples.map((index) => {
+      return {
+        index,
+        memo: '02000000ff73d841b6d0027b689346b50aee18ef8263e2a27b0da325aba9774c46ffd4000d2e19298339b722fa126acedf1bcb300ebe0f8a0e96589b0c92612c96346d0db314014936ed9f11a60f15de2704dfa3f0a735242720637e0136d9b79d06342de5604968cb42d9ba3f57d9c2a591d1ca448e1f24b675b9de375f2086a6f17fd35c5e6318e0694d7bddce27e259acdb03e5943fa1f794149fadd45b3fcb15e7d9e0b16eefae48e2221bb405fd0ced6baf1d09baa042b864d7c73c7d642d8b143903d4f434ce811eb25bc4b988202318e16fbe15e259a5a7636d2713c0bee2b9579901fe559e4dde2be00b723843decaa18febc1b48a349b9f4c29074692c5af0c8a828df1f8e8f9fd8d7d752470bb63f132892f7669d5a305460b6c4c1ac76d0fc2ee164eae1c30ee8ea9ec666296c0d7e205386d1cf8356e88bc8ebb5786ed47bca1910598ea1e2adbae1663b90b00697d4f499e1955fd05c998be29dd9824dccc20e47fc1c81e3e13e20e9fda4e21514a5d', 
+        commitment: '0bc0c8fe774470d73f8695bd60aa3de479ce516e357d07f3e120ca8534cebd26'
+      }
+    });
+
+    const startTime = Date.now();
+    const res = await this.worker.parseTxs(sk, txs);
+    const fullTime = Date.now() - startTime;
+
+    const avgSpeed = fullTime / samplesNum;
+
+    console.info(`[EstimateWasm] Parsed ${samplesNum} samples in ${fullTime / 1000} sec: ${avgSpeed} msec\\tx`);
+    
+    return avgSpeed;
   }
 
   // ------------------=========< Direct Deposits >=========------------------
