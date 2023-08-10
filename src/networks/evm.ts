@@ -6,24 +6,88 @@ import { InternalError } from '..';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
 
-export class EvmNetwork implements NetworkBackend {
-    rpcUrl: string;
+const RPC_ISSUES_THRESHOLD = 10;
 
-    // these properties can be undefined when backend in disabled state
+export class EvmNetwork implements NetworkBackend {
+    // RPC URL management
+    private rpcUrls: string[];
+    private curRpcIdx: number;
+    private curRpcIssues = 0;
+    private badRpcs: number[] = []; // RPC indexes which are considered to be unstable or unavailable
+
+    // These properties can be undefined when backend in the disabled state
     private web3?: Web3;
     private pool?: Contract;
     private dd?: Contract;
     private token?: Contract;
 
+    // Local cache
     private tokenSellerAddresses = new Map<string, string>();    // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
 
-    constructor(rpcUrl: string, enabled: boolean = true) {
-        this.rpcUrl = rpcUrl;
+    constructor(rpcUrls: string[], enabled: boolean = true) {
+        if (rpcUrls.length == 0) {
+            throw new InternalError(`Unable to initialize EvmNetwork without RPC URL`);
+        }
+
+        this.rpcUrls = rpcUrls;
+        this.curRpcIdx = -1;
 
         if (enabled) {
             this.setEnabled(true);
         }
+    }
+
+
+    private curRpcUrl(): string {
+        if (this.curRpcIdx < 0) {
+            return this.rpcUrls[0];
+        } else if (this.curRpcIdx >= this.rpcUrls.length) {
+            return this.rpcUrls[this.rpcUrls.length - 1];
+        } else {
+            return this.rpcUrls[this.curRpcIdx];
+        }
+    }
+
+    private registerRpcIssue() {
+        if (++this.curRpcIssues >= RPC_ISSUES_THRESHOLD) {
+            if (this.switchRPC(undefined, true)) {
+                this.curRpcIssues = 0;
+            }
+        }
+    }
+
+    private switchRPC(index?: number, markCurrentAsBad: boolean = true): boolean {
+        if (markCurrentAsBad && !this.badRpcs.includes(this.curRpcIdx)) {
+            this.badRpcs.push(this.curRpcIdx);
+            console.log(`[EvmNetwork]: RPC ${this.curRpcUrl()} marked as bad (${this.curRpcIssues} issues registered)`);
+        }
+
+
+        let newRpcIndex = index ?? this.curRpcIdx;
+        if (index === undefined && this.rpcUrls.length > 1) {
+            let passesCnt = 0;
+            do {
+                newRpcIndex = (newRpcIndex + 1) % this.rpcUrls.length;
+                if (!this.badRpcs.includes(newRpcIndex) || passesCnt > 0) {
+                    break;
+                }
+
+                if (newRpcIndex == this.curRpcIdx) {
+                    passesCnt++;
+                }
+            } while(passesCnt < 2)
+        }
+
+        if (newRpcIndex != this.curRpcIdx) {
+            this.curRpcIdx = newRpcIndex;
+            this.web3 = new Web3(this.curRpcUrl());
+            console.log(`[EvmNetwork]: RPC was switched to ${this.curRpcUrl()}`);
+
+            return true;
+        }
+
+        return false;
     }
 
     public isEnabled(): boolean {
@@ -36,7 +100,7 @@ export class EvmNetwork implements NetworkBackend {
     public setEnabled(enabled: boolean) {
         if (enabled) {
             if (!this.isEnabled()) {
-                this.web3 = new Web3(this.rpcUrl);
+                this.web3 = new Web3(this.curRpcUrl());
                 this.pool = new this.web3.eth.Contract(poolContractABI) as unknown as Contract;
                 this.dd = new this.web3.eth.Contract(ddContractABI) as unknown as Contract;
                 this.token = new this.web3.eth.Contract(tokenABI) as unknown as Contract;
@@ -141,16 +205,16 @@ export class EvmNetwork implements NetworkBackend {
         return Number(await this.poolContract().methods.pool_id().call());
     }
 
-    isSignatureCompact(): boolean {
+    public isSignatureCompact(): boolean {
         return true;
     }
 
-    defaultNetworkName(): string {
+    public defaultNetworkName(): string {
         return 'ethereum';
     }
 
-    getRpcUrl(): string {
-        return this.rpcUrl;
+    public getRpcUrl(): string {
+        return this.curRpcUrl();
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {

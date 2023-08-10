@@ -110,7 +110,7 @@ export class ZkBobProvider {
                 throw new InternalError(`Chain with id ${chainId} being initialized without RPC URL`);
             }
             // TODO: implement multi-RPC NetworkBackend 
-            const backend = new EvmNetwork(chain.rpcUrls[0], false);    // initialize backend in the disabled state
+            const backend = new EvmNetwork(chain.rpcUrls, false);    // initialize backend in the disabled state
             let networkName = NetworkType.networkName(Number(chainId));
             if (!networkName) {
                 console.warn(`The chain with id ${chainId} currently isn't fully supported. Unsuspectable issues may occured`);
