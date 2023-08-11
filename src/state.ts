@@ -83,7 +83,6 @@ export class ZkBobState {
   public stateId: string; // should depends on pool and sk
   private sk: Uint8Array;
   private birthIndex?: number;
-  private network: NetworkBackend;
   public history?: HistoryStorage; // should work synchronically with the state
   private ephemeralAddrPool?: EphemeralPool; // depends on sk so we placed it here
   private worker: any;
@@ -110,7 +109,6 @@ export class ZkBobState {
     birthIndex: number | undefined,
     network: NetworkBackend,
     networkName: string,
-    rpcUrl: string,
     denominator: bigint,
     poolId: number,
     tokenAddress: string,
@@ -123,15 +121,12 @@ export class ZkBobState {
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
 
-    zpState.network = network;
-
     await worker.createAccount(zpState.stateId, zpState.sk, poolId, networkName);
     zpState.worker = worker;
     
-    zpState.history = await HistoryStorage.init(zpState.stateId, rpcUrl, zpState);
-
-
-    zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, networkName as NetworkType, rpcUrl, denominator);
+    zpState.history = await HistoryStorage.init(zpState.stateId, network, zpState);
+    
+    zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, networkName as NetworkType, network, denominator);
 
     return zpState;
   }

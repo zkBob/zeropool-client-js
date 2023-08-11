@@ -293,7 +293,6 @@ export class ZkBobClient extends ZkBobProvider {
           this.account.birthindex,
           network,
           networkName,
-          network.getRpcUrl(),
           denominator,
           poolId,
           pool.tokenAddress,

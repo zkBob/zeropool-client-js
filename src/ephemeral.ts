@@ -8,7 +8,8 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
 import { NetworkType } from './network-type';
-import { tokenABI } from './networks/evm-abi';
+import { tokenABI } from './networks/evm/evm-abi';
+import { NetworkBackend } from './networks/network';
 
 const util = require('ethereumjs-util');
 
@@ -41,9 +42,7 @@ interface TransfersInfo {
 export class EphemeralPool {
     private tokenAddress: string;
     private hdwallet: HDKey;
-    private web3: Web3;
-    private token: Contract;
-    private rpcUrl: string;
+    private network: NetworkBackend;
     private poolDenominator: bigint; // we represent all amounts in that library as in pool
 
     // save last scanned address to decrease scan time
@@ -69,33 +68,30 @@ export class EphemeralPool {
     constructor(
         sk: Uint8Array,
         tokenAddress: string,
-        network: NetworkType,
-        rpcUrl: string,
+        networkType: NetworkType,
+        network: NetworkBackend,
         poolDenominator: bigint
     ) {
         this.tokenAddress = tokenAddress;
         this.poolDenominator = poolDenominator;
-        this.rpcUrl = rpcUrl;
-        this.web3 = new Web3(this.rpcUrl);
+        this.network = network;
 
         let buf = concatenateBuffers(hexToBuf(this.skPrefix), sk);
         let entropy = hash(buf).slice(0, 16);
         let mnemonic = entropyToMnemonic(entropy, wordlist);
         let seed = mnemonicToSeedSync(mnemonic);
-        let ephemeralWalletPath = `${NetworkType.chainPath(network)}/0'/0`;
+        let ephemeralWalletPath = `${NetworkType.chainPath(networkType)}/0'/0`;
         this.hdwallet = HDKey.fromMasterSeed(seed).derive(ephemeralWalletPath);
-
-        this.token = new this.web3.eth.Contract(tokenABI, tokenAddress) as unknown as Contract;
     }
   
     static async init(
         sk: Uint8Array,
         tokenAddress: string,
-        network: NetworkType,
-        rpcUrl: string,
+        networkType: NetworkType,
+        network: NetworkBackend,
         poolDenominator: bigint
     ): Promise<EphemeralPool> {
-        const storage = new EphemeralPool(sk, tokenAddress, network, rpcUrl, poolDenominator);
+        const storage = new EphemeralPool(sk, tokenAddress, networkType, network, poolDenominator);
 
         // Start address info preloading
         let startTime = Date.now();

@@ -1,12 +1,18 @@
 import Web3 from 'web3';
 import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
-import { NetworkBackend, PreparedTransaction } from './network';
-import { InternalError } from '..';
+import { NetworkBackend, PoolTxDetails, PreparedTransaction } from '../network';
+import { InternalError } from '@/errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
+import { ShieldedTx } from '@/tx';
 
 const RPC_ISSUES_THRESHOLD = 10;
+
+enum PoolSelector {
+    Transact = "af989083",
+    AppendDirectDeposit = "1dc4cb33",
+  }
 
 export class EvmNetwork implements NetworkBackend {
     // RPC URL management
@@ -25,6 +31,10 @@ export class EvmNetwork implements NetworkBackend {
     private tokenSellerAddresses = new Map<string, string>();    // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
 
+    // ------------------------=========< Lifecycle >=========------------------------
+    // | Init, enabling and disabling backend                                        |
+    // -------------------------------------------------------------------------------
+
     constructor(rpcUrls: string[], enabled: boolean = true) {
         if (rpcUrls.length == 0) {
             throw new InternalError(`Unable to initialize EvmNetwork without RPC URL`);
@@ -36,58 +46,6 @@ export class EvmNetwork implements NetworkBackend {
         if (enabled) {
             this.setEnabled(true);
         }
-    }
-
-
-    private curRpcUrl(): string {
-        if (this.curRpcIdx < 0) {
-            return this.rpcUrls[0];
-        } else if (this.curRpcIdx >= this.rpcUrls.length) {
-            return this.rpcUrls[this.rpcUrls.length - 1];
-        } else {
-            return this.rpcUrls[this.curRpcIdx];
-        }
-    }
-
-    private registerRpcIssue() {
-        if (++this.curRpcIssues >= RPC_ISSUES_THRESHOLD) {
-            if (this.switchRPC(undefined, true)) {
-                this.curRpcIssues = 0;
-            }
-        }
-    }
-
-    private switchRPC(index?: number, markCurrentAsBad: boolean = true): boolean {
-        if (markCurrentAsBad && !this.badRpcs.includes(this.curRpcIdx)) {
-            this.badRpcs.push(this.curRpcIdx);
-            console.log(`[EvmNetwork]: RPC ${this.curRpcUrl()} marked as bad (${this.curRpcIssues} issues registered)`);
-        }
-
-
-        let newRpcIndex = index ?? this.curRpcIdx;
-        if (index === undefined && this.rpcUrls.length > 1) {
-            let passesCnt = 0;
-            do {
-                newRpcIndex = (newRpcIndex + 1) % this.rpcUrls.length;
-                if (!this.badRpcs.includes(newRpcIndex) || passesCnt > 0) {
-                    break;
-                }
-
-                if (newRpcIndex == this.curRpcIdx) {
-                    passesCnt++;
-                }
-            } while(passesCnt < 2)
-        }
-
-        if (newRpcIndex != this.curRpcIdx) {
-            this.curRpcIdx = newRpcIndex;
-            this.web3 = new Web3(this.curRpcUrl());
-            console.log(`[EvmNetwork]: RPC was switched to ${this.curRpcUrl()}`);
-
-            return true;
-        }
-
-        return false;
     }
 
     public isEnabled(): boolean {
@@ -145,9 +103,67 @@ export class EvmNetwork implements NetworkBackend {
         return this.token;
     }
 
-    public async getChainId(): Promise<number> {
-        return await this.activeWeb3().eth.getChainId();
+    // ----------------------=========< RPC switching >=========----------------------
+    // | Getting current RPC, registering issues, switching between RPCs             |
+    // -------------------------------------------------------------------------------
+
+    public curRpcUrl(): string {
+        if (this.curRpcIdx < 0) {
+            return this.rpcUrls[0];
+        } else if (this.curRpcIdx >= this.rpcUrls.length) {
+            return this.rpcUrls[this.rpcUrls.length - 1];
+        } else {
+            return this.rpcUrls[this.curRpcIdx];
+        }
     }
+
+    // Call this routine to increase issue counter
+    // The RPC will be swiching automatically on threshold
+    private registerRpcIssue() {
+        if (++this.curRpcIssues >= RPC_ISSUES_THRESHOLD) {
+            if (this.switchRPC(undefined, true)) {
+                this.curRpcIssues = 0;
+            }
+        }
+    }
+
+    private switchRPC(index?: number, markCurrentAsBad: boolean = true): boolean {
+        if (markCurrentAsBad && !this.badRpcs.includes(this.curRpcIdx)) {
+            this.badRpcs.push(this.curRpcIdx);
+            console.log(`[EvmNetwork]: RPC ${this.curRpcUrl()} marked as bad (${this.curRpcIssues} issues registered)`);
+        }
+
+
+        let newRpcIndex = index ?? this.curRpcIdx;
+        if (index === undefined && this.rpcUrls.length > 1) {
+            let passesCnt = 0;
+            do {
+                newRpcIndex = (newRpcIndex + 1) % this.rpcUrls.length;
+                if (!this.badRpcs.includes(newRpcIndex) || passesCnt > 0) {
+                    break;
+                }
+
+                if (newRpcIndex == this.curRpcIdx) {
+                    passesCnt++;
+                }
+            } while(passesCnt < 2)
+        }
+
+        if (newRpcIndex != this.curRpcIdx) {
+            this.curRpcIdx = newRpcIndex;
+            this.web3 = new Web3(this.curRpcUrl());
+            console.log(`[EvmNetwork]: RPC was switched to ${this.curRpcUrl()}`);
+
+            return true;
+        }
+
+        return false;
+    }
+
+
+    // -----------------=========< Token-Related Routiness >=========-----------------
+    // | Getting balance, allowance, nonce etc                                       |
+    // -------------------------------------------------------------------------------
 
     public async getDomainSeparator(tokenAddress: string): Promise<string> {
         this.tokenContract().options.address = tokenAddress;
@@ -195,26 +211,33 @@ export class EvmNetwork implements NetworkBackend {
         return BigInt(result);
     }
 
-    public async getDenominator(poolAddress: string): Promise<bigint> {
-        this.poolContract().options.address = poolAddress;
-        return BigInt(await this.poolContract().methods.denominator().call());
-    }
+
+    // ---------------------=========< Pool Interaction >=========--------------------
+    // | Getting common info: pool ID, denominator, limits etc                       |
+    // -------------------------------------------------------------------------------
 
     public async getPoolId(poolAddress: string): Promise<number> {
         this.poolContract().options.address = poolAddress;
         return Number(await this.poolContract().methods.pool_id().call());
     }
 
-    public isSignatureCompact(): boolean {
-        return true;
+    public async getDenominator(poolAddress: string): Promise<bigint> {
+        this.poolContract().options.address = poolAddress;
+        return BigInt(await this.poolContract().methods.denominator().call());
     }
 
-    public defaultNetworkName(): string {
-        return 'ethereum';
-    }
+    public async poolState(poolAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
+        this.poolContract().options.address = poolAddress;
+        let idx;
+        if (index === undefined) {
+            idx = await this.poolContract().methods.pool_index().call();
+        } else {
+            idx = index?.toString();
+        }
+        const root = await this.poolContract().methods.roots(idx).call();
 
-    public getRpcUrl(): string {
-        return this.curRpcUrl();
+
+        return {index: BigInt(idx), root: BigInt(root)};
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
@@ -241,6 +264,11 @@ export class EvmNetwork implements NetworkBackend {
 
         return tokenSellerAddr;
     }
+
+
+    // ---------------------=========< Direct Deposits >=========---------------------
+    // | Sending DD and fetching info                                                |
+    // -------------------------------------------------------------------------------
 
     public async getDirectDepositQueueContract(poolAddress: string): Promise<string> {
         let ddContractAddr = this.ddContractAddresses.get(poolAddress);
@@ -295,19 +323,10 @@ export class EvmNetwork implements NetworkBackend {
         };
     }
 
-    public async poolState(poolAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
-        this.poolContract().options.address = poolAddress;
-        let idx;
-        if (index === undefined) {
-            idx = await this.poolContract().methods.pool_index().call();
-        } else {
-            idx = index?.toString();
-        }
-        const root = await this.poolContract().methods.roots(idx).call();
 
-
-        return {index: BigInt(idx), root: BigInt(root)};
-    }
+    // ----------------------=========< Miscellaneous >=========----------------------
+    // | Getting tx revert reason, chain ID, signature format, etc...                |
+    // -------------------------------------------------------------------------------
 
     public async getTxRevertReason(txHash: string): Promise<string | null> {
         const txReceipt = await this.activeWeb3().eth.getTransactionReceipt(txHash);
@@ -334,4 +353,66 @@ export class EvmNetwork implements NetworkBackend {
         return null;
     }
 
+    public isSignatureCompact(): boolean {
+        return true;
+    }
+
+    public async getChainId(): Promise<number> {
+        return await this.activeWeb3().eth.getChainId();
+    }
+
+    public async getTxDetails(poolTxHash: string): Promise<PoolTxDetails[]> {
+        try {
+            const txData = await this.activeWeb3().eth.getTransaction(poolTxHash);
+            if (txData && txData.blockNumber && txData.input) {
+                //
+                const block = await this.activeWeb3().eth.getBlock(txData.blockNumber).catch(() => null);
+                if (block && block.timestamp) {
+                    let timestamp: number = 0;
+                    if (typeof block.timestamp === "number" ) {
+                        timestamp = block.timestamp;
+                    } else if (typeof block.timestamp === "string" ) {
+                        timestamp = Number(block.timestamp);
+                    }
+
+                    let isMined = false;
+                    const txReceipt = await this.activeWeb3().eth.getTransactionReceipt(poolTxHash);
+                    if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
+                        isMined = true;
+                    }
+
+                    const txSelector = txData.input.slice(2, 10).toLowerCase();
+                    if (txSelector == PoolSelector.Transact) {
+                        const tx = ShieldedTx.decode(txData.input);
+                        const feeAmount = BigInt('0x' + tx.memo.substr(0, 16));
+                        
+                        
+                        const details = {
+                            index: 0,
+                            txType: tx.txType,
+                            nullifier: '0x' + tx.nullifier.toString(16).padStart(64, '0'),
+                            tokenAmount: tx.tokenAmount,
+                            feeAmount,
+                            //depositAddr?: string;
+                            //withdrawAddr?: string;
+                            txHash: poolTxHash,
+                            isMined,
+                            timestamp,
+                        }
+                        return [details];
+                    } else if (txSelector == PoolSelector.AppendDirectDeposit) {
+                        // WIP
+                    }
+                } else {
+                    console.warn(`[EvmNetwork]: cannot get block (${txData.blockNumber}) to retrieve timestamp`);      
+                }
+            } else {
+              console.warn(`[EvmNetwork]: cannot get native tx ${poolTxHash} (tx still not mined?)`);
+            }
+        } catch (err) {
+            console.warn(`[EvmNetwork]: cannot get native tx ${poolTxHash} (${err.message})`);
+        }
+          
+        return [];
+    }
 }

@@ -6,6 +6,7 @@ import { bigintToArrayLe, bufToHex, HexStringWriter, hexToBuf, toCanonicalSignat
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 import { ZkBobState } from './state';
+import { NetworkBackend } from './networks/network';
 
 const LOG_HISTORY_SYNC = false;
 const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
@@ -49,11 +50,6 @@ export interface TokensMoving {
   // This property is applicable only for outcoming transfers
   // true - destination address is belongs to the sender account
   isLoopback: boolean,
-}
-
-enum PoolSelector {
-  Transact = "af989083",
-  AppendDirectDeposit = "1dc4cb33",
 }
 
 export class HistoryRecord {
@@ -230,6 +226,7 @@ export class HistoryStorage {
   private syncIndex = -1;
   private syncAttempts = 0;
   private state: ZkBobState;
+  private network: NetworkBackend;
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
                                           //(while tx isn't processed on relayer)
@@ -250,15 +247,15 @@ export class HistoryStorage {
 
 
   private syncHistoryPromise: Promise<void> | undefined;
-  private web3;
 
-  constructor(db: IDBPDatabase, rpcUrl: string, state: ZkBobState) {
+
+  constructor(db: IDBPDatabase, network: NetworkBackend, state: ZkBobState) {
     this.db = db;
-    this.web3 = new Web3(rpcUrl);
+    this.network = network;
     this.state = state;
   }
 
-  static async init(db_id: string, rpcUrl: string, state: ZkBobState): Promise<HistoryStorage> {
+  static async init(db_id: string, network: NetworkBackend, state: ZkBobState): Promise<HistoryStorage> {
     let isNewDB = false;
     const db = await openDB(`zkb.${db_id}.history`, 4, {
       upgrade(db, oldVersion, newVersions) {
@@ -318,7 +315,7 @@ export class HistoryStorage {
       await db.put(HISTORY_STATE_TABLE, HISTORY_RECORD_VERSION, 'version');
     }
 
-    const storage = new HistoryStorage(db, rpcUrl, state);
+    const storage = new HistoryStorage(db, network, state);
     await storage.preloadCache();
 
     return storage;
