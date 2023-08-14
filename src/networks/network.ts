@@ -1,3 +1,4 @@
+import { DirectDepositState } from "@/dd";
 import { TxType } from "..";
 
 export interface PreparedTransaction {
@@ -6,19 +7,41 @@ export interface PreparedTransaction {
     data: string;
 }
 
-// The fields extracted from the blockchain needed to create a HistoryRecord
-export interface PoolTxDetails {
-    index: number;
-    txType: TxType;
-    nullifier: string; // 0x-prefixed
-    tokenAmount: bigint;    // token delta
-    feeAmount: bigint;
-    depositAddr?: string;
-    withdrawAddr?: string;
-    txHash: string;
+// These fields belongs to the concrete transaction which are extracted
+// from the blockchain (or subraph) and needed to create a HistoryRecord
+export class CommonTxDetails {
+    txHash: string;         // to the pool contract
     isMined: boolean;
     timestamp: number;
 }
+
+export class RegularTxDetails extends CommonTxDetails {
+    txType: TxType;         // deposit, transfer, withdraw, permit deposit
+    tokenAmount: bigint;
+    feeAmount: bigint;      // relayer's reward
+    nullifier: string;      // 0x-prefixed hex format
+    depositAddr?: string;   // for deposit txs only
+    withdrawAddr?: string;  // for withdraw txs only
+}
+
+
+interface SingleDD {
+    destination: string;    // zk-address
+    amount: bigint;
+    fallback: string;       // 0x-address to refund DD
+    initiatorAddr: string;  // who sent tx to the queue
+    queueTimestamp: number; // when it was queued
+    queueTxHash: string;    // transaction hash to the queue 
+}
+
+export class DDBatchTxDetails extends CommonTxDetails {
+    id: bigint;             // DD queue unique identifier
+    state: DirectDepositState;
+    DDs: SingleDD[];
+}
+
+export type TxDetails = RegularTxDetails | DDBatchTxDetails | undefined;
+
 
 export interface NetworkBackend {
     // Backend Maintenance
@@ -53,5 +76,5 @@ export interface NetworkBackend {
     getTxRevertReason(txHash: string): Promise<string | null>
     isSignatureCompact(): boolean;
     getChainId(): Promise<number>;
-    getTxDetails(poolTxHash: string): Promise<PoolTxDetails[]>; // in case of DD several tx detaild may produced
+    getTxDetails(poolTxHash: string): Promise<TxDetails>; // in case of DD several tx detaild may produced
 }

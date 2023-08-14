@@ -6,7 +6,7 @@ import { bigintToArrayLe, bufToHex, HexStringWriter, hexToBuf, toCanonicalSignat
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 import { ZkBobState } from './state';
-import { NetworkBackend } from './networks/network';
+import { DDBatchTxDetails, NetworkBackend, RegularTxDetails } from './networks/network';
 
 const LOG_HISTORY_SYNC = false;
 const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
@@ -936,6 +936,17 @@ export class HistoryStorage {
   private async convertToHistory(memo: DecryptedMemo, pending: boolean): Promise<HistoryRecordIdx[]> {
     const txHash = memo.txHash;
     if (txHash) {
+      const txDetails = this.network.getTxDetails(txHash);
+      if (txDetails instanceof RegularTxDetails) {
+        // regular transaction
+      } else if (txDetails instanceof DDBatchTxDetails) {
+        // transaction is DD batch on the pool
+      } else {
+        // cannot retrieve transaction
+      }
+
+
+      // OLD
       const txData = await this.getNativeTx(memo.index, txHash);
       if (txData) {
         const block = await this.web3.eth.getBlock(txData.blockNumber).catch(() => null);
