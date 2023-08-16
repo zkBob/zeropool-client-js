@@ -235,9 +235,7 @@ export class EphemeralPool {
 
     public async allowance(index: number, spender: string): Promise<bigint> {
         const address = this.getAddress(index);
-        const result = await this.token.methods.allowance(address, spender).call();;
-
-        return BigInt(result);
+        return await this.network.allowance(this.tokenAddress, address, spender);
     }
 
     public async approve(index: number, spender: string, amount: bigint): Promise<string> {
@@ -267,57 +265,17 @@ export class EphemeralPool {
     // | Retrieving address info                                                  |
     // ----------------------------------------------------------------------------
 
-    // Binary search for the contract creation block
-    // Used to decrease token transfer count retrieving time
-    // WARNING: we cannot use this method because
-    // the real RPC nodes cannot return getCode for old blocks
-    private async findContractCreationBlock(tokenAddress: string): Promise<number> {
-        let fromBlock = 0;
-        let toBlock = Number(await this.web3.eth.getBlockNumber());
-    
-        let contractCode = await this.web3.eth.getCode(tokenAddress, toBlock);
-        if (contractCode == "0x") {
-            throw new Error(`Contract ${tokenAddress} does not exist!`);
-        }
-    
-        while (fromBlock <= toBlock) {
-            let middleBlock = Math.floor((fromBlock + toBlock) / 2);
-
-            try {
-                contractCode = await this.web3.eth.getCode(tokenAddress, middleBlock);
-            } catch (err) {
-                // Here is a case when node doesn't sync whole blockchain
-                // so we can't retrieve selected block state
-                // In that case let's suppose the contract isn't created yet
-                contractCode = '0x';
-            }
-            
-            if (contractCode != '0x') {
-                toBlock = middleBlock;
-            } else if (contractCode == '0x') {
-                fromBlock = middleBlock;
-            }
-    
-            if (toBlock == fromBlock + 1) {
-                return toBlock;
-            }
-        }
-
-        return fromBlock;
-    
-    }
-
     // get and update address details
     private async updateAddressInfo(existing: EphemeralAddress): Promise<EphemeralAddress> {
         let promises = [
             this.getTokenBalance(existing.address),
-            this.getNativeBalance(existing.address),
-            this.getPermitNonce(existing.address).catch(async () => {
+            this.network.getNativeBalance(existing.address),
+            this.network.getTokenNonce(this.tokenAddress, existing.address).catch(async () => {
                 // fallback for tokens without permit support (e.g. WETH)
                 const blockNumber = await this.web3.eth.getBlockNumber();
                 return this.getOutcomingTokenTxCount(existing.address, blockNumber);
             }),
-            this.web3.eth.getTransactionCount(existing.address),
+            this.network.getNativeNonce(existing.address),
         ];
         const [tokenBalance, nativeBalance, permitNonce, nativeNonce] = await Promise.all(promises);
 
@@ -328,28 +286,14 @@ export class EphemeralPool {
         
         return existing;
     }
-
-    // in pool dimension
-    private async getNativeBalance(address: string): Promise<bigint> {
-        const result = await this.web3.eth.getBalance(address);
-        
-        return BigInt(result);
-    }
     
     // in pool dimension
     private async getTokenBalance(address: string): Promise<bigint> {
-        const result = await this.token.methods.balanceOf(address).call();
+        const result = await this.network.getTokenBalance(this.tokenAddress, address);
         
         return this.poolDenominator > 0 ?
                 BigInt(result) / this.poolDenominator :
                 BigInt(result) * (-this.poolDenominator);
-    }
-
-    // number of outgoing transfers via permit
-    private async getPermitNonce(address: string): Promise<number> {
-        const result = await this.token.methods.nonces(address).call();
-        
-        return Number(result);
     }
 
     // Find first unused account

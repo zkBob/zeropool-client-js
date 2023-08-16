@@ -19,9 +19,12 @@ export class RegularTxDetails extends CommonTxDetails {
     txType: TxType;         // deposit, transfer, withdraw, permit deposit
     tokenAmount: bigint;
     feeAmount: bigint;      // relayer's reward
-    nullifier: string;      // 0x-prefixed hex format
     depositAddr?: string;   // for deposit txs only
     withdrawAddr?: string;  // for withdraw txs only
+    // The following fields are needed for compliance report
+    commitment: string;
+    nullifier: string;      // 0x-prefixed hex format
+    ciphertext: string;
 }
 
 
@@ -76,5 +79,7 @@ export interface NetworkBackend {
     getTxRevertReason(txHash: string): Promise<string | null>
     isSignatureCompact(): boolean;
     getChainId(): Promise<number>;
-    getTxDetails(poolTxHash: string): Promise<TxDetails>; // in case of DD several tx detaild may produced
+    getNativeBalance(address: string): Promise<bigint>;
+    getNativeNonce(address: string): Promise<number>;
+    getTxDetails(poolTxHash: string): Promise<TxDetails>;
 }

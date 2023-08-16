@@ -6,7 +6,7 @@ import { InternalError } from '@/errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
 import { ShieldedTx, TxType } from '@/tx';
-import { toCanonicalSignature } from '@/utils';
+import { bigintToArrayLe, bufToHex, toCanonicalSignature } from '@/utils';
 import { DirectDepositState, DirectDepositType } from '@/dd';
 
 const RPC_ISSUES_THRESHOLD = 10;
@@ -363,6 +363,14 @@ export class EvmNetwork implements NetworkBackend {
         return await this.activeWeb3().eth.getChainId();
     }
 
+    public async getNativeBalance(address: string): Promise<bigint> {
+        return BigInt(await this.activeWeb3().eth.getBalance(address));
+    }
+
+    public async getNativeNonce(address: string): Promise<number> {
+        return Number(await this.activeWeb3().eth.getTransactionCount(address))
+    }
+
     public async getTxDetails(poolTxHash: string): Promise<TxDetails> {
         try {
             const txData = await this.activeWeb3().eth.getTransaction(poolTxHash);
@@ -390,12 +398,14 @@ export class EvmNetwork implements NetworkBackend {
                         
                         const txInfo: RegularTxDetails = {
                             txType: tx.txType,
-                            nullifier: '0x' + tx.nullifier.toString(16).padStart(64, '0'),
                             tokenAmount: tx.tokenAmount,
                             feeAmount,
                             txHash: poolTxHash,
                             isMined,
                             timestamp,
+                            nullifier: '0x' + tx.nullifier.toString(16).padStart(64, '0'),
+                            commitment: '0x' + bufToHex(bigintToArrayLe(tx.outCommit)),
+                            ciphertext: tx.ciphertext,
                         }
 
                         // additional tx-specific fields for deposits and withdrawals
