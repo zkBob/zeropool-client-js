@@ -1,17 +1,19 @@
 import Web3 from 'web3';
 import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
-import { NetworkBackend, TxDetails, PreparedTransaction, RegularTxDetails, DDBatchTxDetails } from '../network';
-import { InternalError } from '@/errors';
+import { NetworkBackend, PreparedTransaction} from '../network';
+import { InternalError } from '../../errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
-import { ShieldedTx, TxType } from '@/tx';
-import { bigintToArrayLe, bufToHex, toCanonicalSignature } from '@/utils';
-import { DirectDepositState, DirectDepositType } from '@/dd';
+import { DDBatchTxDetails, RegularTxDetails, ShieldedTx, PoolTxDetails, RegularTxType, PoolTxType } from '../../tx';
+import { bigintToArrayLe, bufToHex, toCanonicalSignature } from '../../utils';
+import { DirectDepositState } from '../../dd';
+import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from './calldata';
+import { time } from 'console';
 
 const RPC_ISSUES_THRESHOLD = 10;
 
-enum PoolSelector {
+export enum PoolSelector {
     Transact = "af989083",
     AppendDirectDeposit = "1dc4cb33",
   }
@@ -213,6 +215,34 @@ export class EvmNetwork implements NetworkBackend {
         return BigInt(result);
     }
 
+    public async approveTokens(
+        tokenAddress: string,
+        privateKey: string,
+        holder: string,
+        spender: string,
+        amount: bigint,
+        gasFactor?: number
+    ): Promise<string> {
+        const encodedTx = await this.tokenContract().methods.approve(spender, BigInt(amount)).encodeABI();
+        let txObject: TransactionConfig = {
+            from: holder,
+            to: tokenAddress,
+            data: encodedTx,
+        };
+
+        const gas = await this.activeWeb3().eth.estimateGas(txObject);
+        const gasPrice = Number(await this.activeWeb3().eth.getGasPrice());
+        const nonce = await this.activeWeb3().eth.getTransactionCount(holder);
+        txObject.gas = gas;
+        txObject.gasPrice = `0x${BigInt(Math.ceil(gasPrice * (gasFactor ?? 1.0))).toString(16)}`;
+        txObject.nonce = nonce;
+
+        const signedTx = await this.activeWeb3().eth.accounts.signTransaction(txObject, privateKey);
+        const receipt = await this.activeWeb3().eth.sendSignedTransaction(signedTx.rawTransaction ?? '');
+
+        return receipt.transactionHash;
+    }
+
 
     // ---------------------=========< Pool Interaction >=========--------------------
     // | Getting common info: pool ID, denominator, limits etc                       |
@@ -371,7 +401,7 @@ export class EvmNetwork implements NetworkBackend {
         return Number(await this.activeWeb3().eth.getTransactionCount(address))
     }
 
-    public async getTxDetails(poolTxHash: string): Promise<TxDetails> {
+    public async getTxDetails(poolTxHash: string): Promise<PoolTxDetails | null> {
         try {
             const txData = await this.activeWeb3().eth.getTransaction(poolTxHash);
             if (txData && txData.blockNumber && txData.input) {
@@ -393,23 +423,22 @@ export class EvmNetwork implements NetworkBackend {
 
                     const txSelector = txData.input.slice(2, 10).toLowerCase();
                     if (txSelector == PoolSelector.Transact) {
-                        const tx = ShieldedTx.decode(txData.input);
+                        const tx = decodeEvmCalldata(txData.input);
                         const feeAmount = BigInt('0x' + tx.memo.slice(0, 16));
                         
-                        const txInfo: RegularTxDetails = {
-                            txType: tx.txType,
-                            tokenAmount: tx.tokenAmount,
-                            feeAmount,
-                            txHash: poolTxHash,
-                            isMined,
-                            timestamp,
-                            nullifier: '0x' + tx.nullifier.toString(16).padStart(64, '0'),
-                            commitment: '0x' + bufToHex(bigintToArrayLe(tx.outCommit)),
-                            ciphertext: tx.ciphertext,
-                        }
+                        const txInfo = new RegularTxDetails();
+                        txInfo.txType = tx.txType;
+                        txInfo.tokenAmount = tx.tokenAmount;
+                        txInfo.feeAmount = feeAmount;
+                        txInfo.txHash = poolTxHash;
+                        txInfo.isMined = isMined
+                        txInfo.timestamp = timestamp;
+                        txInfo.nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
+                        txInfo.commitment = '0x' + bufToHex(bigintToArrayLe(tx.outCommit));
+                        txInfo.ciphertext = getCiphertext(tx);
 
                         // additional tx-specific fields for deposits and withdrawals
-                        if (tx.txType == TxType.Deposit) {
+                        if (tx.txType == RegularTxType.Deposit) {
                             if (tx.extra && tx.extra.length >= 128) {
                                 const fullSig = toCanonicalSignature(tx.extra.slice(0, 128));
                                 txInfo.depositAddr = await this.activeWeb3().eth.accounts.recover(txInfo.nullifier, fullSig);
@@ -417,26 +446,31 @@ export class EvmNetwork implements NetworkBackend {
                                 //incorrect signature
                                 throw new InternalError(`No signature for approve deposit`);
                             }
-                        } else if (tx.txType == TxType.BridgeDeposit) {
+                        } else if (tx.txType == RegularTxType.BridgeDeposit) {
                             txInfo.depositAddr = '0x' + tx.memo.slice(32, 72);
-                        } else if (tx.txType == TxType.Withdraw) {
+                        } else if (tx.txType == RegularTxType.Withdraw) {
                             txInfo.withdrawAddr = '0x' + tx.memo.slice(32, 72);
                         }
 
-                        return txInfo;
+                        return {
+                            poolTxType: PoolTxType.Regular,
+                            details: txInfo,
+                        };
                     } else if (txSelector == PoolSelector.AppendDirectDeposit) {
-                        const txInfo: DDBatchTxDetails = {
-                            id: 0n, // TODO!!!
-                            state: DirectDepositState.Queued, // TODO!!!
-                            DDs: [],    // TODO!!!
-                            txHash: poolTxHash,
-                            isMined,
-                            timestamp
-                        }
+                        const txInfo = new DDBatchTxDetails();
+                        txInfo.id = 0n, // TODO!!!
+                        txInfo.state = DirectDepositState.Queued, // TODO!!!
+                        txInfo.DDs = [];    // TODO!!!
+                        txInfo.txHash = poolTxHash;
+                        txInfo.isMined = isMined;
+                        txInfo.timestamp = timestamp;
 
                         // WIP
 
-                        return txInfo;
+                        return {
+                            poolTxType: PoolTxType.DirectDepositBatch,
+                            details: txInfo,
+                        };
                     } else {
                         throw new InternalError(`[EvmNetwork]: Cannot decode calldata for tx ${poolTxHash} (incorrect selector ${txSelector})`);
                     }
@@ -450,6 +484,14 @@ export class EvmNetwork implements NetworkBackend {
             console.warn(`[EvmNetwork]: cannot get native tx ${poolTxHash} (${err.message})`);
         }
           
-        return undefined;
+        return null;
+    }
+
+    public calldataBaseLength(): number {
+        return CALLDATA_BASE_LENGTH;
+    }
+
+    public estimateCalldataLength(txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
+        return estimateEvmCalldataLength(txType, notesCnt, extraDataLen)
     }
 }

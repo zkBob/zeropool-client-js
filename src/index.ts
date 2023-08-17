@@ -7,7 +7,7 @@ export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount,
       } from './client';
 export { ZkBobProvider as ZkBobAccountlessClient, GiftCardProperties } from './client-provider';
 export { SyncStat } from './state';
-export { TxType } from './tx';
+export { RegularTxType as TxType } from './tx';
 export { RelayerFee } from './services/relayer'
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState, ComplianceHistoryRecord } from './history';
 export { EphemeralAddress, EphemeralPool } from './ephemeral';

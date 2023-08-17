@@ -1,12 +1,11 @@
 import { openDB, IDBPDatabase } from 'idb';
-import Web3 from 'web3';
 import { Account, Note, TxMemoChunk, IndexedTx, ParseTxsResult, TxInput } from 'libzkbob-rs-wasm-web';
-import { ShieldedTx, TxType } from './tx';
-import { bigintToArrayLe, bufToHex, HexStringWriter, hexToBuf, toCanonicalSignature } from './utils';
+import { DDBatchTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from './tx';
+import { HexStringWriter, hexToBuf } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 import { ZkBobState } from './state';
-import { DDBatchTxDetails, NetworkBackend, RegularTxDetails } from './networks/network';
+import { NetworkBackend } from './networks/network';
 
 const LOG_HISTORY_SYNC = false;
 const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
@@ -929,81 +928,87 @@ export class HistoryStorage {
     if (txHash) {
       const allRecords: HistoryRecordIdx[] = [];
       const txDetails = await this.network.getTxDetails(txHash);
-      if (txDetails instanceof RegularTxDetails) {  // txDetails belongs to a regular transaction
-        // regular transaction
-        if (txDetails.txType == TxType.Deposit || txDetails.txType == TxType.BridgeDeposit) {
-          const rec = await HistoryRecord.deposit(
-            txDetails.depositAddr ?? '',
-            txDetails.tokenAmount,
-            txDetails.feeAmount,
-            txDetails.timestamp,
-            txDetails.txHash,
-            pending
-          );
-          allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-        } else if (txDetails.txType == TxType.Transfer) {
-          // there are 2 cases: 
-          if (memo.acc) {
-            // 1. we initiated it => outcoming tx(s)
-            const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
-              const destAddr = await this.state.assembleAddress(note.d, note.p_d);
-              return {to: destAddr, amount: BigInt(note.b)};
-            }));
+      if (txDetails) {
+        if (txDetails.poolTxType == PoolTxType.Regular && txDetails.details instanceof RegularTxDetails) {
+          // regular transaction
+          const details = txDetails.details
+          if (details.txType == RegularTxType.Deposit || details.txType == RegularTxType.BridgeDeposit) {
+            const rec = await HistoryRecord.deposit(
+              details.depositAddr ?? '',
+              details.tokenAmount,
+              details.feeAmount,
+              details.timestamp,
+              details.txHash,
+              pending
+            );
+            allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+          } else if (details.txType == RegularTxType.Transfer) {
+            // there are 2 cases: 
+            if (memo.acc) {
+              // 1. we initiated it => outcoming tx(s)
+              const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
+                const destAddr = await this.state.assembleAddress(note.d, note.p_d);
+                return {to: destAddr, amount: BigInt(note.b)};
+              }));
 
-            if (transfers.length == 0) {
-              const rec = await HistoryRecord.aggregateNotes(txDetails.feeAmount, txDetails.timestamp, txHash, pending);
-              allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+              if (transfers.length == 0) {
+                const rec = await HistoryRecord.aggregateNotes(details.feeAmount, details.timestamp, txHash, pending);
+                allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+              } else {
+                const rec = await HistoryRecord.transferOut(
+                  transfers,
+                  details.feeAmount,
+                  details.timestamp,
+                  txHash,
+                  pending,
+                  async (addr) => this.state.isOwnAddress(addr)
+                );
+                allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+              }
             } else {
-              const rec = await HistoryRecord.transferOut(
-                transfers,
-                txDetails.feeAmount,
-                txDetails.timestamp,
-                txHash,
-                pending,
-                async (addr) => this.state.isOwnAddress(addr)
-              );
+              // 2. somebody initiated it => incoming tx(s)
+              const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
+                const destAddr = await this.state.assembleAddress(note.d, note.p_d);
+                return {to: destAddr, amount: BigInt(note.b)};
+              }));
+
+              const rec = await HistoryRecord.transferIn(transfers, BigInt(0), details.timestamp, txHash, pending);
               allRecords.push(HistoryRecordIdx.create(rec, memo.index));
             }
-          } else {
-            // 2. somebody initiated it => incoming tx(s)
-            const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-              const destAddr = await this.state.assembleAddress(note.d, note.p_d);
-              return {to: destAddr, amount: BigInt(note.b)};
-            }));
-
-            const rec = await HistoryRecord.transferIn(transfers, BigInt(0), txDetails.timestamp, txHash, pending);
+          } else if (details.txType == RegularTxType.Withdraw) {
+            const rec = await HistoryRecord.withdraw(
+              details.withdrawAddr ?? '', 
+              -(details.tokenAmount + details.feeAmount),
+              details.feeAmount,
+              details.timestamp,
+              txHash,
+              pending
+            );
             allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+          } else {
+            throw new InternalError(`[HistoryStorage] Unknown transaction type ${details.txType}`)
           }
-        } else if (txDetails.txType == TxType.Withdraw) {
-          const rec = await HistoryRecord.withdraw(
-            txDetails.withdrawAddr ?? '', 
-            -(txDetails.tokenAmount + txDetails.feeAmount),
-            txDetails.feeAmount,
-            txDetails.timestamp,
-            txHash,
-            pending
-          );
+
+          if (!pending || (pending && details.isMined)) {
+            // if tx is in pending state - remove it only on success
+            this.removePendingTxByTxHash(txHash);
+          }
+        } else if (txDetails.poolTxType == PoolTxType.DirectDepositBatch && txDetails.details instanceof DDBatchTxDetails) {
+          // transaction is DD batch on the pool
+          // Direct Deposit tranaction
+          const details = txDetails.details
+          const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
+            const destAddr = await this.state.assembleAddress(note.d, note.p_d);
+            return {to: destAddr, amount: BigInt(note.b)};
+          }));
+
+          const rec = await HistoryRecord.directDeposit(transfers, BigInt(0), details.timestamp, txHash, pending);
           allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-        } else {
-          throw new InternalError(`[HistoryStorage] Unknown transaction type ${txDetails.txType}`)
+        } else { 
+          throw new InternalError(`Incorrect or unsupported transaction details`);
         }
-
-        if (!pending || (pending && txDetails.isMined)) {
-          // if tx is in pending state - remove it only on success
-          this.removePendingTxByTxHash(txHash);
-        }
-      } else if (txDetails instanceof DDBatchTxDetails) { // txDetails belongs to direct deposit batch
-        // transaction is DD batch on the pool
-        // Direct Deposit tranaction
-        const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-          const destAddr = await this.state.assembleAddress(note.d, note.p_d);
-          return {to: destAddr, amount: BigInt(note.b)};
-        }));
-
-        const rec = await HistoryRecord.directDeposit(transfers, BigInt(0), txDetails.timestamp, txHash, pending);
-        return [HistoryRecordIdx.create(rec, memo.index)];
-      } else {  // txDetails is undefined
-        // Cannot retrieve transaction details (mayby it's not mined yet?)
+      } else {  // txDetails is null
+        // Cannot retrieve transaction details (maybe it's not mined yet?)
         // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
         const records = this.sentTxs.get(txHash);
         if (records !== undefined) {
@@ -1015,9 +1020,7 @@ export class HistoryStorage {
         }
       }
 
-      // In some cases (e.g. unable to fetch tx) we should return a valid value
-      // Otherwise top-level Promise.all() will failed
-      return [];
+      return allRecords;
     }
 
     throw new InternalError(`Cannot find txHash for memo at index ${memo.index}`);

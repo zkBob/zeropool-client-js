@@ -8,8 +8,7 @@ import { ZkBobDelegatedProver } from "./services/prover";
 import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
-import { estimateCalldataLength, TxType } from "./tx";
-import { DirectDepositProcessor } from "./dd";
+import { RegularTxType } from "./tx";
 
 const bs58 = require('bs58')
 
@@ -382,39 +381,39 @@ export class ZkBobProvider {
         return cachedFee.fee;
     }
 
-    protected async executionTxFee(txType: TxType, relayerFee?: RelayerFee): Promise<bigint> {
+    protected async executionTxFee(txType: RegularTxType, relayerFee?: RelayerFee): Promise<bigint> {
         const fee = relayerFee ?? await this.getRelayerFee();
         switch (txType) {
-            case TxType.Deposit: return fee.fee.deposit;
-            case TxType.Transfer: return fee.fee.transfer;
-            case TxType.Withdraw: return fee.fee.withdrawal;
-            case TxType.BridgeDeposit: return fee.fee.permittableDeposit;
+            case RegularTxType.Deposit: return fee.fee.deposit;
+            case RegularTxType.Transfer: return fee.fee.transfer;
+            case RegularTxType.Withdraw: return fee.fee.withdrawal;
+            case RegularTxType.BridgeDeposit: return fee.fee.permittableDeposit;
             default: throw new InternalError(`Unknown TxType: ${txType}`);
         }
     }
 
     // Min transaction fee in pool resolution (for regular transaction without any payload overhead)
     // To estimate fee for the concrete tx use account-based method (feeEstimate from client.ts)
-    public async atomicTxFee(txType: TxType, withdrawSwap: bigint = 0n): Promise<bigint> {
+    public async atomicTxFee(txType: RegularTxType, withdrawSwap: bigint = 0n): Promise<bigint> {
         const relayerFee = await this.getRelayerFee();
         
-        return this.singleTxFeeInternal(relayerFee, txType, txType == TxType.Transfer ? 1 : 0, 0, withdrawSwap, true);
+        return this.singleTxFeeInternal(relayerFee, txType, txType == RegularTxType.Transfer ? 1 : 0, 0, withdrawSwap, true);
     }
 
     // dynamic fee calculation routine
     protected async singleTxFeeInternal(
         relayerFee: RelayerFee,
-        txType: TxType,
+        txType: RegularTxType,
         notesCnt: number,
         extraDataLen: number = 0,
         withdrawSwapAmount: bigint = 0n,
         roundFee?: boolean,
     ): Promise<bigint> {
-        const calldataBytesCnt = estimateCalldataLength(txType, notesCnt, extraDataLen);
+        const calldataBytesCnt = this.network().estimateCalldataLength(txType, notesCnt, extraDataLen);
         const baseFee = await this.executionTxFee(txType, relayerFee);
 
         let totalFee = baseFee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
-        if (txType == TxType.Withdraw && withdrawSwapAmount > 0n) {
+        if (txType == RegularTxType.Withdraw && withdrawSwapAmount > 0n) {
             // swapping tokens during withdrawal may require additional fee
             totalFee += relayerFee.nativeConvertFee;
         }

@@ -1,6 +1,3 @@
-import Web3 from 'web3';
-import { Contract } from 'web3-eth-contract'
-import { TransactionConfig } from 'web3-core';
 import { hash } from 'tweetnacl';
 import { addHexPrefix, bufToHex, concatenateBuffers, hexToBuf } from './utils';
 import { entropyToMnemonic, mnemonicToSeedSync } from '@scure/bip39';
@@ -198,39 +195,43 @@ export class EphemeralPool {
     // Get number of incoming token transfers
     public async getEphemeralAddressInTxCount(index: number): Promise<number> {
         const address = this.getAddress(index);
-        const curBlock = await this.web3.eth.getBlockNumber();
+        //const curBlock = await this.web3.eth.getBlockNumber();
         let info = this.cachedInTransfersInfo.get(index);
         if (info === undefined) {
             info = {index, blockNumber: -1, txCount: 0 };
         }
 
-        let txCnt = await this.getIncomingTokenTxCount(address, curBlock, info.blockNumber + 1);
+        return info.txCount;
+
+        /*let txCnt = await this.getIncomingTokenTxCount(address, curBlock, info.blockNumber + 1);
 
         info.blockNumber = curBlock;
         info.txCount += txCnt;
 
         this.cachedInTransfersInfo.set(index, info);
 
-        return info.txCount;
+        return info.txCount;*/
     }
 
     // Get number of outcoming token transfers
     public async getEphemeralAddressOutTxCount(index: number): Promise<number> {
         const address = this.getAddress(index);
-        const curBlock = await this.web3.eth.getBlockNumber();
+        //const curBlock = await this.web3.eth.getBlockNumber();
         let info = this.cachedOutTransfersInfo.get(index);
         if (info === undefined) {
             info = {index, blockNumber: -1, txCount: 0 };
         }
 
-        let txCnt = await this.getOutcomingTokenTxCount(address, curBlock, info.blockNumber + 1);
+        return info.txCount;
+
+        /*let txCnt = await this.getOutcomingTokenTxCount(address, curBlock, info.blockNumber + 1);
 
         info.blockNumber = curBlock;
         info.txCount += txCnt;
 
         this.cachedOutTransfersInfo.set(index, info);
 
-        return info.txCount;
+        return info.txCount;*/
     }
 
     public async allowance(index: number, spender: string): Promise<bigint> {
@@ -240,25 +241,9 @@ export class EphemeralPool {
 
     public async approve(index: number, spender: string, amount: bigint): Promise<string> {
         const address = await this.getAddress(index);
-        const encodedTx = await this.token.methods.approve(spender, BigInt(amount)).encodeABI();
-        let txObject: TransactionConfig = {
-            from: address,
-            to: this.tokenAddress,
-            data: encodedTx,
-        };
-
-        const gas = await this.web3.eth.estimateGas(txObject);
-        const gasPrice = Number(await this.web3.eth.getGasPrice());
-        const nonce = await this.web3.eth.getTransactionCount(address);
-        txObject.gas = gas;
-        txObject.gasPrice = `0x${BigInt(Math.ceil(gasPrice * GAS_PRICE_MULTIPLIER)).toString(16)}`;
-        txObject.nonce = nonce;
-
         const privKey = this.getEphemeralAddressPrivateKey(index);
-        const signedTx = await this.web3.eth.accounts.signTransaction(txObject, privKey);
-        const receipt = await this.web3.eth.sendSignedTransaction(signedTx.rawTransaction ?? '');
-
-        return receipt.transactionHash;
+        
+        return this.network.approveTokens(this.tokenAddress, privKey, address, spender, amount, GAS_PRICE_MULTIPLIER);
     }
 
     // ------------------=========< Private Routines >=========--------------------
@@ -270,10 +255,9 @@ export class EphemeralPool {
         let promises = [
             this.getTokenBalance(existing.address),
             this.network.getNativeBalance(existing.address),
-            this.network.getTokenNonce(this.tokenAddress, existing.address).catch(async () => {
+            this.network.getTokenNonce(this.tokenAddress, existing.address).catch(() => {
                 // fallback for tokens without permit support (e.g. WETH)
-                const blockNumber = await this.web3.eth.getBlockNumber();
-                return this.getOutcomingTokenTxCount(existing.address, blockNumber);
+                return 0;
             }),
             this.network.getNativeNonce(existing.address),
         ];
@@ -312,7 +296,7 @@ export class EphemeralPool {
     }
 
     // Number of incoming token transfers to the account
-    private async getIncomingTokenTxCount(address: string, toBlock: number, fromBlock: number = 0): Promise<number> {
+    /*private async getIncomingTokenTxCount(address: string, toBlock: number, fromBlock: number = 0): Promise<number> {
         if (toBlock >= fromBlock) {
             const events = await this.token.getPastEvents('Transfer', {
                 filter: { to: address },
@@ -339,7 +323,7 @@ export class EphemeralPool {
         }
 
         return 0;
-    }
+    }*/
 
     // address nonused criteria
     private isAddressNonused(address: EphemeralAddress): boolean {

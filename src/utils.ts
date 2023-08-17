@@ -363,3 +363,9 @@ export function rangesIntersectionLength(r1from: number, r1to: number, r2from: n
 
   return 0;
 }
+
+export function assertNotNull<T>(val: T): asserts val is NonNullable<T> {
+  if (val === undefined || val === null) {
+      throw new InternalError('Unexpected null');
+  }
+}
