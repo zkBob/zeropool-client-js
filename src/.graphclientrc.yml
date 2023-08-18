@@ -10,10 +10,11 @@ additionalTypeDefs: |
   }
 
 additionalResolvers:
-  - ./dd/dd-resolvers
+  - ./subgraph/resolvers
 
 documents:
-  - ./dd/dd-query.graphql
+  - ./subgraph/tx-query.graphql
+  - ./subgraph/dd-query.graphql
 
 codegen:
   contextType: 'MeshContext & { subgraphEndpoint: string }'

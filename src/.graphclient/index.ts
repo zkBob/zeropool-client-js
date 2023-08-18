@@ -2289,7 +2289,7 @@ sources[0] = {
         }
 const additionalTypeDefs = [parse("extend type DirectDeposit {\n  subgraphEndpoint: String!\n}"),] as any[];
 const additionalResolvers = await Promise.all([
-        import("../dd/dd-resolvers")
+        import("../subgraph/resolvers")
             .then(m => m.resolvers || m.default || m)
       ]);
 const merger = new(BareMerger as any)({
@@ -2312,11 +2312,23 @@ const merger = new(BareMerger as any)({
     get documents() {
       return [
       {
+        document: DirectDepositByIdDocument,
+        get rawSDL() {
+          return printWithCache(DirectDepositByIdDocument);
+        },
+        location: 'DirectDepositByIdDocument.graphql'
+      },{
         document: PendingDirectDepositsDocument,
         get rawSDL() {
           return printWithCache(PendingDirectDepositsDocument);
         },
         location: 'PendingDirectDepositsDocument.graphql'
+      },{
+        document: PoolTxByIndexDocument,
+        get rawSDL() {
+          return printWithCache(PoolTxByIndexDocument);
+        },
+        location: 'PoolTxByIndexDocument.graphql'
       }
     ];
     },
@@ -2355,12 +2367,69 @@ export function getBuiltGraphSDK<TGlobalContext = any, TOperationContext = any>(
   const sdkRequester$ = getBuiltGraphClient().then(({ sdkRequesterFactory }) => sdkRequesterFactory(globalContext));
   return getSdk<TOperationContext, TGlobalContext>((...args) => sdkRequester$.then(sdkRequester => sdkRequester(...args)));
 }
+export type DirectDepositByIdQueryVariables = Exact<{
+  id: Scalars['ID'];
+}>;
+
+
+export type DirectDepositByIdQuery = { directDeposit?: Maybe<(
+    Pick<DirectDeposit, 'id' | 'pending' | 'refunded' | 'completed' | 'zkAddress_pk' | 'zkAddress_diversifier' | 'deposit' | 'fee' | 'fallbackUser' | 'sender' | 'tsInit' | 'tsClosed' | 'txInit' | 'txClosed'>
+    & { payment?: Maybe<Pick<Payment, 'note' | 'sender' | 'token'>> }
+  )> };
+
 export type PendingDirectDepositsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type PendingDirectDepositsQuery = { directDeposits: Array<Pick<DirectDeposit, 'id' | 'zkAddress_pk' | 'zkAddress_diversifier' | 'deposit' | 'fallbackUser' | 'tsInit' | 'txInit'>> };
+export type PendingDirectDepositsQuery = { directDeposits: Array<(
+    Pick<DirectDeposit, 'id' | 'zkAddress_pk' | 'zkAddress_diversifier' | 'deposit' | 'fee' | 'fallbackUser' | 'sender' | 'tsInit' | 'txInit'>
+    & { payment?: Maybe<Pick<Payment, 'note' | 'sender' | 'token'>> }
+  )> };
+
+export type PoolTxByIndexQueryVariables = Exact<{
+  id: Scalars['ID'];
+}>;
 
 
+export type PoolTxByIndexQuery = { poolTx?: Maybe<(
+    Pick<PoolTx, 'id' | 'type' | 'ts' | 'tx'>
+    & { zk: Pick<ZkCommon, 'out_commit'>, operation: (
+      Pick<DDBatchOperation, 'id'>
+      & { delegated_deposits: Array<(
+        Pick<DirectDeposit, 'id' | 'pending' | 'refunded' | 'completed' | 'zkAddress_pk' | 'zkAddress_diversifier' | 'deposit' | 'fee' | 'fallbackUser' | 'sender' | 'tsInit' | 'tsClosed' | 'txInit' | 'txClosed'>
+        & { payment?: Maybe<Pick<Payment, 'note' | 'sender' | 'token'>> }
+      )> }
+    ) | (
+      Pick<DepositOperation, 'fee' | 'nullifier' | 'token_amount'>
+      & { pooltx: Pick<PoolTx, 'calldata'> }
+    ) | Pick<PermittableDepositOperation, 'fee' | 'nullifier' | 'permit_holder' | 'token_amount'> | Pick<TransferOperation, 'fee' | 'nullifier'> | Pick<WithdrawalOperation, 'fee' | 'native_amount' | 'nullifier' | 'receiver' | 'token_amount'> }
+  )> };
+
+
+export const DirectDepositByIdDocument = gql`
+    query DirectDepositById($id: ID!) {
+  directDeposit(id: $id) {
+    id
+    pending
+    refunded
+    completed
+    zkAddress_pk
+    zkAddress_diversifier
+    deposit
+    fee
+    fallbackUser
+    sender
+    tsInit
+    tsClosed
+    txInit
+    txClosed
+    payment {
+      note
+      sender
+      token
+    }
+  }
+}
+    ` as unknown as DocumentNode<DirectDepositByIdQuery, DirectDepositByIdQueryVariables>;
 export const PendingDirectDepositsDocument = gql`
     query PendingDirectDeposits {
   directDeposits(orderBy: bnInit, where: {pending: true}) {
@@ -2368,19 +2437,98 @@ export const PendingDirectDepositsDocument = gql`
     zkAddress_pk
     zkAddress_diversifier
     deposit
+    fee
     fallbackUser
+    sender
     tsInit
     txInit
+    payment {
+      note
+      sender
+      token
+    }
   }
 }
     ` as unknown as DocumentNode<PendingDirectDepositsQuery, PendingDirectDepositsQueryVariables>;
+export const PoolTxByIndexDocument = gql`
+    query PoolTxByIndex($id: ID!) {
+  poolTx(id: $id) {
+    id
+    type
+    zk {
+      out_commit
+    }
+    ts
+    tx
+    operation {
+      ... on DepositOperation {
+        fee
+        nullifier
+        token_amount
+        pooltx {
+          calldata
+        }
+      }
+      ... on PermittableDepositOperation {
+        fee
+        nullifier
+        permit_holder
+        token_amount
+      }
+      ... on TransferOperation {
+        fee
+        nullifier
+      }
+      ... on WithdrawalOperation {
+        fee
+        native_amount
+        nullifier
+        receiver
+        token_amount
+      }
+      ... on DDBatchOperation {
+        id
+        delegated_deposits {
+          id
+          pending
+          refunded
+          completed
+          zkAddress_pk
+          zkAddress_diversifier
+          deposit
+          fee
+          fallbackUser
+          sender
+          tsInit
+          tsClosed
+          txInit
+          txClosed
+          payment {
+            note
+            sender
+            token
+          }
+        }
+      }
+    }
+  }
+}
+    ` as unknown as DocumentNode<PoolTxByIndexQuery, PoolTxByIndexQueryVariables>;
+
+
 
 
 export type Requester<C = {}, E = unknown> = <R, V>(doc: DocumentNode, vars?: V, options?: C) => Promise<R> | AsyncIterable<R>
 export function getSdk<C, E>(requester: Requester<C, E>) {
   return {
+    DirectDepositById(variables: DirectDepositByIdQueryVariables, options?: C): Promise<DirectDepositByIdQuery> {
+      return requester<DirectDepositByIdQuery, DirectDepositByIdQueryVariables>(DirectDepositByIdDocument, variables, options) as Promise<DirectDepositByIdQuery>;
+    },
     PendingDirectDeposits(variables?: PendingDirectDepositsQueryVariables, options?: C): Promise<PendingDirectDepositsQuery> {
       return requester<PendingDirectDepositsQuery, PendingDirectDepositsQueryVariables>(PendingDirectDepositsDocument, variables, options) as Promise<PendingDirectDepositsQuery>;
+    },
+    PoolTxByIndex(variables: PoolTxByIndexQueryVariables, options?: C): Promise<PoolTxByIndexQuery> {
+      return requester<PoolTxByIndexQuery, PoolTxByIndexQueryVariables>(PoolTxByIndexDocument, variables, options) as Promise<PoolTxByIndexQuery>;
     }
   };
 }

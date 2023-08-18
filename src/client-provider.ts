@@ -9,6 +9,7 @@ import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
 import { RegularTxType } from "./tx";
+import { ZkBobSubgraph } from "./subgraph";
 
 const bs58 = require('bs58')
 
@@ -89,6 +90,7 @@ export class ZkBobProvider {
     private relayers:         { [name: string]: ZkBobRelayer } = {};
     private provers:          { [name: string]: ZkBobDelegatedProver } = {};
     private proverModes:      { [name: string]: ProverMode } = {};
+    private subgraphs:        { [name: string]: ZkBobSubgraph } = {};
     private poolDenominators: { [name: string]: bigint } = {};
     private tokenDecimals:    { [name: string]: number } = {};
     private poolIds:          { [name: string]: number } = {};
@@ -138,6 +140,16 @@ export class ZkBobProvider {
             }
 
             this.proverModes[alias] = ProverMode.Local;
+
+            // create subraph if presented
+            if (pool.ddSubgraph) {
+                try {
+                    const subgraph = new ZkBobSubgraph(pool.ddSubgraph);
+                    this.subgraphs[alias] = subgraph;
+                } catch(err) {
+                    console.warn(`The subgraph ${pool.ddSubgraph} cannot be created: ${err.message}`);
+                }
+            }
         }
 
         if (!this.pools[currentPool]) {
@@ -228,6 +240,10 @@ export class ZkBobProvider {
 
     protected prover(): ZkBobDelegatedProver | undefined {
         return this.provers[this.curPool];
+    }
+
+    protected subgraph(): ZkBobSubgraph | undefined {
+        return this.subgraphs[this.curPool];
     }
 
     // Pool contract using denominator to calculate

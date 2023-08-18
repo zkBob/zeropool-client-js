@@ -5,7 +5,7 @@ import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, bufToHex, bigintToArrayLe
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
-import { RegularTxType, txTypeToString } from './tx';
+import { DirectDeposit, RegularTxType, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
@@ -18,7 +18,7 @@ import { GiftCardProperties, TreeState, ZkBobProvider } from './client-provider'
 import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
 import { PERMIT2_CONTRACT } from './signers/permit2-signer';
-import { DirectDeposit, DirectDepositProcessor, DirectDepositType } from './dd';
+import { DirectDepositProcessor, DirectDepositType } from './dd';
 
 import { isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
@@ -299,7 +299,7 @@ export class ZkBobClient extends ZkBobProvider {
           this.worker
         );
       this.zpStates[newPoolAlias] = state;
-      this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state)
+      this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state, this.subgraph());
 
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {

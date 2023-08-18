@@ -1,27 +1,11 @@
-import { Pool } from "../config";
-import { InternalError } from "../errors";
-import { NetworkBackend, PreparedTransaction } from "../networks/network";
-import { getBuiltGraphSDK } from "../.graphclient";
-import { ZkBobState } from "../state";
-import { hostedServiceDefaultURL } from "./dd-resolvers";
+import { Pool } from "./config";
+import { InternalError } from "./errors";
+import { NetworkBackend, PreparedTransaction } from "./networks/network";
+import { ZkBobState } from "./state";
+import { ZkBobSubgraph } from "./subgraph";
+import { DirectDeposit } from "./tx";
 
 const DD_FEE_LIFETIME = 3600;
-
-export enum DirectDepositState {
-    Queued,
-    Deposited,
-    Refunded,
-}
-
-export interface DirectDeposit {
-    id: bigint;           // DD queue unique identifier
-    state: DirectDepositState;
-    amount: bigint;       // in pool resolution
-    destination: string;  // zk-addresss
-    fallback: string;     // 0x-address to refund DD
-    timestamp: number;    // when it was created
-    queueTxHash: string;  // transaction hash to the queue
-}
 
 export enum DirectDepositType {
     Token,  // using directDeposit contract method, amount in the pool token resolution
@@ -35,27 +19,23 @@ interface FeeFetch {
 
 export class DirectDepositProcessor {
     protected network: NetworkBackend;
+    protected subgraph?: ZkBobSubgraph;
+    protected state: ZkBobState;
+
     protected tokenAddress: string;
     protected poolAddress: string;
     protected ddQueueContract?: string;
     protected isNativeSupported: boolean;
-    protected subgraphName?: string;
-    protected state: ZkBobState;
-    protected sdk;
 
     protected cachedFee?: FeeFetch;
     
-    constructor(pool: Pool, network: NetworkBackend, state: ZkBobState) {
+    constructor(pool: Pool, network: NetworkBackend, state: ZkBobState, subgraph?: ZkBobSubgraph) {
         this.network = network;
+        this.subgraph = subgraph;
+        this.state = state;
         this.tokenAddress = pool.tokenAddress;
         this.poolAddress = pool.poolAddress;
         this.isNativeSupported = pool.isNative ?? false;
-        this.subgraphName = pool.ddSubgraph;
-        this.state = state;
-
-        this.sdk = getBuiltGraphSDK({
-            subgraphEndpoint: this.subgraphEndpoint(),
-        })
     }
 
     public async getQueueContract(): Promise<string> {
@@ -109,49 +89,9 @@ export class DirectDepositProcessor {
         }
     }
 
-    protected subgraphEndpoint(): string | undefined {
-        if (this.subgraphName) {
-            if (this.subgraphName.indexOf('/') == -1) {
-                return `${hostedServiceDefaultURL}${this.subgraphName}`;
-            }
-        }
-
-        return this.subgraphName;
-    }
-
     public async pendingDirectDeposits(): Promise<DirectDeposit[]> {
-
-        if (this.subgraphEndpoint()) {
-            const allPendingDDs = await this.sdk.PendingDirectDeposits({}, {
-                subgraphEndpoint: this.subgraphEndpoint(),
-            }).then((data) => data.directDeposits);
-
-            if (Array.isArray(allPendingDDs)) {
-                const myPendingDDs = (await Promise.all(allPendingDDs.map(async (subgraphDD) => {
-                    const d = BigInt(subgraphDD.zkAddress_diversifier);
-                    const p_d = BigInt(subgraphDD.zkAddress_pk);
-                    const zkAddress = await this.state.assembleAddress(d.toString(), p_d.toString());
-                    const isOwn = await this.state.isOwnAddress(zkAddress);
-                    
-                    const dd: DirectDeposit =  {
-                        id: BigInt(subgraphDD.id),
-                        state: DirectDepositState.Queued,
-                        amount: BigInt(subgraphDD.deposit),
-                        destination: zkAddress,
-                        fallback: subgraphDD.fallbackUser,
-                        timestamp: Number(subgraphDD.tsInit),
-                        queueTxHash: subgraphDD.txInit,
-                    };
-
-                    return {dd, isOwn};
-                })))
-                .filter((dd) => dd.isOwn)
-                .map((myDD) => myDD.dd);
-
-                return myPendingDDs;
-            } else {
-                throw new InternalError(`Unexpected response from the DD subgraph: ${allPendingDDs}`);
-            }
+        if (this.subgraph) {
+            return this.subgraph.pendingDirectDeposits(this.state);
         } else {
             console.warn('There is no configured subraph to query pending DD')
         }

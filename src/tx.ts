@@ -1,5 +1,3 @@
-import { DirectDepositState } from "./dd";
-
 export enum RegularTxType {
   Deposit = '0000',
   Transfer = '0001',
@@ -63,17 +61,25 @@ export class RegularTxDetails extends CommonTxDetails {
   ciphertext: string;
 }
 
-export class SingleDD {
-  destination: string;    // zk-address
-  amount: bigint;
-  fallback: string;       // 0x-address to refund DD
-  initiatorAddr: string;  // who sent tx to the queue
-  queueTimestamp: number; // when it was queued
-  queueTxHash: string;    // transaction hash to the queue 
+export enum DirectDepositState {
+  Queued,
+  Deposited,
+  Refunded,
+}
+
+export interface DirectDeposit {
+  id: bigint;            // DD queue unique identifier
+  state: DirectDepositState;
+  amount: bigint;        // in pool resolution
+  destination: string;   // zk-addresss
+  fallback: string;      // 0x-address to refund DD
+  sender: string;        // 0x-address of sender [to the queue]
+  queueTimestamp: number;// when it was created
+  queueTxHash: string;   // transaction hash to the queue
+  timestamp?: number;    // when it was sent to the pool
+  txHash?: string;       // transaction hash to the pool
 }
 
 export class DDBatchTxDetails extends CommonTxDetails {
-  id: bigint;             // DD queue unique identifier
-  state: DirectDepositState;
-  DDs: SingleDD[];
+  deposits: DirectDeposit[];
 }

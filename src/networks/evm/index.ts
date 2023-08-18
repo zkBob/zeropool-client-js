@@ -5,11 +5,9 @@ import { NetworkBackend, PreparedTransaction} from '../network';
 import { InternalError } from '../../errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
-import { DDBatchTxDetails, RegularTxDetails, ShieldedTx, PoolTxDetails, RegularTxType, PoolTxType } from '../../tx';
+import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType } from '../../tx';
 import { bigintToArrayLe, bufToHex, toCanonicalSignature } from '../../utils';
-import { DirectDepositState } from '../../dd';
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from './calldata';
-import { time } from 'console';
 
 const RPC_ISSUES_THRESHOLD = 10;
 
@@ -458,12 +456,10 @@ export class EvmNetwork implements NetworkBackend {
                         };
                     } else if (txSelector == PoolSelector.AppendDirectDeposit) {
                         const txInfo = new DDBatchTxDetails();
-                        txInfo.id = 0n, // TODO!!!
-                        txInfo.state = DirectDepositState.Queued, // TODO!!!
-                        txInfo.DDs = [];    // TODO!!!
                         txInfo.txHash = poolTxHash;
                         txInfo.isMined = isMined;
                         txInfo.timestamp = timestamp;
+                        txInfo.deposits = [];    // TODO!!!
 
                         // WIP
 
