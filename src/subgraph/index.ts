@@ -1,3 +1,4 @@
+import PromiseThrottle from 'promise-throttle';
 import { getBuiltGraphSDK } from "../.graphclient";
 import { hostedServiceDefaultURL } from "./resolvers";
 import { ZkBobState } from "../state";
@@ -6,17 +7,27 @@ import { DDBatchTxDetails, DirectDeposit, DirectDepositState,
          PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType
         } from "../tx";
 
+const SUBGRAPH_REQUESTS_PER_SECOND = 10;
+const SUBGRAPH_MAX_ITEMS_IN_RESPONSE = 100; // also change this value in tx-query.graphql
+const SUBGRAPH_ID_INDEX_DELTA = 128;
+
 
 export class ZkBobSubgraph {
     protected subgraph: string; // a name on the Hosted Service or full URL
     protected sdk;
+    throttle: PromiseThrottle;
 
     constructor(subgraphNameOrUrl: string) {
         this.subgraph = subgraphNameOrUrl;
 
         this.sdk = getBuiltGraphSDK({
             subgraphEndpoint: this.subgraphEndpoint(),
-        })
+        });
+
+        this.throttle = new PromiseThrottle({
+            requestsPerSecond: SUBGRAPH_REQUESTS_PER_SECOND,
+            promiseImplementation: Promise,
+        });
     }
 
     protected subgraphEndpoint(): string | undefined {
@@ -50,21 +61,30 @@ export class ZkBobSubgraph {
             state: ddState,
             amount: BigInt(subraphDD.deposit),
             destination: zkAddress,
+            fee: BigInt(subraphDD.fee),
             fallback: subraphDD.fallbackUser,
             sender: subraphDD.sender,
             queueTimestamp: Number(subraphDD.tsInit),
             queueTxHash: subraphDD.txInit,
             timestamp: subraphDD.tsClosed ? Number(subraphDD.tsClosed) : undefined,
             txHash: subraphDD.txClosed,
+            payment: subraphDD.payment,
         };
 
         return appDD;
     }
 
     public async fetchDirectDeposit(id: bigint, state: ZkBobState): Promise<DirectDeposit | undefined> {
-        const requestedDD = await this.sdk.DirectDepositById({ 'id': id }, {
-            subgraphEndpoint: this.subgraphEndpoint(),
-        }).then((data) => data.directDeposit);
+        const requestedDD = await this.throttle.add(() => {
+            return this.sdk.DirectDepositById({ 'id': id }, {
+                subgraphEndpoint: this.subgraphEndpoint(),
+            })
+            .then((data) => data.directDeposit)
+            .catch((err) => {
+                console.warn(`[Subgraph]: Cannot fetch DD with id ${id} (${err.message})`);
+                return null;
+            });
+        });
 
         if (requestedDD) {
             return this.parseSubraphDD(requestedDD, state);   
@@ -74,9 +94,15 @@ export class ZkBobSubgraph {
     }
 
     public async pendingDirectDeposits(state: ZkBobState): Promise<DirectDeposit[]> {
-        const allPendingDDs = await this.sdk.PendingDirectDeposits({}, {
-            subgraphEndpoint: this.subgraphEndpoint(),
-        }).then((data) => data.directDeposits);
+        const allPendingDDs = await this.throttle.add(() => {
+            return this.sdk.PendingDirectDeposits({}, {
+                subgraphEndpoint: this.subgraphEndpoint(),
+            }).then((data) => data.directDeposits)
+            .catch((err) => {
+                console.warn(`[Subgraph]: Cannot fetch pending DDs (${err.message})`);
+                return null;
+            });
+        });
 
         if (Array.isArray(allPendingDDs)) {
             const myPendingDDs = (await Promise.all(allPendingDDs.map(async (subgraphDD) => {
@@ -94,12 +120,30 @@ export class ZkBobSubgraph {
         }
     }
 
-    public async getTxDetails(index: number, state: ZkBobState): Promise<PoolTxDetails | null> {
-        const tx = await this.sdk.PoolTxByIndex({ 'id': index }, {
-            subgraphEndpoint: this.subgraphEndpoint(),
-        }).then((data) => data.poolTx);
+    public async getTxesDetails(indexes: number[], state: ZkBobState): Promise<PoolTxDetails[]> {
+        const chunksPromises: Promise<any[]>[] = [];
+        for (let i = 0; i < indexes.length; i += SUBGRAPH_MAX_ITEMS_IN_RESPONSE) {
+            const chunk = indexes.slice(i, i + SUBGRAPH_MAX_ITEMS_IN_RESPONSE);
+            chunksPromises.push(this.throttle.add(() => {
+                const preparedIdxs = chunk.map((aIdx) => String(aIdx + SUBGRAPH_ID_INDEX_DELTA));
+                return this.sdk.PoolTxesByIndexes({ 'id_in': preparedIdxs }, {
+                    subgraphEndpoint: this.subgraphEndpoint(),
+                })
+                .then((data) => data.poolTxes)
+                .catch((err) => {
+                    console.warn(`[Subgraph]: Cannot fetch txes @ [${preparedIdxs.join(', ')}] (${err.message})`);
+                    return [];
+                });
+            }));
+        }
 
-        if (tx) {
+        const txs: any[] = [];
+        const chunksReady = await Promise.all(chunksPromises);
+        chunksReady.forEach((aChunk) => {
+            txs.push(...aChunk);
+        })
+
+        return Promise.all(txs.map(async (tx) => {
             if (tx.type != 100) {
                 // regular pool transaction
                 const txDetails = new RegularTxDetails();
@@ -122,18 +166,18 @@ export class ZkBobSubgraph {
                 } else if (tx.type == 2) {
                     // withdrawal
                     txDetails.txType = RegularTxType.Withdraw;
-                    txDetails.tokenAmount = tx.operation.token_amount;
+                    txDetails.tokenAmount = BigInt(tx.operation.token_amount);
                     txDetails.withdrawAddr = tx.operation.receiver;
                 } else if (tx.type == 3) {
                     // deposit via permit
                     txDetails.txType = RegularTxType.BridgeDeposit;
-                    txDetails.tokenAmount = tx.operation.token_amount;
+                    txDetails.tokenAmount = BigInt(tx.operation.token_amount);
                     txDetails.depositAddr = tx.operation.permit_holder;
                 } else {
                     throw new InternalError(`Incorrect tx type from subgraph (${tx.type})`)
                 }
 
-                return { poolTxType: PoolTxType.Regular, details: txDetails };
+                return { poolTxType: PoolTxType.Regular, details: txDetails, index: Number(tx.operation.index) };
             } else {
                 // direct deposit batch
                 const txDetails = new DDBatchTxDetails();
@@ -150,10 +194,8 @@ export class ZkBobSubgraph {
                     throw new InternalError(`Incorrect tx type from subgraph (${tx.type})`)
                 }
 
-                return { poolTxType: PoolTxType.DirectDepositBatch, details: txDetails };
+                return { poolTxType: PoolTxType.DirectDepositBatch, details: txDetails, index: -1 };
             }
-        }
-
-        return null;
+        }));
     }
 }

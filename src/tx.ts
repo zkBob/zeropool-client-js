@@ -39,6 +39,7 @@ export enum PoolTxType {
 export interface PoolTxDetails {
   poolTxType: PoolTxType,
   details: RegularTxDetails | DDBatchTxDetails,
+  index: number,  // index of the first tx leaf in the Merkle tree
 }
 
 // These fields belongs to the concrete transaction which are extracted
@@ -67,17 +68,25 @@ export enum DirectDepositState {
   Refunded,
 }
 
+export interface DDPaymentInfo {
+  note: string;
+  sender: string;
+  token: string;
+}
+
 export interface DirectDeposit {
   id: bigint;            // DD queue unique identifier
   state: DirectDepositState;
   amount: bigint;        // in pool resolution
   destination: string;   // zk-addresss
+  fee: bigint;           // relayer fee
   fallback: string;      // 0x-address to refund DD
   sender: string;        // 0x-address of sender [to the queue]
   queueTimestamp: number;// when it was created
   queueTxHash: string;   // transaction hash to the queue
   timestamp?: number;    // when it was sent to the pool
   txHash?: string;       // transaction hash to the pool
+  payment?: DDPaymentInfo;
 }
 
 export class DDBatchTxDetails extends CommonTxDetails {

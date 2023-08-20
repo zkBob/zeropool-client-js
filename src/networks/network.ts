@@ -44,7 +44,7 @@ export interface NetworkBackend {
     getChainId(): Promise<number>;
     getNativeBalance(address: string): Promise<bigint>;
     getNativeNonce(address: string): Promise<number>;
-    getTxDetails(poolTxHash: string): Promise<PoolTxDetails | null>;
+    getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null>;
     calldataBaseLength(): number;
     estimateCalldataLength(txType: TxType, notesCnt: number, extraDataLen: number): number;
 }

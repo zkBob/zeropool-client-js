@@ -35,7 +35,8 @@
     "wasm-feature-detect": "^1.2.11",
     "web3": "1.8.0",
     "web3-utils": "1.8.0",
-    "@graphprotocol/client-cli": "3.0.0"
+    "@graphprotocol/client-cli": "3.0.0",
+    "promise-throttle": "^1.1.2"
   },
   "devDependencies": {
     "@types/ethereum-protocol": "^1.0.1",

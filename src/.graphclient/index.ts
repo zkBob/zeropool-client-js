@@ -2324,11 +2324,11 @@ const merger = new(BareMerger as any)({
         },
         location: 'PendingDirectDepositsDocument.graphql'
       },{
-        document: PoolTxByIndexDocument,
+        document: PoolTxesByIndexesDocument,
         get rawSDL() {
-          return printWithCache(PoolTxByIndexDocument);
+          return printWithCache(PoolTxesByIndexesDocument);
         },
-        location: 'PoolTxByIndexDocument.graphql'
+        location: 'PoolTxesByIndexesDocument.graphql'
       }
     ];
     },
@@ -2381,17 +2381,17 @@ export type PendingDirectDepositsQueryVariables = Exact<{ [key: string]: never; 
 
 
 export type PendingDirectDepositsQuery = { directDeposits: Array<(
-    Pick<DirectDeposit, 'id' | 'zkAddress_pk' | 'zkAddress_diversifier' | 'deposit' | 'fee' | 'fallbackUser' | 'sender' | 'tsInit' | 'txInit'>
+    Pick<DirectDeposit, 'id' | 'pending' | 'zkAddress_pk' | 'zkAddress_diversifier' | 'deposit' | 'fee' | 'fallbackUser' | 'sender' | 'tsInit' | 'txInit'>
     & { payment?: Maybe<Pick<Payment, 'note' | 'sender' | 'token'>> }
   )> };
 
-export type PoolTxByIndexQueryVariables = Exact<{
-  id: Scalars['ID'];
+export type PoolTxesByIndexesQueryVariables = Exact<{
+  id_in?: InputMaybe<Array<Scalars['String']> | Scalars['String']>;
 }>;
 
 
-export type PoolTxByIndexQuery = { poolTx?: Maybe<(
-    Pick<PoolTx, 'id' | 'type' | 'ts' | 'tx'>
+export type PoolTxesByIndexesQuery = { poolTxes: Array<(
+    Pick<PoolTx, 'id' | 'type' | 'ts' | 'tx' | 'message'>
     & { zk: Pick<ZkCommon, 'out_commit'>, operation: (
       Pick<DDBatchOperation, 'id'>
       & { delegated_deposits: Array<(
@@ -2399,9 +2399,9 @@ export type PoolTxByIndexQuery = { poolTx?: Maybe<(
         & { payment?: Maybe<Pick<Payment, 'note' | 'sender' | 'token'>> }
       )> }
     ) | (
-      Pick<DepositOperation, 'fee' | 'nullifier' | 'token_amount'>
+      Pick<DepositOperation, 'index' | 'fee' | 'nullifier' | 'token_amount'>
       & { pooltx: Pick<PoolTx, 'calldata'> }
-    ) | Pick<PermittableDepositOperation, 'fee' | 'nullifier' | 'permit_holder' | 'token_amount'> | Pick<TransferOperation, 'fee' | 'nullifier'> | Pick<WithdrawalOperation, 'fee' | 'native_amount' | 'nullifier' | 'receiver' | 'token_amount'> }
+    ) | Pick<PermittableDepositOperation, 'index' | 'fee' | 'nullifier' | 'permit_holder' | 'token_amount'> | Pick<TransferOperation, 'index' | 'fee' | 'nullifier'> | Pick<WithdrawalOperation, 'index' | 'fee' | 'native_amount' | 'nullifier' | 'receiver' | 'token_amount'> }
   )> };
 
 
@@ -2434,6 +2434,7 @@ export const PendingDirectDepositsDocument = gql`
     query PendingDirectDeposits {
   directDeposits(orderBy: bnInit, where: {pending: true}) {
     id
+    pending
     zkAddress_pk
     zkAddress_diversifier
     deposit
@@ -2450,9 +2451,9 @@ export const PendingDirectDepositsDocument = gql`
   }
 }
     ` as unknown as DocumentNode<PendingDirectDepositsQuery, PendingDirectDepositsQueryVariables>;
-export const PoolTxByIndexDocument = gql`
-    query PoolTxByIndex($id: ID!) {
-  poolTx(id: $id) {
+export const PoolTxesByIndexesDocument = gql`
+    query PoolTxesByIndexes($id_in: [String!]) {
+  poolTxes(where: {id_in: $id_in}, first: 100) {
     id
     type
     zk {
@@ -2460,8 +2461,10 @@ export const PoolTxByIndexDocument = gql`
     }
     ts
     tx
+    message
     operation {
       ... on DepositOperation {
+        index
         fee
         nullifier
         token_amount
@@ -2470,16 +2473,19 @@ export const PoolTxByIndexDocument = gql`
         }
       }
       ... on PermittableDepositOperation {
+        index
         fee
         nullifier
         permit_holder
         token_amount
       }
       ... on TransferOperation {
+        index
         fee
         nullifier
       }
       ... on WithdrawalOperation {
+        index
         fee
         native_amount
         nullifier
@@ -2513,7 +2519,7 @@ export const PoolTxByIndexDocument = gql`
     }
   }
 }
-    ` as unknown as DocumentNode<PoolTxByIndexQuery, PoolTxByIndexQueryVariables>;
+    ` as unknown as DocumentNode<PoolTxesByIndexesQuery, PoolTxesByIndexesQueryVariables>;
 
 
 
@@ -2527,8 +2533,8 @@ export function getSdk<C, E>(requester: Requester<C, E>) {
     PendingDirectDeposits(variables?: PendingDirectDepositsQueryVariables, options?: C): Promise<PendingDirectDepositsQuery> {
       return requester<PendingDirectDepositsQuery, PendingDirectDepositsQueryVariables>(PendingDirectDepositsDocument, variables, options) as Promise<PendingDirectDepositsQuery>;
     },
-    PoolTxByIndex(variables: PoolTxByIndexQueryVariables, options?: C): Promise<PoolTxByIndexQuery> {
-      return requester<PoolTxByIndexQuery, PoolTxByIndexQueryVariables>(PoolTxByIndexDocument, variables, options) as Promise<PoolTxByIndexQuery>;
+    PoolTxesByIndexes(variables?: PoolTxesByIndexesQueryVariables, options?: C): Promise<PoolTxesByIndexesQuery> {
+      return requester<PoolTxesByIndexesQuery, PoolTxesByIndexesQueryVariables>(PoolTxesByIndexesDocument, variables, options) as Promise<PoolTxesByIndexesQuery>;
     }
   };
 }

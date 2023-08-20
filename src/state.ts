@@ -14,6 +14,7 @@ import { InternalError } from './errors';
 import { ZkBobRelayer } from './services/relayer';
 import { CONSTANTS } from './constants';
 import { NetworkBackend } from './networks/network';
+import { ZkBobSubgraph } from './subgraph';
 
 const LOG_STATE_HOTSYNC = false;
 
@@ -108,6 +109,7 @@ export class ZkBobState {
     sk: Uint8Array,
     birthIndex: number | undefined,
     network: NetworkBackend,
+    subgraph: ZkBobSubgraph | undefined,
     networkName: string,
     denominator: bigint,
     poolId: number,
@@ -124,7 +126,7 @@ export class ZkBobState {
     await worker.createAccount(zpState.stateId, zpState.sk, poolId, networkName);
     zpState.worker = worker;
     
-    zpState.history = await HistoryStorage.init(zpState.stateId, network, zpState);
+    zpState.history = await HistoryStorage.init(zpState.stateId, network, zpState, subgraph);
     
     zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, networkName as NetworkType, network, denominator);
 

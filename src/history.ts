@@ -1,13 +1,14 @@
 import { openDB, IDBPDatabase } from 'idb';
 import { Account, Note, TxMemoChunk, IndexedTx, ParseTxsResult, TxInput } from 'libzkbob-rs-wasm-web';
-import { DDBatchTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from './tx';
+import { DDBatchTxDetails, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from './tx';
 import { HexStringWriter, hexToBuf } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 import { ZkBobState } from './state';
 import { NetworkBackend } from './networks/network';
+import { ZkBobSubgraph } from './subgraph';
 
-const LOG_HISTORY_SYNC = false;
+const LOG_HISTORY_SYNC = true;
 const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
 
 const HISTORY_RECORD_VERSION = 3; // used to upgrade history records format in the database
@@ -227,6 +228,7 @@ export class HistoryStorage {
   private syncAttempts = 0;
   private state: ZkBobState;
   private network: NetworkBackend;
+  private subgraph?: ZkBobSubgraph;
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
                                           //(while tx isn't processed on relayer)
@@ -249,13 +251,14 @@ export class HistoryStorage {
   private syncHistoryPromise: Promise<void> | undefined;
 
 
-  constructor(db: IDBPDatabase, network: NetworkBackend, state: ZkBobState) {
+  constructor(db: IDBPDatabase, network: NetworkBackend, state: ZkBobState, subgraph?: ZkBobSubgraph) {
     this.db = db;
     this.network = network;
     this.state = state;
+    this.subgraph = subgraph;
   }
 
-  static async init(db_id: string, network: NetworkBackend, state: ZkBobState): Promise<HistoryStorage> {
+  static async init(db_id: string, network: NetworkBackend, state: ZkBobState, subgraph?: ZkBobSubgraph): Promise<HistoryStorage> {
     let isNewDB = false;
     const db = await openDB(`zkb.${db_id}.history`, 4, {
       upgrade(db, oldVersion, newVersions) {
@@ -315,7 +318,7 @@ export class HistoryStorage {
       await db.put(HISTORY_STATE_TABLE, HISTORY_RECORD_VERSION, 'version');
     }
 
-    const storage = new HistoryStorage(db, network, state);
+    const storage = new HistoryStorage(db, network, state, subgraph);
     await storage.preloadCache();
 
     return storage;
@@ -644,7 +647,7 @@ export class HistoryStorage {
           recTs < (toTimestamp ?? Number.MAX_VALUE) &&
           value.state == HistoryRecordState.Mined
       ) {
-        const txDetails = await this.network.getTxDetails(value.txHash);
+        const txDetails = await this.network.getTxDetails(treeIndex, value.txHash);
         if (txDetails instanceof RegularTxDetails) {  // txDetails belongs to a regular transaction
           // regular transaction
           const memoblock = hexToBuf(txDetails.ciphertext);
@@ -823,38 +826,17 @@ export class HistoryStorage {
     if (this.unparsedMemo.size > 0 || this.unparsedPendingMemo.size > 0) {
       console.log(`[HistoryStorage] starting memo synchronizing from the index ${this.syncIndex + 1} (${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unprocessed memos)`);
 
-      const historyPromises: Promise<HistoryRecordIdx[]>[] = [];
+      //const historyPromises: Promise<HistoryRecordIdx[]>[] = [];
       
       // process mined memos
-      const processedIndexes: number[] = [];
-      const unprocessedIndexes: number[] = [];
-      for (const oneMemo of this.unparsedMemo.values()) {
-        const hist = this.convertToHistory(oneMemo, false).then( records => {
-          if (records.length > 0) {
-            processedIndexes.push(oneMemo.index);
-          } else {
-            // collect unprocessed indexes as well
-            // (the reason is most likely RPC failure)
-            unprocessedIndexes.push(oneMemo.index)
-          }
+      const minedHistoryPromise = this.convertToHistory([...this.unparsedMemo.values()], false);
+      const pendingHistoryPromise = this.convertToHistory([...this.unparsedPendingMemo.values()], true);
+      const [minedHistory, pendingHistory] = await Promise.all([minedHistoryPromise, pendingHistoryPromise]);
 
-          return records;
-        });
-        historyPromises.push(hist);
-      }
 
-      // process pending memos
-      const processedPendingIndexes: number[] = [];
-      for (const oneMemo of this.unparsedPendingMemo.values()) {
-        if (this.failedHistory.find(rec => rec.txHash == oneMemo.txHash) === undefined) {
-          const hist = this.convertToHistory(oneMemo, true);
-          historyPromises.push(hist);
-
-          processedPendingIndexes.push(oneMemo.index);
-        }
-      }
-
-      const historyRedords = await Promise.all(historyPromises);
+      const historyRecords = minedHistory.records.concat(pendingHistory.records);
+      const processedIndexes = minedHistory.succIdxs.concat(pendingHistory.succIdxs);
+      const unprocessedIndexes = minedHistory.failIdxs.concat(pendingHistory.failIdxs);
 
       // delete all pending history records [we'll refresh them immediately]
       for (const [index, record] of this.currentHistory.entries()) {
@@ -864,20 +846,18 @@ export class HistoryStorage {
       }
 
       let newSyncIndex = this.syncIndex;
-      for (const oneSet of historyRedords) {
-        for (const oneRec of oneSet) {
-          if (LOG_HISTORY_SYNC) {
-            console.log(`[HistoryStorage] history record @${oneRec.index} has been created`);
-          }
+      for (const oneRec of historyRecords) {
+        if (LOG_HISTORY_SYNC) {
+          console.log(`[HistoryStorage] history record @${oneRec.index} has been created`);
+        }
 
-          this.currentHistory.set(oneRec.index, oneRec.record);
+        this.currentHistory.set(oneRec.index, oneRec.record);
 
-          if (oneRec.record.state == HistoryRecordState.Mined) {
-            // save history record only for mined transactions
-            this.put(oneRec.index, oneRec.record);
-            
-            newSyncIndex = oneRec.index;
-          }
+        if (oneRec.record.state == HistoryRecordState.Mined) {
+          // save history record only for mined transactions
+          this.put(oneRec.index, oneRec.record);
+          
+          newSyncIndex = oneRec.index;
         }
       }
 
@@ -922,13 +902,46 @@ export class HistoryStorage {
     return data;
   }
 
-  private async convertToHistory(memo: DecryptedMemo, pending: boolean): Promise<HistoryRecordIdx[]> {
-    // TODO: request from subgraph first
-    const txHash = memo.txHash;
-    if (txHash) {
-      const allRecords: HistoryRecordIdx[] = [];
-      const txDetails = await this.network.getTxDetails(txHash);
-      if (txDetails) {
+  private async getTxesDetails(memos: DecryptedMemo[]): Promise<{details: PoolTxDetails[], fetched: number[], notFetched: number[]}> {
+    const requestedIndexes = memos.map((aMemo) => aMemo.index);
+    let fetchedTxs: PoolTxDetails[] = [];
+    let fetchedIndexes: number[] = [];
+    if (this.subgraph) {
+      // try to fetch txes from the sugraph (if available)
+      fetchedTxs = await this.subgraph.getTxesDetails(requestedIndexes, this.state);
+    }
+
+    fetchedIndexes = fetchedTxs.map((aTx) => aTx.index);
+
+    const unparsedMemos = memos.filter((aMemo) => !fetchedIndexes.includes(aMemo.index));
+    const promises: Promise<PoolTxDetails | null>[] = [];
+    for (let aMemo of unparsedMemos) {
+      if (aMemo.txHash) {
+        promises.push(this.network.getTxDetails(aMemo.index, aMemo.txHash));
+      }
+    }
+    const res = await Promise.all(promises);
+    for (let aTx of res) {
+      if (aTx) {
+        fetchedTxs.push(aTx);
+        fetchedIndexes.push(aTx.index);
+      }
+    }
+
+    const notFetchedIndexes = requestedIndexes.filter((aIdx) => !fetchedIndexes.includes(aIdx));
+    return {details: fetchedTxs, fetched: fetchedIndexes, notFetched: notFetchedIndexes};
+  }
+
+  private async convertToHistory(memos: DecryptedMemo[], pending: boolean): Promise<{records: HistoryRecordIdx[], succIdxs: number[], failIdxs: number[]}> {
+    const result = await this.getTxesDetails(memos);
+    const txesDetails = result.details;
+    const fetched = result.fetched;
+    const notFetched = result.notFetched;
+
+    const allRecords: HistoryRecordIdx[] = [];
+    for (let txDetails of txesDetails) {
+      const memo = memos.find((aMemo) => aMemo.index == txDetails.index || aMemo.txHash == txDetails.details.txHash)
+      if (memo) {
         if (txDetails.poolTxType == PoolTxType.Regular && txDetails.details instanceof RegularTxDetails) {
           // regular transaction
           const details = txDetails.details
@@ -941,7 +954,7 @@ export class HistoryStorage {
               details.txHash,
               pending
             );
-            allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+            allRecords.push(HistoryRecordIdx.create(rec, txDetails.index));
           } else if (details.txType == RegularTxType.Transfer) {
             // there are 2 cases: 
             if (memo.acc) {
@@ -952,14 +965,14 @@ export class HistoryStorage {
               }));
 
               if (transfers.length == 0) {
-                const rec = await HistoryRecord.aggregateNotes(details.feeAmount, details.timestamp, txHash, pending);
+                const rec = await HistoryRecord.aggregateNotes(details.feeAmount, details.timestamp, details.txHash, pending);
                 allRecords.push(HistoryRecordIdx.create(rec, memo.index));
               } else {
                 const rec = await HistoryRecord.transferOut(
                   transfers,
                   details.feeAmount,
                   details.timestamp,
-                  txHash,
+                  details.txHash,
                   pending,
                   async (addr) => this.state.isOwnAddress(addr)
                 );
@@ -972,7 +985,7 @@ export class HistoryStorage {
                 return {to: destAddr, amount: BigInt(note.b)};
               }));
 
-              const rec = await HistoryRecord.transferIn(transfers, BigInt(0), details.timestamp, txHash, pending);
+              const rec = await HistoryRecord.transferIn(transfers, BigInt(0), details.timestamp, details.txHash, pending);
               allRecords.push(HistoryRecordIdx.create(rec, memo.index));
             }
           } else if (details.txType == RegularTxType.Withdraw) {
@@ -981,7 +994,7 @@ export class HistoryStorage {
               -(details.tokenAmount + details.feeAmount),
               details.feeAmount,
               details.timestamp,
-              txHash,
+              details.txHash,
               pending
             );
             allRecords.push(HistoryRecordIdx.create(rec, memo.index));
@@ -991,7 +1004,7 @@ export class HistoryStorage {
 
           if (!pending || (pending && details.isMined)) {
             // if tx is in pending state - remove it only on success
-            this.removePendingTxByTxHash(txHash);
+            this.removePendingTxByTxHash(details.txHash);
           }
         } else if (txDetails.poolTxType == PoolTxType.DirectDepositBatch && txDetails.details instanceof DDBatchTxDetails) {
           // transaction is DD batch on the pool
@@ -1002,28 +1015,44 @@ export class HistoryStorage {
             return {to: destAddr, amount: BigInt(note.b)};
           }));
 
-          const rec = await HistoryRecord.directDeposit(transfers, BigInt(0), details.timestamp, txHash, pending);
+          const rec = await HistoryRecord.directDeposit(transfers, BigInt(0), details.timestamp, details.txHash, pending);
           allRecords.push(HistoryRecordIdx.create(rec, memo.index));
         } else { 
           throw new InternalError(`Incorrect or unsupported transaction details`);
         }
-      } else {  // txDetails is null
-        // Cannot retrieve transaction details (maybe it's not mined yet?)
-        // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
-        const records = this.sentTxs.get(txHash);
-        if (records !== undefined) {
-          console.log(`[HistoryStorage] tx ${txHash} isn't indexed yet, but we have ${records.length} associated history record(s)`);
-          return records.map((oneRecord, index) => HistoryRecordIdx.create(oneRecord, memo.index + index));
-        } else {
-          // we shouldn't panic here: will retry in the next time
-          console.warn(`[HistoryStorage] cannot fetch tx ${txHash} and no local associated records`);
-        }
+      } else {
+        throw new InternalError(`Could not find associated memo for txDetails (index: ${txDetails.index}, txHash: ${txDetails.details.txHash})`);
       }
-
-      return allRecords;
     }
 
-    throw new InternalError(`Cannot find txHash for memo at index ${memo.index}`);
+    // working with memos without fetched tx details
+    for (let aUnprocessedIdx of notFetched) {
+      const memo = memos.find((aMemo) => aMemo.index == aUnprocessedIdx);
+      if (memo) {
+        if (memo.txHash) {
+          // Cannot retrieve transaction details (maybe it's not mined yet?)
+          // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
+          const records = this.sentTxs.get(memo.txHash);
+          if (records !== undefined) {
+            console.log(`[HistoryStorage] tx ${memo.txHash} isn't indexed yet, but we have ${records.length} associated history record(s)`);
+            records.forEach((oneRecord, index) => {
+              allRecords.push(HistoryRecordIdx.create(oneRecord, memo.index + index));
+              if (!fetched.includes(memo.index)) fetched.push(memo.index);
+              const x = notFetched.indexOf(memo.index);
+              if (x >= 0) { notFetched.splice(x, 1); } 
+            });
+          } else {
+            // we shouldn't panic here: will retry the next time
+            console.warn(`[HistoryStorage] cannot fetch tx ${memo.txHash} and no local associated records`);
+          }
+        } else {
+          throw new InternalError(`Cannot find txHash for memo at index ${memo.index}`);
+        }
+      } else {
+        throw new InternalError(`Could not find associated memo for unprocessed index ${aUnprocessedIdx}`);
+      }
+    }
+
+    return {records: allRecords, succIdxs: fetched, failIdxs: notFetched};
   }
-  
 }

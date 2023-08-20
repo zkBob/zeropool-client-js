@@ -292,6 +292,7 @@ export class ZkBobClient extends ZkBobProvider {
           this.account.sk,
           this.account.birthindex,
           network,
+          this.subgraph(),
           networkName,
           denominator,
           poolId,

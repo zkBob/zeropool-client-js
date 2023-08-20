@@ -399,7 +399,7 @@ export class EvmNetwork implements NetworkBackend {
         return Number(await this.activeWeb3().eth.getTransactionCount(address))
     }
 
-    public async getTxDetails(poolTxHash: string): Promise<PoolTxDetails | null> {
+    public async getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null> {
         try {
             const txData = await this.activeWeb3().eth.getTransaction(poolTxHash);
             if (txData && txData.blockNumber && txData.input) {
@@ -453,6 +453,7 @@ export class EvmNetwork implements NetworkBackend {
                         return {
                             poolTxType: PoolTxType.Regular,
                             details: txInfo,
+                            index,
                         };
                     } else if (txSelector == PoolSelector.AppendDirectDeposit) {
                         const txInfo = new DDBatchTxDetails();
@@ -466,6 +467,7 @@ export class EvmNetwork implements NetworkBackend {
                         return {
                             poolTxType: PoolTxType.DirectDepositBatch,
                             details: txInfo,
+                            index,
                         };
                     } else {
                         throw new InternalError(`[EvmNetwork]: Cannot decode calldata for tx ${poolTxHash} (incorrect selector ${txSelector})`);

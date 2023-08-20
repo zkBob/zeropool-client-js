@@ -1,5 +1,5 @@
-query PoolTxByIndex($id: ID!) {
-  poolTx(id: $id) {
+query PoolTxesByIndexes($id_in: [String!]) {
+  poolTxes(where: {id_in: $id_in}, first: 100) {
     id
     type
     zk {
@@ -10,6 +10,7 @@ query PoolTxByIndex($id: ID!) {
     message
     operation {
       ... on DepositOperation {
+        index
         fee
         nullifier
         token_amount
@@ -18,16 +19,19 @@ query PoolTxByIndex($id: ID!) {
         }
       }
       ... on PermittableDepositOperation {
+        index
         fee
         nullifier
         permit_holder
         token_amount
       }
       ... on TransferOperation {
+        index
         fee
         nullifier
       }
       ... on WithdrawalOperation {
+        index
         fee
         native_amount
         nullifier
