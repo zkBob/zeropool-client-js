@@ -5,7 +5,6 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
 import { NetworkType } from './network-type';
-import { tokenABI } from './networks/evm/evm-abi';
 import { NetworkBackend } from './networks/network';
 
 const util = require('ethereumjs-util');

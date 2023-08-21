@@ -5,10 +5,12 @@ export enum NetworkType {
   ethereum = 'ethereum',
   polygon = 'polygon',
   optimism = 'optimism',
+  tron = 'tron',
   // testnets
   sepolia = 'sepolia',
   goerli = 'goerli',
   goerliOptimism = 'goerli-optimism',
+  shasta = 'shasta', // TRON testnet
   localNode = 'local-node',
 }
 
@@ -30,9 +32,11 @@ export namespace NetworkType {
       case NetworkType.ethereum:
       case NetworkType.polygon:
       case NetworkType.optimism:
+      case NetworkType.tron:
       case NetworkType.sepolia:
       case NetworkType.goerli:
       case NetworkType.goerliOptimism:
+      case NetworkType.shasta:
       case NetworkType.localNode:
         return `/0'/0/${account}`;
         
@@ -50,9 +54,12 @@ export namespace NetworkType {
         return 966;
       case NetworkType.optimism:
         return 614;
+      case NetworkType.tron:
+        return 195;
       case NetworkType.sepolia:
       case NetworkType.goerli:
       case NetworkType.goerliOptimism:
+      case NetworkType.shasta:
       case NetworkType.localNode:
         return 1;
 
@@ -70,12 +77,16 @@ export namespace NetworkType {
         return 'polygon';
       case 10:
         return 'optimism';
+      case 0x2b6653dc: // 728126428
+        return 'tron';
       case 11155111:
         return 'sepolia';
       case 5:
         return 'goerli';
       case 420:
         return 'goerli-optimism';
+      case 0x94a9059e:  // 2494104990
+        return 'shasta';
       case 1337:
       case 31337:
         return 'local-node';
