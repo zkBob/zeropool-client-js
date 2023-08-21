@@ -2387,6 +2387,7 @@ export type PendingDirectDepositsQuery = { directDeposits: Array<(
 
 export type PoolTxesByIndexesQueryVariables = Exact<{
   id_in?: InputMaybe<Array<Scalars['String']> | Scalars['String']>;
+  first?: InputMaybe<Scalars['Int']>;
 }>;
 
 
@@ -2452,8 +2453,8 @@ export const PendingDirectDepositsDocument = gql`
 }
     ` as unknown as DocumentNode<PendingDirectDepositsQuery, PendingDirectDepositsQueryVariables>;
 export const PoolTxesByIndexesDocument = gql`
-    query PoolTxesByIndexes($id_in: [String!]) {
-  poolTxes(where: {id_in: $id_in}, first: 100) {
+    query PoolTxesByIndexes($id_in: [String!], $first: Int = 100) {
+  poolTxes(where: {id_in: $id_in}, first: $first) {
     id
     type
     zk {

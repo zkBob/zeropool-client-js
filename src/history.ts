@@ -912,8 +912,14 @@ export class HistoryStorage {
     }
 
     fetchedIndexes = fetchedTxs.map((aTx) => aTx.index);
+    const fetchedTxHashes = fetchedTxs.map((aTx) => aTx.details.txHash);
 
-    const unparsedMemos = memos.filter((aMemo) => !fetchedIndexes.includes(aMemo.index));
+    // get unprocessed memos
+    const unparsedMemos = memos.filter((aMemo) => (
+      !fetchedIndexes.includes(aMemo.index) && 
+      (aMemo.txHash && !fetchedTxHashes.includes(aMemo.txHash))));
+
+    // fetch unprocessed by subgraph
     const promises: Promise<PoolTxDetails | null>[] = [];
     for (let aMemo of unparsedMemos) {
       if (aMemo.txHash) {

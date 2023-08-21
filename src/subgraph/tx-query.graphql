@@ -1,5 +1,5 @@
-query PoolTxesByIndexes($id_in: [String!]) {
-  poolTxes(where: {id_in: $id_in}, first: 100) {
+query PoolTxesByIndexes($id_in: [String!], $first: Int = 100) {
+  poolTxes(where: {id_in: $id_in}, first: $first) {
     id
     type
     zk {

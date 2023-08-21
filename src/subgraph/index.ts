@@ -8,7 +8,7 @@ import { DDBatchTxDetails, DirectDeposit, DirectDepositState,
         } from "../tx";
 
 const SUBGRAPH_REQUESTS_PER_SECOND = 10;
-const SUBGRAPH_MAX_ITEMS_IN_RESPONSE = 100; // also change this value in tx-query.graphql
+const SUBGRAPH_MAX_ITEMS_IN_RESPONSE = 3;
 const SUBGRAPH_ID_INDEX_DELTA = 128;
 
 
@@ -126,7 +126,7 @@ export class ZkBobSubgraph {
             const chunk = indexes.slice(i, i + SUBGRAPH_MAX_ITEMS_IN_RESPONSE);
             chunksPromises.push(this.throttle.add(() => {
                 const preparedIdxs = chunk.map((aIdx) => String(aIdx + SUBGRAPH_ID_INDEX_DELTA));
-                return this.sdk.PoolTxesByIndexes({ 'id_in': preparedIdxs }, {
+                return this.sdk.PoolTxesByIndexes({ 'id_in': preparedIdxs, 'first': SUBGRAPH_MAX_ITEMS_IN_RESPONSE }, {
                     subgraphEndpoint: this.subgraphEndpoint(),
                 })
                 .then((data) => data.poolTxes)
