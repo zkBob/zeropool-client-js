@@ -57,9 +57,9 @@ export class RegularTxDetails extends CommonTxDetails {
   depositAddr?: string;   // for deposit txs only
   withdrawAddr?: string;  // for withdraw txs only
   // The following fields are needed for compliance report
-  commitment: string;
+  commitment: string;     // 0x-prefixed hex format
   nullifier: string;      // 0x-prefixed hex format
-  ciphertext: string;
+  ciphertext: string;     // 0x-prefixed hex format
 }
 
 export enum DirectDepositState {
@@ -69,7 +69,7 @@ export enum DirectDepositState {
 }
 
 export interface DDPaymentInfo {
-  note: string;
+  note: string | null;
   sender: string;
   token: string;
 }

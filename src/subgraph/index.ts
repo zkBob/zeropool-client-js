@@ -6,9 +6,15 @@ import { InternalError } from "../errors";
 import { DDBatchTxDetails, DirectDeposit, DirectDepositState,
          PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType
         } from "../tx";
+import { decodeEvmCalldata } from '../networks/evm/calldata';
+import { DepositSignerFactory } from '../signers/signer-factory';
+import { NetworkBackend } from '../networks/network';
+import { DepositType } from '../config';
+import { DepositData } from '../signers/abstract-signer';
+import { toTwosComplementHex, truncateHexPrefix } from '../utils';
 
 const SUBGRAPH_REQUESTS_PER_SECOND = 10;
-const SUBGRAPH_MAX_ITEMS_IN_RESPONSE = 3;
+const SUBGRAPH_MAX_ITEMS_IN_RESPONSE = 100;
 const SUBGRAPH_ID_INDEX_DELTA = 128;
 
 
@@ -120,7 +126,8 @@ export class ZkBobSubgraph {
         }
     }
 
-    public async getTxesDetails(indexes: number[], state: ZkBobState): Promise<PoolTxDetails[]> {
+    // NetworkBackendd needed only for approve-deposit sender address recovering
+    public async getTxesDetails(indexes: number[], state: ZkBobState, network: NetworkBackend): Promise<PoolTxDetails[]> {
         const chunksPromises: Promise<any[]>[] = [];
         for (let i = 0; i < indexes.length; i += SUBGRAPH_MAX_ITEMS_IN_RESPONSE) {
             const chunk = indexes.slice(i, i + SUBGRAPH_MAX_ITEMS_IN_RESPONSE);
@@ -151,14 +158,30 @@ export class ZkBobSubgraph {
                 txDetails.isMined = true;   // subgraph returns only mined txs
                 txDetails.timestamp = Number(tx.ts);
                 txDetails.feeAmount = BigInt(tx.operation.fee);
-                txDetails.nullifier = tx.operation.nullifier;
-                txDetails.commitment = tx.zk.out_commit;
+                //toTwosComplementHex(BigInt(txData.public.nullifier), 32)
+                txDetails.nullifier = '0x' + toTwosComplementHex(BigInt((tx.operation.nullifier)), 32);
+                txDetails.commitment = '0x' + toTwosComplementHex(BigInt((tx.zk.out_commit)), 32);
                 txDetails.ciphertext = tx.message
                 if (tx.type == 0) {
                     // deposit via approve
                     txDetails.txType = RegularTxType.Deposit;
                     txDetails.tokenAmount = BigInt(tx.operation.token_amount)
-                    // TODO: restore sender from signature!;
+                    // Due to the subgraph doesn't have ecrecover ability we should recover depositor address manually
+                    // Please keep in mind non-evm networks possible incompatibilities
+                    if (tx.operation.pooltx.calldata) {
+                        const shieldedTx = decodeEvmCalldata(tx.operation.pooltx.calldata)
+                        if (shieldedTx.extra && shieldedTx.extra.length >= 128) {
+                            const approveSigner = DepositSignerFactory.createSigner(network, DepositType.Approve);
+                            const depositData: DepositData = {
+                                tokenAddress: '', owner: '', spender: '', amount: 0n, deadline: 0n, nullifier: txDetails.nullifier
+                            }
+                            const signature = shieldedTx.extra.slice(0, 128);
+                            txDetails.depositAddr = await approveSigner.recoverAddress(depositData, signature);
+                        } else {
+                            // incorrect signature
+                            console.warn(`Cannot recover depositor address from the signature for tx ${tx.tx}`);
+                        }
+                    }
                 } else if (tx.type == 1) {
                     // transfer
                     txDetails.txType = RegularTxType.Transfer;
@@ -177,7 +200,7 @@ export class ZkBobSubgraph {
                     throw new InternalError(`Incorrect tx type from subgraph (${tx.type})`)
                 }
 
-                return { poolTxType: PoolTxType.Regular, details: txDetails, index: Number(tx.operation.index) };
+                return { poolTxType: PoolTxType.Regular, details: txDetails, index: Number(tx.id) - SUBGRAPH_ID_INDEX_DELTA };
             } else {
                 // direct deposit batch
                 const txDetails = new DDBatchTxDetails();
@@ -187,14 +210,19 @@ export class ZkBobSubgraph {
                 
                 const DDs = tx.operation.delegated_deposits
                 if (Array.isArray(DDs)) {
-                    txDetails.deposits = await Promise.all(DDs.map((aSubgraphDD) => {
-                        return this.parseSubraphDD(aSubgraphDD, state);
-                    }));
+                    txDetails.deposits = (await Promise.all(DDs.map(async (subgraphDD) => {
+                            const dd = await this.parseSubraphDD(subgraphDD, state);
+                            const isOwn = await state.isOwnAddress(dd.destination);
+
+                            return {dd, isOwn};
+                        })))
+                        .filter((dd) => dd.isOwn)   // grab the own DDs only
+                        .map((myDD) => myDD.dd);
                 } else {
                     throw new InternalError(`Incorrect tx type from subgraph (${tx.type})`)
                 }
 
-                return { poolTxType: PoolTxType.DirectDepositBatch, details: txDetails, index: -1 };
+                return { poolTxType: PoolTxType.DirectDepositBatch, details: txDetails, index: Number(tx.id) - SUBGRAPH_ID_INDEX_DELTA };
             }
         }));
     }

@@ -1,7 +1,7 @@
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
 import { Chains, Pools, SnarkConfigParams, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
-import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
+import { ethAddrToBuf, truncateHexPrefix,
           toTwosComplementHex, bufToHex, bigintToArrayLe
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
@@ -719,7 +719,7 @@ export class ZkBobClient extends ZkBobProvider {
     await depositSigner.checkIsDataValid(dataToSign); // may throw an error in case of the owner isn't prepared for requested deposit scheme
     const signReq = await depositSigner.buildSignatureRequest(dataToSign);
     let signature = await signatureCallback(signReq);
-    signature = toCompactSignature(truncateHexPrefix(signature));
+    signature = truncateHexPrefix(this.network().toCompactSignature(signature));
 
     // Checking signature correct (corresponded with declared address)
     const claimedAddr = `0x${bufToHex(ethAddrToBuf(fromAddress))}`;

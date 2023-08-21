@@ -38,9 +38,16 @@ export interface NetworkBackend {
     createDirectDepositTx(ddQueueAddress: string, amount: bigint, zkAddress: string, fallbackAddress: string): Promise<PreparedTransaction>;
     createNativeDirectDepositTx(ddQueueAddress: string, nativeAmount: bigint, zkAddress: string, fallbackAddress: string): Promise<PreparedTransaction>;
 
+    // Signatures
+    sign(data: any, privKey: string): Promise<string>;
+    signTypedData(typedData: any, privKey: string): Promise<string>;
+    recoverSigner(data: any, signature: string): Promise<string>;
+    recoverSignerTypedData(typedData: any, signature: string): Promise<string>;
+    toCompactSignature(signature: string): string;
+    toCanonicalSignature(signature: string): string;
+
     // Miscellaneous
     getTxRevertReason(txHash: string): Promise<string | null>
-    isSignatureCompact(): boolean;
     getChainId(): Promise<number>;
     getNativeBalance(address: string): Promise<bigint>;
     getNativeNonce(address: string): Promise<number>;

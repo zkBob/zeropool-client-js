@@ -6,8 +6,10 @@ import { InternalError } from '../../errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
 import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType } from '../../tx';
-import { bigintToArrayLe, bufToHex, toCanonicalSignature } from '../../utils';
+import { bigintToArrayLe, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from './calldata';
+import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
+        personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
 
 const RPC_ISSUES_THRESHOLD = 10;
 
@@ -354,6 +356,93 @@ export class EvmNetwork implements NetworkBackend {
     }
 
 
+    // ------------------------=========< Signatures >=========-----------------------
+    // | Signing and recovery [ECDSA]                                                |
+    // -------------------------------------------------------------------------------
+
+    public async sign(data: any, privKey: string): Promise<string> {
+        let keyBuf = Buffer.from(hexToBuf(privKey));
+        const signature = personalSign({
+            privateKey: keyBuf,
+            data: data,
+        }); // canonical signature (65 bytes long, LSByte: 1b or 1c)
+        keyBuf.fill(0);
+
+        // EVM deployments use compact signatures
+        return this.toCompactSignature(signature);
+    }
+
+    public async signTypedData(typedData: any, privKey: string): Promise<string> {
+        let keyBuf = Buffer.from(hexToBuf(privKey));
+        const signature = signTypedData({
+            privateKey: keyBuf,
+            data: typedData,
+            version: SignTypedDataVersion.V4
+        }); // canonical signature (65 bytes long, LSByte: 1b or 1c)
+        keyBuf.fill(0);
+
+        // EVM deployments use compact signatures
+        return this.toCompactSignature(signature);
+    }
+
+    public async recoverSigner(data: any, signature: string): Promise<string> {
+        return recoverPersonalSignature({
+            data: data,
+            signature: this.toCanonicalSignature(signature)
+        });
+    }
+
+    public async recoverSignerTypedData(typedData: any, signature: string): Promise<string> {
+        return recoverTypedSignature({
+            data: typedData,
+            signature: this.toCanonicalSignature(signature),
+            version: SignTypedDataVersion.V4
+        });
+    }
+
+    public toCompactSignature(signature: string): string {
+        signature = truncateHexPrefix(signature);
+      
+        if (signature.length > 128) {
+          // it seems it's an extended signature, let's compact it!
+          const v = signature.slice(128, 130);
+          if (v == "1c") {
+            return `0x${signature.slice(0, 64)}${(parseInt(signature[64], 16) | 8).toString(16)}${signature.slice(65, 128)}`;
+          } else if (v != "1b") {
+            throw new InternalError("Invalid signature: v should be 27 or 28");
+          }
+      
+          return '0x' + signature.slice(0, 128);
+        } else if (signature.length < 128) {
+          throw new InternalError("invalid signature: it should consist at least 64 bytes (128 chars)");
+        }
+      
+        // it seems the signature already compact
+        return '0x' + signature;
+      }
+      
+      public toCanonicalSignature(signature: string): string {
+        let sig = truncateHexPrefix(signature);
+      
+        if ((sig.length % 2) == 0) {
+            if (sig.length == 128) {
+            return `0x` + sig;
+            } else if (sig.length == 130) {
+            let v = "1b";
+            if (parseInt(sig[64], 16) > 7) {
+                v = "1c";
+                sig = sig.slice(0, 64) + `${(parseInt(sig[64], 16) & 7).toString(16)}` + sig.slice(65);
+            }
+                return `0x` + sig + v;
+            } else {
+                throw new InternalError(`Incorrect signature length (${sig.length}), expected 64 or 65 bytes (128 or 130 chars)`);
+            }
+        } else {
+            throw new InternalError(`Incorrect signature length (${sig.length}), expected an even number`);
+        }
+      }
+
+
     // ----------------------=========< Miscellaneous >=========----------------------
     // | Getting tx revert reason, chain ID, signature format, etc...                |
     // -------------------------------------------------------------------------------
@@ -381,10 +470,6 @@ export class EvmNetwork implements NetworkBackend {
         }
 
         return null;
-    }
-
-    public isSignatureCompact(): boolean {
-        return true;
     }
 
     public async getChainId(): Promise<number> {
@@ -431,17 +516,17 @@ export class EvmNetwork implements NetworkBackend {
                         txInfo.txHash = poolTxHash;
                         txInfo.isMined = isMined
                         txInfo.timestamp = timestamp;
-                        txInfo.nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
-                        txInfo.commitment = '0x' + bufToHex(bigintToArrayLe(tx.outCommit));
+                        txInfo.nullifier = '0x' + toTwosComplementHex(BigInt((tx.nullifier)), 32);
+                        txInfo.commitment = '0x' + toTwosComplementHex(BigInt((tx.outCommit)), 32);
                         txInfo.ciphertext = getCiphertext(tx);
 
                         // additional tx-specific fields for deposits and withdrawals
                         if (tx.txType == RegularTxType.Deposit) {
                             if (tx.extra && tx.extra.length >= 128) {
-                                const fullSig = toCanonicalSignature(tx.extra.slice(0, 128));
+                                const fullSig = this.toCanonicalSignature(tx.extra.slice(0, 128));
                                 txInfo.depositAddr = await this.activeWeb3().eth.accounts.recover(txInfo.nullifier, fullSig);
                             } else {
-                                //incorrect signature
+                                // incorrect signature
                                 throw new InternalError(`No signature for approve deposit`);
                             }
                         } else if (tx.txType == RegularTxType.BridgeDeposit) {
