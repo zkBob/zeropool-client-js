@@ -21,8 +21,8 @@ import { getMesh, ExecuteMeshFn, SubscribeMeshFn, MeshContext as BaseMeshContext
 import { MeshStore, FsStoreStorageAdapter } from '@graphql-mesh/store';
 import { path as pathModule } from '@graphql-mesh/cross-helpers';
 import { ImportFn } from '@graphql-mesh/types';
-import type { ZkbobBobGoerliTypes } from './sources/zkbob-bob-goerli/types';
-import * as importedModule$0 from "./sources/zkbob-bob-goerli/introspectionSchema";
+import type { ZkbobUsdcPolygonTypes } from './sources/zkbob-usdc-polygon/types';
+import * as importedModule$0 from "./sources/zkbob-usdc-polygon/introspectionSchema";
 export type Maybe<T> = T | null;
 export type InputMaybe<T> = Maybe<T>;
 export type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
@@ -589,6 +589,7 @@ export type DDBatchOperation_orderBy =
   | 'id'
   | 'pooltx'
   | 'pooltx__id'
+  | 'pooltx__index'
   | 'pooltx__tx'
   | 'pooltx__ts'
   | 'pooltx__all_messages_hash'
@@ -602,7 +603,7 @@ export type DepositOperation = Operation & {
   id: Scalars['String'];
   pooltx: PoolTx;
   nullifier: Scalars['BigInt'];
-  index: Scalars['BigInt'];
+  index_ref: Scalars['BigInt'];
   token_amount: Scalars['BigInt'];
   fee: Scalars['BigInt'];
 };
@@ -657,14 +658,14 @@ export type DepositOperation_filter = {
   nullifier_lte?: InputMaybe<Scalars['BigInt']>;
   nullifier_in?: InputMaybe<Array<Scalars['BigInt']>>;
   nullifier_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
-  index?: InputMaybe<Scalars['BigInt']>;
-  index_not?: InputMaybe<Scalars['BigInt']>;
-  index_gt?: InputMaybe<Scalars['BigInt']>;
-  index_lt?: InputMaybe<Scalars['BigInt']>;
-  index_gte?: InputMaybe<Scalars['BigInt']>;
-  index_lte?: InputMaybe<Scalars['BigInt']>;
-  index_in?: InputMaybe<Array<Scalars['BigInt']>>;
-  index_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  index_ref?: InputMaybe<Scalars['BigInt']>;
+  index_ref_not?: InputMaybe<Scalars['BigInt']>;
+  index_ref_gt?: InputMaybe<Scalars['BigInt']>;
+  index_ref_lt?: InputMaybe<Scalars['BigInt']>;
+  index_ref_gte?: InputMaybe<Scalars['BigInt']>;
+  index_ref_lte?: InputMaybe<Scalars['BigInt']>;
+  index_ref_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  index_ref_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
   token_amount?: InputMaybe<Scalars['BigInt']>;
   token_amount_not?: InputMaybe<Scalars['BigInt']>;
   token_amount_gt?: InputMaybe<Scalars['BigInt']>;
@@ -691,6 +692,7 @@ export type DepositOperation_orderBy =
   | 'id'
   | 'pooltx'
   | 'pooltx__id'
+  | 'pooltx__index'
   | 'pooltx__tx'
   | 'pooltx__ts'
   | 'pooltx__all_messages_hash'
@@ -699,7 +701,7 @@ export type DepositOperation_orderBy =
   | 'pooltx__gas_used'
   | 'pooltx__calldata'
   | 'nullifier'
-  | 'index'
+  | 'index_ref'
   | 'token_amount'
   | 'fee';
 
@@ -1016,6 +1018,7 @@ export type Operation_orderBy =
   | 'id'
   | 'pooltx'
   | 'pooltx__id'
+  | 'pooltx__index'
   | 'pooltx__tx'
   | 'pooltx__ts'
   | 'pooltx__all_messages_hash'
@@ -1143,7 +1146,7 @@ export type PermittableDepositOperation = Operation & {
   id: Scalars['String'];
   pooltx: PoolTx;
   nullifier: Scalars['BigInt'];
-  index: Scalars['BigInt'];
+  index_ref: Scalars['BigInt'];
   token_amount: Scalars['BigInt'];
   fee: Scalars['BigInt'];
   permit_deadline: Scalars['BigInt'];
@@ -1201,14 +1204,14 @@ export type PermittableDepositOperation_filter = {
   nullifier_lte?: InputMaybe<Scalars['BigInt']>;
   nullifier_in?: InputMaybe<Array<Scalars['BigInt']>>;
   nullifier_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
-  index?: InputMaybe<Scalars['BigInt']>;
-  index_not?: InputMaybe<Scalars['BigInt']>;
-  index_gt?: InputMaybe<Scalars['BigInt']>;
-  index_lt?: InputMaybe<Scalars['BigInt']>;
-  index_gte?: InputMaybe<Scalars['BigInt']>;
-  index_lte?: InputMaybe<Scalars['BigInt']>;
-  index_in?: InputMaybe<Array<Scalars['BigInt']>>;
-  index_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  index_ref?: InputMaybe<Scalars['BigInt']>;
+  index_ref_not?: InputMaybe<Scalars['BigInt']>;
+  index_ref_gt?: InputMaybe<Scalars['BigInt']>;
+  index_ref_lt?: InputMaybe<Scalars['BigInt']>;
+  index_ref_gte?: InputMaybe<Scalars['BigInt']>;
+  index_ref_lte?: InputMaybe<Scalars['BigInt']>;
+  index_ref_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  index_ref_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
   token_amount?: InputMaybe<Scalars['BigInt']>;
   token_amount_not?: InputMaybe<Scalars['BigInt']>;
   token_amount_gt?: InputMaybe<Scalars['BigInt']>;
@@ -1263,6 +1266,7 @@ export type PermittableDepositOperation_orderBy =
   | 'id'
   | 'pooltx'
   | 'pooltx__id'
+  | 'pooltx__index'
   | 'pooltx__tx'
   | 'pooltx__ts'
   | 'pooltx__all_messages_hash'
@@ -1271,7 +1275,7 @@ export type PermittableDepositOperation_orderBy =
   | 'pooltx__gas_used'
   | 'pooltx__calldata'
   | 'nullifier'
-  | 'index'
+  | 'index_ref'
   | 'token_amount'
   | 'fee'
   | 'permit_deadline'
@@ -1280,6 +1284,7 @@ export type PermittableDepositOperation_orderBy =
 
 export type PoolTx = {
   id: Scalars['String'];
+  index: Scalars['BigInt'];
   tx: Scalars['Bytes'];
   ts: Scalars['BigInt'];
   all_messages_hash: Scalars['Bytes'];
@@ -1312,6 +1317,14 @@ export type PoolTx_filter = {
   id_ends_with_nocase?: InputMaybe<Scalars['String']>;
   id_not_ends_with?: InputMaybe<Scalars['String']>;
   id_not_ends_with_nocase?: InputMaybe<Scalars['String']>;
+  index?: InputMaybe<Scalars['BigInt']>;
+  index_not?: InputMaybe<Scalars['BigInt']>;
+  index_gt?: InputMaybe<Scalars['BigInt']>;
+  index_lt?: InputMaybe<Scalars['BigInt']>;
+  index_gte?: InputMaybe<Scalars['BigInt']>;
+  index_lte?: InputMaybe<Scalars['BigInt']>;
+  index_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  index_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
   tx?: InputMaybe<Scalars['Bytes']>;
   tx_not?: InputMaybe<Scalars['Bytes']>;
   tx_gt?: InputMaybe<Scalars['Bytes']>;
@@ -1426,6 +1439,7 @@ export type PoolTx_filter = {
 
 export type PoolTx_orderBy =
   | 'id'
+  | 'index'
   | 'tx'
   | 'ts'
   | 'all_messages_hash'
@@ -1444,7 +1458,7 @@ export type TransferOperation = Operation & {
   id: Scalars['String'];
   pooltx: PoolTx;
   nullifier: Scalars['BigInt'];
-  index: Scalars['BigInt'];
+  index_ref: Scalars['BigInt'];
   fee: Scalars['BigInt'];
 };
 
@@ -1498,14 +1512,14 @@ export type TransferOperation_filter = {
   nullifier_lte?: InputMaybe<Scalars['BigInt']>;
   nullifier_in?: InputMaybe<Array<Scalars['BigInt']>>;
   nullifier_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
-  index?: InputMaybe<Scalars['BigInt']>;
-  index_not?: InputMaybe<Scalars['BigInt']>;
-  index_gt?: InputMaybe<Scalars['BigInt']>;
-  index_lt?: InputMaybe<Scalars['BigInt']>;
-  index_gte?: InputMaybe<Scalars['BigInt']>;
-  index_lte?: InputMaybe<Scalars['BigInt']>;
-  index_in?: InputMaybe<Array<Scalars['BigInt']>>;
-  index_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  index_ref?: InputMaybe<Scalars['BigInt']>;
+  index_ref_not?: InputMaybe<Scalars['BigInt']>;
+  index_ref_gt?: InputMaybe<Scalars['BigInt']>;
+  index_ref_lt?: InputMaybe<Scalars['BigInt']>;
+  index_ref_gte?: InputMaybe<Scalars['BigInt']>;
+  index_ref_lte?: InputMaybe<Scalars['BigInt']>;
+  index_ref_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  index_ref_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
   fee?: InputMaybe<Scalars['BigInt']>;
   fee_not?: InputMaybe<Scalars['BigInt']>;
   fee_gt?: InputMaybe<Scalars['BigInt']>;
@@ -1524,6 +1538,7 @@ export type TransferOperation_orderBy =
   | 'id'
   | 'pooltx'
   | 'pooltx__id'
+  | 'pooltx__index'
   | 'pooltx__tx'
   | 'pooltx__ts'
   | 'pooltx__all_messages_hash'
@@ -1532,14 +1547,14 @@ export type TransferOperation_orderBy =
   | 'pooltx__gas_used'
   | 'pooltx__calldata'
   | 'nullifier'
-  | 'index'
+  | 'index_ref'
   | 'fee';
 
 export type WithdrawalOperation = Operation & {
   id: Scalars['String'];
   pooltx: PoolTx;
   nullifier: Scalars['BigInt'];
-  index: Scalars['BigInt'];
+  index_ref: Scalars['BigInt'];
   energy_amount: Scalars['BigInt'];
   token_amount: Scalars['BigInt'];
   fee: Scalars['BigInt'];
@@ -1597,14 +1612,14 @@ export type WithdrawalOperation_filter = {
   nullifier_lte?: InputMaybe<Scalars['BigInt']>;
   nullifier_in?: InputMaybe<Array<Scalars['BigInt']>>;
   nullifier_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
-  index?: InputMaybe<Scalars['BigInt']>;
-  index_not?: InputMaybe<Scalars['BigInt']>;
-  index_gt?: InputMaybe<Scalars['BigInt']>;
-  index_lt?: InputMaybe<Scalars['BigInt']>;
-  index_gte?: InputMaybe<Scalars['BigInt']>;
-  index_lte?: InputMaybe<Scalars['BigInt']>;
-  index_in?: InputMaybe<Array<Scalars['BigInt']>>;
-  index_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  index_ref?: InputMaybe<Scalars['BigInt']>;
+  index_ref_not?: InputMaybe<Scalars['BigInt']>;
+  index_ref_gt?: InputMaybe<Scalars['BigInt']>;
+  index_ref_lt?: InputMaybe<Scalars['BigInt']>;
+  index_ref_gte?: InputMaybe<Scalars['BigInt']>;
+  index_ref_lte?: InputMaybe<Scalars['BigInt']>;
+  index_ref_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  index_ref_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
   energy_amount?: InputMaybe<Scalars['BigInt']>;
   energy_amount_not?: InputMaybe<Scalars['BigInt']>;
   energy_amount_gt?: InputMaybe<Scalars['BigInt']>;
@@ -1657,6 +1672,7 @@ export type WithdrawalOperation_orderBy =
   | 'id'
   | 'pooltx'
   | 'pooltx__id'
+  | 'pooltx__index'
   | 'pooltx__tx'
   | 'pooltx__ts'
   | 'pooltx__all_messages_hash'
@@ -1665,7 +1681,7 @@ export type WithdrawalOperation_orderBy =
   | 'pooltx__gas_used'
   | 'pooltx__calldata'
   | 'nullifier'
-  | 'index'
+  | 'index_ref'
   | 'energy_amount'
   | 'token_amount'
   | 'fee'
@@ -1761,6 +1777,7 @@ export type ZkCommon_orderBy =
   | 'id'
   | 'pooltx'
   | 'pooltx__id'
+  | 'pooltx__index'
   | 'pooltx__tx'
   | 'pooltx__ts'
   | 'pooltx__all_messages_hash'
@@ -2074,7 +2091,7 @@ export type DepositOperationResolvers<ContextType = MeshContext & { subgraphEndp
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   pooltx?: Resolver<ResolversTypes['PoolTx'], ParentType, ContextType>;
   nullifier?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
-  index?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
+  index_ref?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   token_amount?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   fee?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
@@ -2132,7 +2149,7 @@ export type PermittableDepositOperationResolvers<ContextType = MeshContext & { s
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   pooltx?: Resolver<ResolversTypes['PoolTx'], ParentType, ContextType>;
   nullifier?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
-  index?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
+  index_ref?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   token_amount?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   fee?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   permit_deadline?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
@@ -2143,6 +2160,7 @@ export type PermittableDepositOperationResolvers<ContextType = MeshContext & { s
 
 export type PoolTxResolvers<ContextType = MeshContext & { subgraphEndpoint: string }, ParentType extends ResolversParentTypes['PoolTx'] = ResolversParentTypes['PoolTx']> = ResolversObject<{
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  index?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   tx?: Resolver<ResolversTypes['Bytes'], ParentType, ContextType>;
   ts?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   all_messages_hash?: Resolver<ResolversTypes['Bytes'], ParentType, ContextType>;
@@ -2159,7 +2177,7 @@ export type TransferOperationResolvers<ContextType = MeshContext & { subgraphEnd
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   pooltx?: Resolver<ResolversTypes['PoolTx'], ParentType, ContextType>;
   nullifier?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
-  index?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
+  index_ref?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   fee?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
@@ -2168,7 +2186,7 @@ export type WithdrawalOperationResolvers<ContextType = MeshContext & { subgraphE
   id?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   pooltx?: Resolver<ResolversTypes['PoolTx'], ParentType, ContextType>;
   nullifier?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
-  index?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
+  index_ref?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   energy_amount?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   token_amount?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
   fee?: Resolver<ResolversTypes['BigInt'], ParentType, ContextType>;
@@ -2229,7 +2247,7 @@ export type DirectiveResolvers<ContextType = MeshContext & { subgraphEndpoint: s
   derivedFrom?: derivedFromDirectiveResolver<any, any, ContextType>;
 }>;
 
-export type MeshContext = ZkbobBobGoerliTypes.Context & BaseMeshContext;
+export type MeshContext = ZkbobUsdcPolygonTypes.Context & BaseMeshContext;
 
 
 import { fileURLToPath } from '@graphql-mesh/utils';
@@ -2238,7 +2256,7 @@ const baseDir = pathModule.join(pathModule.dirname(fileURLToPath(import.meta.url
 const importFn: ImportFn = <T>(moduleId: string) => {
   const relativeModuleId = (pathModule.isAbsolute(moduleId) ? pathModule.relative(baseDir, moduleId) : moduleId).split('\\').join('/').replace(baseDir + '/', '');
   switch(relativeModuleId) {
-    case ".graphclient/sources/zkbob-bob-goerli/introspectionSchema":
+    case ".graphclient/sources/zkbob-usdc-polygon/introspectionSchema":
       return Promise.resolve(importedModule$0) as T;
     
     default:
@@ -2271,21 +2289,21 @@ const cache = new (MeshCache as any)({
 const sources: MeshResolvedSource[] = [];
 const transforms: MeshTransform[] = [];
 const additionalEnvelopPlugins: MeshPlugin<any>[] = [];
-const zkbobBobGoerliTransforms = [];
-const zkbobBobGoerliHandler = new GraphqlHandler({
-              name: "zkbob-bob-goerli",
-              config: {"endpoint":"{context.subgraphEndpoint:https://api.thegraph.com/subgraphs/name/zkbob/zkbob-bob-goerli}"},
+const zkbobUsdcPolygonTransforms = [];
+const zkbobUsdcPolygonHandler = new GraphqlHandler({
+              name: "zkbob-usdc-polygon",
+              config: {"endpoint":"{context.subgraphEndpoint:https://api.thegraph.com/subgraphs/name/zkbob/zkbob-usdc-polygon}"},
               baseDir,
               cache,
               pubsub,
-              store: sourcesStore.child("zkbob-bob-goerli"),
-              logger: logger.child("zkbob-bob-goerli"),
+              store: sourcesStore.child("zkbob-usdc-polygon"),
+              logger: logger.child("zkbob-usdc-polygon"),
               importFn,
             });
 sources[0] = {
-          name: 'zkbob-bob-goerli',
-          handler: zkbobBobGoerliHandler,
-          transforms: zkbobBobGoerliTransforms
+          name: 'zkbob-usdc-polygon',
+          handler: zkbobUsdcPolygonHandler,
+          transforms: zkbobUsdcPolygonTransforms
         }
 const additionalTypeDefs = [parse("extend type DirectDeposit {\n  subgraphEndpoint: String!\n}"),] as any[];
 const additionalResolvers = await Promise.all([
@@ -2386,13 +2404,13 @@ export type PendingDirectDepositsQuery = { directDeposits: Array<(
   )> };
 
 export type PoolTxesByIndexesQueryVariables = Exact<{
-  id_in?: InputMaybe<Array<Scalars['String']> | Scalars['String']>;
+  index_in?: InputMaybe<Array<Scalars['BigInt']> | Scalars['BigInt']>;
   first?: InputMaybe<Scalars['Int']>;
 }>;
 
 
 export type PoolTxesByIndexesQuery = { poolTxes: Array<(
-    Pick<PoolTx, 'id' | 'type' | 'ts' | 'tx' | 'message'>
+    Pick<PoolTx, 'index' | 'type' | 'ts' | 'tx' | 'message'>
     & { zk: Pick<ZkCommon, 'out_commit'>, operation: (
       Pick<DDBatchOperation, 'id'>
       & { delegated_deposits: Array<(
@@ -2400,9 +2418,9 @@ export type PoolTxesByIndexesQuery = { poolTxes: Array<(
         & { payment?: Maybe<Pick<Payment, 'note' | 'sender' | 'token'>> }
       )> }
     ) | (
-      Pick<DepositOperation, 'index' | 'fee' | 'nullifier' | 'token_amount'>
+      Pick<DepositOperation, 'fee' | 'nullifier' | 'token_amount'>
       & { pooltx: Pick<PoolTx, 'calldata'> }
-    ) | Pick<PermittableDepositOperation, 'index' | 'fee' | 'nullifier' | 'permit_holder' | 'token_amount'> | Pick<TransferOperation, 'index' | 'fee' | 'nullifier'> | Pick<WithdrawalOperation, 'index' | 'fee' | 'native_amount' | 'nullifier' | 'receiver' | 'token_amount'> }
+    ) | Pick<PermittableDepositOperation, 'fee' | 'nullifier' | 'permit_holder' | 'token_amount'> | Pick<TransferOperation, 'fee' | 'nullifier'> | Pick<WithdrawalOperation, 'fee' | 'native_amount' | 'nullifier' | 'receiver' | 'token_amount'> }
   )> };
 
 
@@ -2453,9 +2471,9 @@ export const PendingDirectDepositsDocument = gql`
 }
     ` as unknown as DocumentNode<PendingDirectDepositsQuery, PendingDirectDepositsQueryVariables>;
 export const PoolTxesByIndexesDocument = gql`
-    query PoolTxesByIndexes($id_in: [String!], $first: Int = 100) {
-  poolTxes(where: {id_in: $id_in}, first: $first) {
-    id
+    query PoolTxesByIndexes($index_in: [BigInt!], $first: Int = 100) {
+  poolTxes(where: {index_in: $index_in}, first: $first) {
+    index
     type
     zk {
       out_commit
@@ -2465,7 +2483,6 @@ export const PoolTxesByIndexesDocument = gql`
     message
     operation {
       ... on DepositOperation {
-        index
         fee
         nullifier
         token_amount
@@ -2474,19 +2491,16 @@ export const PoolTxesByIndexesDocument = gql`
         }
       }
       ... on PermittableDepositOperation {
-        index
         fee
         nullifier
         permit_holder
         token_amount
       }
       ... on TransferOperation {
-        index
         fee
         nullifier
       }
       ... on WithdrawalOperation {
-        index
         fee
         native_amount
         nullifier

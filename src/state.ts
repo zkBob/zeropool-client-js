@@ -580,6 +580,10 @@ export class ZkBobState {
         maxPendingIndex,
         txHashes,
       }
+    })
+    .catch((err) => {
+      console.log(`🔥[HotSync] cannot get txs batch from index ${fromIndex}: ${err.message}`)
+      throw new InternalError(`Cannot fetch txs from the relayer: ${err.message}`);
     });
   }
 

@@ -1281,6 +1281,14 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
+            "value": "pooltx__index"
+          },
+          "directives": []
+        },
+        {
+          "kind": "EnumValueDefinition",
+          "name": {
+            "kind": "Name",
             "value": "pooltx__tx"
           },
           "directives": []
@@ -1412,7 +1420,7 @@ const schemaAST = {
           "kind": "FieldDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "arguments": [],
           "type": {
@@ -2259,7 +2267,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "type": {
             "kind": "NamedType",
@@ -2274,7 +2282,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_not"
+            "value": "index_ref_not"
           },
           "type": {
             "kind": "NamedType",
@@ -2289,7 +2297,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_gt"
+            "value": "index_ref_gt"
           },
           "type": {
             "kind": "NamedType",
@@ -2304,7 +2312,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_lt"
+            "value": "index_ref_lt"
           },
           "type": {
             "kind": "NamedType",
@@ -2319,7 +2327,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_gte"
+            "value": "index_ref_gte"
           },
           "type": {
             "kind": "NamedType",
@@ -2334,7 +2342,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_lte"
+            "value": "index_ref_lte"
           },
           "type": {
             "kind": "NamedType",
@@ -2349,7 +2357,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_in"
+            "value": "index_ref_in"
           },
           "type": {
             "kind": "ListType",
@@ -2370,7 +2378,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_not_in"
+            "value": "index_ref_not_in"
           },
           "type": {
             "kind": "ListType",
@@ -2745,6 +2753,14 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
+            "value": "pooltx__index"
+          },
+          "directives": []
+        },
+        {
+          "kind": "EnumValueDefinition",
+          "name": {
+            "kind": "Name",
             "value": "pooltx__tx"
           },
           "directives": []
@@ -2809,7 +2825,7 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "directives": []
         },
@@ -7410,6 +7426,14 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
+            "value": "pooltx__index"
+          },
+          "directives": []
+        },
+        {
+          "kind": "EnumValueDefinition",
+          "name": {
+            "kind": "Name",
             "value": "pooltx__tx"
           },
           "directives": []
@@ -9041,7 +9065,7 @@ const schemaAST = {
           "kind": "FieldDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "arguments": [],
           "type": {
@@ -9945,7 +9969,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "type": {
             "kind": "NamedType",
@@ -9960,7 +9984,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_not"
+            "value": "index_ref_not"
           },
           "type": {
             "kind": "NamedType",
@@ -9975,7 +9999,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_gt"
+            "value": "index_ref_gt"
           },
           "type": {
             "kind": "NamedType",
@@ -9990,7 +10014,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_lt"
+            "value": "index_ref_lt"
           },
           "type": {
             "kind": "NamedType",
@@ -10005,7 +10029,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_gte"
+            "value": "index_ref_gte"
           },
           "type": {
             "kind": "NamedType",
@@ -10020,7 +10044,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_lte"
+            "value": "index_ref_lte"
           },
           "type": {
             "kind": "NamedType",
@@ -10035,7 +10059,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_in"
+            "value": "index_ref_in"
           },
           "type": {
             "kind": "ListType",
@@ -10056,7 +10080,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_not_in"
+            "value": "index_ref_not_in"
           },
           "type": {
             "kind": "ListType",
@@ -10887,6 +10911,14 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
+            "value": "pooltx__index"
+          },
+          "directives": []
+        },
+        {
+          "kind": "EnumValueDefinition",
+          "name": {
+            "kind": "Name",
             "value": "pooltx__tx"
           },
           "directives": []
@@ -10951,7 +10983,7 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "directives": []
         },
@@ -11019,6 +11051,25 @@ const schemaAST = {
               "name": {
                 "kind": "Name",
                 "value": "String"
+              }
+            }
+          },
+          "directives": []
+        },
+        {
+          "kind": "FieldDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index"
+          },
+          "arguments": [],
+          "type": {
+            "kind": "NonNullType",
+            "type": {
+              "kind": "NamedType",
+              "name": {
+                "kind": "Name",
+                "value": "BigInt"
               }
             }
           },
@@ -11514,6 +11565,138 @@ const schemaAST = {
             "name": {
               "kind": "Name",
               "value": "String"
+            }
+          },
+          "directives": []
+        },
+        {
+          "kind": "InputValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index"
+          },
+          "type": {
+            "kind": "NamedType",
+            "name": {
+              "kind": "Name",
+              "value": "BigInt"
+            }
+          },
+          "directives": []
+        },
+        {
+          "kind": "InputValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index_not"
+          },
+          "type": {
+            "kind": "NamedType",
+            "name": {
+              "kind": "Name",
+              "value": "BigInt"
+            }
+          },
+          "directives": []
+        },
+        {
+          "kind": "InputValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index_gt"
+          },
+          "type": {
+            "kind": "NamedType",
+            "name": {
+              "kind": "Name",
+              "value": "BigInt"
+            }
+          },
+          "directives": []
+        },
+        {
+          "kind": "InputValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index_lt"
+          },
+          "type": {
+            "kind": "NamedType",
+            "name": {
+              "kind": "Name",
+              "value": "BigInt"
+            }
+          },
+          "directives": []
+        },
+        {
+          "kind": "InputValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index_gte"
+          },
+          "type": {
+            "kind": "NamedType",
+            "name": {
+              "kind": "Name",
+              "value": "BigInt"
+            }
+          },
+          "directives": []
+        },
+        {
+          "kind": "InputValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index_lte"
+          },
+          "type": {
+            "kind": "NamedType",
+            "name": {
+              "kind": "Name",
+              "value": "BigInt"
+            }
+          },
+          "directives": []
+        },
+        {
+          "kind": "InputValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index_in"
+          },
+          "type": {
+            "kind": "ListType",
+            "type": {
+              "kind": "NonNullType",
+              "type": {
+                "kind": "NamedType",
+                "name": {
+                  "kind": "Name",
+                  "value": "BigInt"
+                }
+              }
+            }
+          },
+          "directives": []
+        },
+        {
+          "kind": "InputValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index_not_in"
+          },
+          "type": {
+            "kind": "ListType",
+            "type": {
+              "kind": "NonNullType",
+              "type": {
+                "kind": "NamedType",
+                "name": {
+                  "kind": "Name",
+                  "value": "BigInt"
+                }
+              }
             }
           },
           "directives": []
@@ -13287,6 +13470,14 @@ const schemaAST = {
           "name": {
             "kind": "Name",
             "value": "id"
+          },
+          "directives": []
+        },
+        {
+          "kind": "EnumValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "index"
           },
           "directives": []
         },
@@ -18797,7 +18988,7 @@ const schemaAST = {
           "kind": "FieldDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "arguments": [],
           "type": {
@@ -19625,7 +19816,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "type": {
             "kind": "NamedType",
@@ -19640,7 +19831,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_not"
+            "value": "index_ref_not"
           },
           "type": {
             "kind": "NamedType",
@@ -19655,7 +19846,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_gt"
+            "value": "index_ref_gt"
           },
           "type": {
             "kind": "NamedType",
@@ -19670,7 +19861,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_lt"
+            "value": "index_ref_lt"
           },
           "type": {
             "kind": "NamedType",
@@ -19685,7 +19876,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_gte"
+            "value": "index_ref_gte"
           },
           "type": {
             "kind": "NamedType",
@@ -19700,7 +19891,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_lte"
+            "value": "index_ref_lte"
           },
           "type": {
             "kind": "NamedType",
@@ -19715,7 +19906,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_in"
+            "value": "index_ref_in"
           },
           "type": {
             "kind": "ListType",
@@ -19736,7 +19927,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_not_in"
+            "value": "index_ref_not_in"
           },
           "type": {
             "kind": "ListType",
@@ -19979,6 +20170,14 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
+            "value": "pooltx__index"
+          },
+          "directives": []
+        },
+        {
+          "kind": "EnumValueDefinition",
+          "name": {
+            "kind": "Name",
             "value": "pooltx__tx"
           },
           "directives": []
@@ -20043,7 +20242,7 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "directives": []
         },
@@ -20126,7 +20325,7 @@ const schemaAST = {
           "kind": "FieldDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "arguments": [],
           "type": {
@@ -21030,7 +21229,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "type": {
             "kind": "NamedType",
@@ -21045,7 +21244,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_not"
+            "value": "index_ref_not"
           },
           "type": {
             "kind": "NamedType",
@@ -21060,7 +21259,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_gt"
+            "value": "index_ref_gt"
           },
           "type": {
             "kind": "NamedType",
@@ -21075,7 +21274,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_lt"
+            "value": "index_ref_lt"
           },
           "type": {
             "kind": "NamedType",
@@ -21090,7 +21289,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_gte"
+            "value": "index_ref_gte"
           },
           "type": {
             "kind": "NamedType",
@@ -21105,7 +21304,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_lte"
+            "value": "index_ref_lte"
           },
           "type": {
             "kind": "NamedType",
@@ -21120,7 +21319,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_in"
+            "value": "index_ref_in"
           },
           "type": {
             "kind": "ListType",
@@ -21141,7 +21340,7 @@ const schemaAST = {
           "kind": "InputValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index_not_in"
+            "value": "index_ref_not_in"
           },
           "type": {
             "kind": "ListType",
@@ -21942,6 +22141,14 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
+            "value": "pooltx__index"
+          },
+          "directives": []
+        },
+        {
+          "kind": "EnumValueDefinition",
+          "name": {
+            "kind": "Name",
             "value": "pooltx__tx"
           },
           "directives": []
@@ -22006,7 +22213,7 @@ const schemaAST = {
           "kind": "EnumValueDefinition",
           "name": {
             "kind": "Name",
-            "value": "index"
+            "value": "index_ref"
           },
           "directives": []
         },
@@ -23439,6 +23646,14 @@ const schemaAST = {
           "name": {
             "kind": "Name",
             "value": "pooltx__id"
+          },
+          "directives": []
+        },
+        {
+          "kind": "EnumValueDefinition",
+          "name": {
+            "kind": "Name",
+            "value": "pooltx__index"
           },
           "directives": []
         },

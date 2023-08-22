@@ -1,8 +1,8 @@
 sources:
-  - name: zkbob-bob-goerli
+  - name: zkbob-usdc-polygon
     handler:
       graphql:
-        endpoint: '{context.subgraphEndpoint:https://api.thegraph.com/subgraphs/name/zkbob/zkbob-bob-goerli}'
+        endpoint: '{context.subgraphEndpoint:https://api.thegraph.com/subgraphs/name/zkbob/zkbob-usdc-polygon}'
 
 additionalTypeDefs: |
   extend type DirectDeposit {

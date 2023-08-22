@@ -15,7 +15,7 @@ import { toTwosComplementHex, truncateHexPrefix } from '../utils';
 
 const SUBGRAPH_REQUESTS_PER_SECOND = 10;
 const SUBGRAPH_MAX_ITEMS_IN_RESPONSE = 100;
-const SUBGRAPH_ID_INDEX_DELTA = 128;
+const SUBGRAPH_ID_INDEX_DELTA = 0;
 
 
 export class ZkBobSubgraph {
@@ -133,7 +133,7 @@ export class ZkBobSubgraph {
             const chunk = indexes.slice(i, i + SUBGRAPH_MAX_ITEMS_IN_RESPONSE);
             chunksPromises.push(this.throttle.add(() => {
                 const preparedIdxs = chunk.map((aIdx) => String(aIdx + SUBGRAPH_ID_INDEX_DELTA));
-                return this.sdk.PoolTxesByIndexes({ 'id_in': preparedIdxs, 'first': SUBGRAPH_MAX_ITEMS_IN_RESPONSE }, {
+                return this.sdk.PoolTxesByIndexes({ 'index_in': preparedIdxs, 'first': SUBGRAPH_MAX_ITEMS_IN_RESPONSE }, {
                     subgraphEndpoint: this.subgraphEndpoint(),
                 })
                 .then((data) => data.poolTxes)
@@ -200,7 +200,7 @@ export class ZkBobSubgraph {
                     throw new InternalError(`Incorrect tx type from subgraph (${tx.type})`)
                 }
 
-                return { poolTxType: PoolTxType.Regular, details: txDetails, index: Number(tx.id) - SUBGRAPH_ID_INDEX_DELTA };
+                return { poolTxType: PoolTxType.Regular, details: txDetails, index: Number(tx.index) - SUBGRAPH_ID_INDEX_DELTA };
             } else {
                 // direct deposit batch
                 const txDetails = new DDBatchTxDetails();
@@ -222,7 +222,7 @@ export class ZkBobSubgraph {
                     throw new InternalError(`Incorrect tx type from subgraph (${tx.type})`)
                 }
 
-                return { poolTxType: PoolTxType.DirectDepositBatch, details: txDetails, index: Number(tx.id) - SUBGRAPH_ID_INDEX_DELTA };
+                return { poolTxType: PoolTxType.DirectDepositBatch, details: txDetails, index: Number(tx.index) - SUBGRAPH_ID_INDEX_DELTA };
             }
         }));
     }

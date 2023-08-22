@@ -93,6 +93,7 @@ enum DDBatchOperation_orderBy {
   id
   pooltx
   pooltx__id
+  pooltx__index
   pooltx__tx
   pooltx__ts
   pooltx__all_messages_hash
@@ -107,7 +108,7 @@ type DepositOperation implements Operation {
   id: String!
   pooltx: PoolTx!
   nullifier: BigInt!
-  index: BigInt!
+  index_ref: BigInt!
   token_amount: BigInt!
   fee: BigInt!
 }
@@ -162,14 +163,14 @@ input DepositOperation_filter {
   nullifier_lte: BigInt
   nullifier_in: [BigInt!]
   nullifier_not_in: [BigInt!]
-  index: BigInt
-  index_not: BigInt
-  index_gt: BigInt
-  index_lt: BigInt
-  index_gte: BigInt
-  index_lte: BigInt
-  index_in: [BigInt!]
-  index_not_in: [BigInt!]
+  index_ref: BigInt
+  index_ref_not: BigInt
+  index_ref_gt: BigInt
+  index_ref_lt: BigInt
+  index_ref_gte: BigInt
+  index_ref_lte: BigInt
+  index_ref_in: [BigInt!]
+  index_ref_not_in: [BigInt!]
   token_amount: BigInt
   token_amount_not: BigInt
   token_amount_gt: BigInt
@@ -196,6 +197,7 @@ enum DepositOperation_orderBy {
   id
   pooltx
   pooltx__id
+  pooltx__index
   pooltx__tx
   pooltx__ts
   pooltx__all_messages_hash
@@ -204,7 +206,7 @@ enum DepositOperation_orderBy {
   pooltx__gas_used
   pooltx__calldata
   nullifier
-  index
+  index_ref
   token_amount
   fee
 }
@@ -529,6 +531,7 @@ enum Operation_orderBy {
   id
   pooltx
   pooltx__id
+  pooltx__index
   pooltx__tx
   pooltx__ts
   pooltx__all_messages_hash
@@ -659,7 +662,7 @@ type PermittableDepositOperation implements Operation {
   id: String!
   pooltx: PoolTx!
   nullifier: BigInt!
-  index: BigInt!
+  index_ref: BigInt!
   token_amount: BigInt!
   fee: BigInt!
   permit_deadline: BigInt!
@@ -717,14 +720,14 @@ input PermittableDepositOperation_filter {
   nullifier_lte: BigInt
   nullifier_in: [BigInt!]
   nullifier_not_in: [BigInt!]
-  index: BigInt
-  index_not: BigInt
-  index_gt: BigInt
-  index_lt: BigInt
-  index_gte: BigInt
-  index_lte: BigInt
-  index_in: [BigInt!]
-  index_not_in: [BigInt!]
+  index_ref: BigInt
+  index_ref_not: BigInt
+  index_ref_gt: BigInt
+  index_ref_lt: BigInt
+  index_ref_gte: BigInt
+  index_ref_lte: BigInt
+  index_ref_in: [BigInt!]
+  index_ref_not_in: [BigInt!]
   token_amount: BigInt
   token_amount_not: BigInt
   token_amount_gt: BigInt
@@ -779,6 +782,7 @@ enum PermittableDepositOperation_orderBy {
   id
   pooltx
   pooltx__id
+  pooltx__index
   pooltx__tx
   pooltx__ts
   pooltx__all_messages_hash
@@ -787,7 +791,7 @@ enum PermittableDepositOperation_orderBy {
   pooltx__gas_used
   pooltx__calldata
   nullifier
-  index
+  index_ref
   token_amount
   fee
   permit_deadline
@@ -797,6 +801,7 @@ enum PermittableDepositOperation_orderBy {
 
 type PoolTx {
   id: String!
+  index: BigInt!
   tx: Bytes!
   ts: BigInt!
   all_messages_hash: Bytes!
@@ -829,6 +834,14 @@ input PoolTx_filter {
   id_ends_with_nocase: String
   id_not_ends_with: String
   id_not_ends_with_nocase: String
+  index: BigInt
+  index_not: BigInt
+  index_gt: BigInt
+  index_lt: BigInt
+  index_gte: BigInt
+  index_lte: BigInt
+  index_in: [BigInt!]
+  index_not_in: [BigInt!]
   tx: Bytes
   tx_not: Bytes
   tx_gt: Bytes
@@ -943,6 +956,7 @@ input PoolTx_filter {
 
 enum PoolTx_orderBy {
   id
+  index
   tx
   ts
   all_messages_hash
@@ -1544,7 +1558,7 @@ type TransferOperation implements Operation {
   id: String!
   pooltx: PoolTx!
   nullifier: BigInt!
-  index: BigInt!
+  index_ref: BigInt!
   fee: BigInt!
 }
 
@@ -1598,14 +1612,14 @@ input TransferOperation_filter {
   nullifier_lte: BigInt
   nullifier_in: [BigInt!]
   nullifier_not_in: [BigInt!]
-  index: BigInt
-  index_not: BigInt
-  index_gt: BigInt
-  index_lt: BigInt
-  index_gte: BigInt
-  index_lte: BigInt
-  index_in: [BigInt!]
-  index_not_in: [BigInt!]
+  index_ref: BigInt
+  index_ref_not: BigInt
+  index_ref_gt: BigInt
+  index_ref_lt: BigInt
+  index_ref_gte: BigInt
+  index_ref_lte: BigInt
+  index_ref_in: [BigInt!]
+  index_ref_not_in: [BigInt!]
   fee: BigInt
   fee_not: BigInt
   fee_gt: BigInt
@@ -1624,6 +1638,7 @@ enum TransferOperation_orderBy {
   id
   pooltx
   pooltx__id
+  pooltx__index
   pooltx__tx
   pooltx__ts
   pooltx__all_messages_hash
@@ -1632,7 +1647,7 @@ enum TransferOperation_orderBy {
   pooltx__gas_used
   pooltx__calldata
   nullifier
-  index
+  index_ref
   fee
 }
 
@@ -1640,7 +1655,7 @@ type WithdrawalOperation implements Operation {
   id: String!
   pooltx: PoolTx!
   nullifier: BigInt!
-  index: BigInt!
+  index_ref: BigInt!
   energy_amount: BigInt!
   token_amount: BigInt!
   fee: BigInt!
@@ -1698,14 +1713,14 @@ input WithdrawalOperation_filter {
   nullifier_lte: BigInt
   nullifier_in: [BigInt!]
   nullifier_not_in: [BigInt!]
-  index: BigInt
-  index_not: BigInt
-  index_gt: BigInt
-  index_lt: BigInt
-  index_gte: BigInt
-  index_lte: BigInt
-  index_in: [BigInt!]
-  index_not_in: [BigInt!]
+  index_ref: BigInt
+  index_ref_not: BigInt
+  index_ref_gt: BigInt
+  index_ref_lt: BigInt
+  index_ref_gte: BigInt
+  index_ref_lte: BigInt
+  index_ref_in: [BigInt!]
+  index_ref_not_in: [BigInt!]
   energy_amount: BigInt
   energy_amount_not: BigInt
   energy_amount_gt: BigInt
@@ -1758,6 +1773,7 @@ enum WithdrawalOperation_orderBy {
   id
   pooltx
   pooltx__id
+  pooltx__index
   pooltx__tx
   pooltx__ts
   pooltx__all_messages_hash
@@ -1766,7 +1782,7 @@ enum WithdrawalOperation_orderBy {
   pooltx__gas_used
   pooltx__calldata
   nullifier
-  index
+  index_ref
   energy_amount
   token_amount
   fee
@@ -1863,6 +1879,7 @@ enum ZkCommon_orderBy {
   id
   pooltx
   pooltx__id
+  pooltx__index
   pooltx__tx
   pooltx__ts
   pooltx__all_messages_hash

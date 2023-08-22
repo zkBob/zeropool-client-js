@@ -921,7 +921,7 @@ export class HistoryStorage {
       fetchedTxs = await this.subgraph.getTxesDetails(requestedIndexes, this.state, this.network);
     }
 
-    // ssubgraph-based magic (due to DD batch have no index)
+    // subgraph-based magic (due to DD batch have no index)
     fetchedIndexes = fetchedTxs.map((aTx) => aTx.index);
     const fetchedTxHashes = fetchedTxs.map((aTx) => aTx.details.txHash);
     const fetchedIndexesByTxHashes = memos
@@ -934,7 +934,10 @@ export class HistoryStorage {
     // get unprocessed memos
     const unparsedMemos = memos.filter((aMemo) => !fetchedIndexes.includes(aMemo.index));
 
-    // fetch unprocessed by subgraph
+    // fetch fromthe RPC node unprocessed txs by subgraph
+    if (this.subgraph && unparsedMemos.length > 0) {
+      console.warn(`[HistoryStorage] Cannot fetch ${unparsedMemos.length} of ${memos.length} indexes from subgraph. Fallbacking to RPC node: ${unparsedMemos.map((aMemo) => aMemo.index).join(', ')}`);
+    }
     const promises: Promise<PoolTxDetails | null>[] = [];
     for (let aMemo of unparsedMemos) {
       if (aMemo.txHash) {
