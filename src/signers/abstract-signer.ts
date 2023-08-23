@@ -1,4 +1,4 @@
-import { NetworkBackend } from "../networks/network";
+import { NetworkBackend } from "../networks";
 import { InternalError, TxDepositDeadlineExpiredError, TxInsufficientFundsError } from "..";
 import { addHexPrefix, hexToBuf } from "../utils";
 

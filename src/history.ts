@@ -5,7 +5,7 @@ import { HexStringWriter, hexToBuf, removeDuplicates } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 import { ZkBobState } from './state';
-import { NetworkBackend } from './networks/network';
+import { NetworkBackend } from './networks';
 import { ZkBobSubgraph } from './subgraph';
 
 const LOG_HISTORY_SYNC = false;

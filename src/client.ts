@@ -23,7 +23,7 @@ import { DirectDepositProcessor, DirectDepositType } from './dd';
 import { isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
 import { wrap } from 'comlink';
-import { PreparedTransaction } from './networks/network';
+import { PreparedTransaction } from './networks';
 import { Privkey } from 'hdwallet-babyjub';
 import { IDBPDatabase, openDB } from 'idb';
 

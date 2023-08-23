@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@ethereumjs/util": "^8.0.2",
+    "@graphprotocol/client-cli": "3.0.0",
     "@metamask/eth-sig-util": "5.0.0",
     "@scure/bip32": "1.1.1",
     "@scure/bip39": "1.1.0",
@@ -31,12 +32,12 @@
     "idb": "^7.0.0",
     "libzkbob-rs-wasm-web": "1.4.2-beta",
     "libzkbob-rs-wasm-web-mt": "1.4.2-beta",
+    "promise-throttle": "^1.1.2",
     "regenerator-runtime": "^0.13.9",
+    "tronweb": "^5.3.0",
     "wasm-feature-detect": "^1.2.11",
     "web3": "1.8.0",
-    "web3-utils": "1.8.0",
-    "@graphprotocol/client-cli": "3.0.0",
-    "promise-throttle": "^1.1.2"
+    "web3-utils": "1.8.0"
   },
   "devDependencies": {
     "@types/ethereum-protocol": "^1.0.1",

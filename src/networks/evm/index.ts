@@ -1,7 +1,7 @@
 import Web3 from 'web3';
 import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
-import { NetworkBackend, PreparedTransaction} from '../network';
+import { NetworkBackend, PreparedTransaction} from '..';
 import { InternalError } from '../../errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
@@ -169,11 +169,6 @@ export class EvmNetwork implements NetworkBackend {
     // | Getting balance, allowance, nonce etc                                       |
     // -------------------------------------------------------------------------------
 
-    public async getDomainSeparator(tokenAddress: string): Promise<string> {
-        this.tokenContract().options.address = tokenAddress;
-        return await this.tokenContract().methods.DOMAIN_SEPARATOR().call();
-    }
-
     public async getTokenName(tokenAddress: string): Promise<string> {
         this.tokenContract().options.address = tokenAddress;
         return await this.tokenContract().methods.name().call();
@@ -182,6 +177,11 @@ export class EvmNetwork implements NetworkBackend {
     public async getTokenDecimals(tokenAddress: string): Promise<number> {
         this.tokenContract().options.address = tokenAddress;
         return Number(await this.tokenContract().methods.decimals().call());
+    }
+
+    public async getDomainSeparator(tokenAddress: string): Promise<string> {
+        this.tokenContract().options.address = tokenAddress;
+        return await this.tokenContract().methods.DOMAIN_SEPARATOR().call();
     }
     
     public async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
@@ -419,11 +419,11 @@ export class EvmNetwork implements NetworkBackend {
       
         // it seems the signature already compact
         return '0x' + signature;
-      }
-      
-      public toCanonicalSignature(signature: string): string {
+    }
+    
+    public toCanonicalSignature(signature: string): string {
         let sig = truncateHexPrefix(signature);
-      
+        
         if ((sig.length % 2) == 0) {
             if (sig.length == 128) {
             return `0x` + sig;
@@ -440,7 +440,7 @@ export class EvmNetwork implements NetworkBackend {
         } else {
             throw new InternalError(`Incorrect signature length (${sig.length}), expected an even number`);
         }
-      }
+    }
 
 
     // ----------------------=========< Miscellaneous >=========----------------------

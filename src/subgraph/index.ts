@@ -8,7 +8,7 @@ import { DDBatchTxDetails, DirectDeposit, DirectDepositState,
         } from "../tx";
 import { decodeEvmCalldata } from '../networks/evm/calldata';
 import { DepositSignerFactory } from '../signers/signer-factory';
-import { NetworkBackend } from '../networks/network';
+import { NetworkBackend } from '../networks';
 import { DepositType } from '../config';
 import { DepositData } from '../signers/abstract-signer';
 import { toTwosComplementHex, truncateHexPrefix } from '../utils';

@@ -13,7 +13,7 @@ import { ColdStorageConfig } from './coldstorage';
 import { InternalError } from './errors';
 import { ZkBobRelayer } from './services/relayer';
 import { CONSTANTS } from './constants';
-import { NetworkBackend } from './networks/network';
+import { NetworkBackend } from './networks';
 import { ZkBobSubgraph } from './subgraph';
 
 const LOG_STATE_HOTSYNC = false;

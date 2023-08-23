@@ -1,6 +1,6 @@
 import { Pool } from "./config";
 import { InternalError } from "./errors";
-import { NetworkBackend, PreparedTransaction } from "./networks/network";
+import { NetworkBackend, PreparedTransaction } from "./networks";
 import { ZkBobState } from "./state";
 import { ZkBobSubgraph } from "./subgraph";
 import { DirectDeposit } from "./tx";

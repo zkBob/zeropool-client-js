@@ -1,10 +1,12 @@
-import { TxType } from "..";
+import { EvmNetwork, TxType } from "..";
 import { PoolTxDetails } from "../tx";
+import { TronNetwork } from "./tron";
 
 export interface PreparedTransaction {
     to: string;
     amount: bigint;
     data: string;
+    selector?: string;
 }
 
 
@@ -54,4 +56,39 @@ export interface NetworkBackend {
     getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null>;
     calldataBaseLength(): number;
     estimateCalldataLength(txType: TxType, notesCnt: number, extraDataLen: number): number;
+}
+
+
+enum SupportedNetwork {
+    EvmNetwork,
+    TronNetwork,
+}
+
+function networkType(chainId: number): SupportedNetwork | undefined {
+    if ([0x2b6653dc, 0x94a9059e].includes(chainId)) {
+        return SupportedNetwork.TronNetwork;
+    } else if ([1, 137, 10, 11155111, 5, 420, 1337, 31337].includes(chainId)) {
+        return SupportedNetwork.EvmNetwork;
+    }
+
+    return undefined;
+}
+
+
+export class NetworkBackendFactory {
+    static createBackend(chainId: number, rpcUrls: string[], enabled: boolean = true): NetworkBackend {
+        const type = networkType(chainId);
+        switch (type) {
+            case SupportedNetwork.TronNetwork:
+                return new TronNetwork(rpcUrls, enabled);
+
+            case undefined:
+                console.warn(`[NetworkBackendFactory] Unknown chain id provided (${chainId}). Assume it's an EVM network...`)
+            case SupportedNetwork.EvmNetwork: 
+                return new EvmNetwork(rpcUrls, enabled);
+
+            default:
+                throw new Error(`Unknown network type ${type}`);
+        }
+    }
 }

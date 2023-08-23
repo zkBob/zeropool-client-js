@@ -1,0 +1,613 @@
+[
+    {
+        "inputs":
+        [
+            {
+                "name": "__pool_id",
+                "type": "uint256"
+            },
+            {
+                "name": "_token",
+                "type": "address"
+            },
+            {
+                "name": "_transfer_verifier",
+                "type": "address"
+            },
+            {
+                "name": "_tree_verifier",
+                "type": "address"
+            },
+            {
+                "name": "_batch_deposit_verifier",
+                "type": "address"
+            },
+            {
+                "name": "_direct_deposit_queue",
+                "type": "address"
+            },
+            {
+                "name": "_permit2",
+                "type": "address"
+            },
+            {
+                "name": "_denominator",
+                "type": "uint256"
+            },
+            {
+                "name": "_precision",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "Nonpayable",
+        "type": "Constructor"
+    },
+    {
+        "inputs":
+        [
+            {
+                "indexed": true,
+                "name": "index",
+                "type": "uint256"
+            },
+            {
+                "indexed": true,
+                "name": "hash",
+                "type": "bytes32"
+            },
+            {
+                "name": "message",
+                "type": "bytes"
+            }
+        ],
+        "name": "Message",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "indexed": true,
+                "name": "previousOwner",
+                "type": "address"
+            },
+            {
+                "indexed": true,
+                "name": "newOwner",
+                "type": "address"
+            }
+        ],
+        "name": "OwnershipTransferred",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "manager",
+                "type": "address"
+            }
+        ],
+        "name": "UpdateKYCProvidersManager",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "indexed": true,
+                "name": "tier",
+                "type": "uint8"
+            },
+            {
+                "name": "limits",
+                "type": "tuple"
+            }
+        ],
+        "name": "UpdateLimits",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "manager",
+                "type": "address"
+            }
+        ],
+        "name": "UpdateOperatorManager",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "user",
+                "type": "address"
+            },
+            {
+                "name": "tier",
+                "type": "uint8"
+            }
+        ],
+        "name": "UpdateTier",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "seller",
+                "type": "address"
+            }
+        ],
+        "name": "UpdateTokenSeller",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "indexed": true,
+                "name": "operator",
+                "type": "address"
+            },
+            {
+                "name": "fee",
+                "type": "uint256"
+            }
+        ],
+        "name": "WithdrawFee",
+        "type": "Event"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "inputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "accumulatedFee",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "bytes32"
+            }
+        ],
+        "name": "all_messages_hash",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_root_after",
+                "type": "uint256"
+            },
+            {
+                "name": "_indices",
+                "type": "uint256[]"
+            },
+            {
+                "name": "_out_commit",
+                "type": "uint256"
+            },
+            {
+                "name": "_batch_deposit_proof",
+                "type": "uint256[8]"
+            },
+            {
+                "name": "_tree_proof",
+                "type": "uint256[8]"
+            }
+        ],
+        "name": "appendDirectDeposits",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "batch_deposit_verifier",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "name": "denominator",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "direct_deposit_queue",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "tuple"
+            }
+        ],
+        "inputs":
+        [
+            {
+                "name": "_user",
+                "type": "address"
+            }
+        ],
+        "name": "getLimitsFor",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_root",
+                "type": "uint256"
+            },
+            {
+                "name": "_tvlCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_dailyDepositCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_dailyWithdrawalCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_dailyUserDepositCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_depositCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_dailyUserDirectDepositCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_directDepositCap",
+                "type": "uint256"
+            }
+        ],
+        "name": "initialize",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "name": "res",
+                "type": "address"
+            }
+        ],
+        "name": "kycProvidersManager",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "inputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "name": "nullifiers",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "operatorManager",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "owner",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "permit2",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "name": "pool_id",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "name": "pool_index",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_sender",
+                "type": "address"
+            },
+            {
+                "name": "_amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "recordDirectDeposit",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "name": "renounceOwnership",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_tier",
+                "type": "uint8"
+            }
+        ],
+        "name": "resetDailyLimits",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "inputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "name": "roots",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_kycProvidersManager",
+                "type": "address"
+            }
+        ],
+        "name": "setKycProvidersManager",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_tier",
+                "type": "uint8"
+            },
+            {
+                "name": "_tvlCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_dailyDepositCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_dailyWithdrawalCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_dailyUserDepositCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_depositCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_dailyUserDirectDepositCap",
+                "type": "uint256"
+            },
+            {
+                "name": "_directDepositCap",
+                "type": "uint256"
+            }
+        ],
+        "name": "setLimits",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_operatorManager",
+                "type": "address"
+            }
+        ],
+        "name": "setOperatorManager",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_seller",
+                "type": "address"
+            }
+        ],
+        "name": "setTokenSeller",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_tier",
+                "type": "uint8"
+            },
+            {
+                "name": "_users",
+                "type": "address[]"
+            }
+        ],
+        "name": "setUsersTier",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "token",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "tokenSeller",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "name": "transact",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "newOwner",
+                "type": "address"
+            }
+        ],
+        "name": "transferOwnership",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "transfer_verifier",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "tree_verifier",
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_operator",
+                "type": "address"
+            },
+            {
+                "name": "_to",
+                "type": "address"
+            }
+        ],
+        "name": "withdrawFee",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    }
+]

@@ -1,8 +1,8 @@
 import { Chains, ProverMode, Pool, Pools } from "./config";
 import { InternalError } from "./errors";
-import { EvmNetwork } from "./networks/evm";
+import { NetworkBackendFactory } from "./networks";
 import { NetworkType } from "./network-type";
-import { NetworkBackend } from "./networks/network";
+import { NetworkBackend } from "./networks";
 import { ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/prover";
 import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
@@ -110,7 +110,7 @@ export class ZkBobProvider {
             if (chain.rpcUrls.length == 0) {
                 throw new InternalError(`Chain with id ${chainId} being initialized without RPC URL`);
             }
-            const backend = new EvmNetwork(chain.rpcUrls, false);    // initialize backend in the disabled state
+            const backend = NetworkBackendFactory.createBackend(Number(chainId), chain.rpcUrls, false);    // initialize backend in the disabled state
             let networkName = NetworkType.networkName(Number(chainId));
             if (!networkName) {
                 console.warn(`The chain with id ${chainId} currently isn't fully supported. Unsuspectable issues may occured`);

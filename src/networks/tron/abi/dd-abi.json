@@ -1,0 +1,427 @@
+[
+    {
+        "inputs":
+        [
+            {
+                "name": "_pool",
+                "type": "address"
+            },
+            {
+                "name": "_token",
+                "type": "address"
+            },
+            {
+                "name": "_denominator",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "Nonpayable",
+        "type": "Constructor"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "indices",
+                "type": "uint256[]"
+            }
+        ],
+        "name": "CompleteDirectDepositBatch",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "indexed": true,
+                "name": "previousOwner",
+                "type": "address"
+            },
+            {
+                "indexed": true,
+                "name": "newOwner",
+                "type": "address"
+            }
+        ],
+        "name": "OwnershipTransferred",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "indexed": true,
+                "name": "nonce",
+                "type": "uint256"
+            },
+            {
+                "name": "receiver",
+                "type": "address"
+            },
+            {
+                "name": "amount",
+                "type": "uint256"
+            }
+        ],
+        "name": "RefundDirectDeposit",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "indexed": true,
+                "name": "sender",
+                "type": "address"
+            },
+            {
+                "indexed": true,
+                "name": "nonce",
+                "type": "uint256"
+            },
+            {
+                "name": "fallbackUser",
+                "type": "address"
+            },
+            {
+                "name": "zkAddress",
+                "type": "tuple"
+            },
+            {
+                "name": "deposit",
+                "type": "uint64"
+            }
+        ],
+        "name": "SubmitDirectDeposit",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "fee",
+                "type": "uint64"
+            }
+        ],
+        "name": "UpdateDirectDepositFee",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "timeout",
+                "type": "uint40"
+            }
+        ],
+        "name": "UpdateDirectDepositTimeout",
+        "type": "Event"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "manager",
+                "type": "address"
+            }
+        ],
+        "name": "UpdateOperatorManager",
+        "type": "Event"
+    },
+    {
+        "outputs":
+        [
+            {
+                "name": "total",
+                "type": "uint256"
+            },
+            {
+                "name": "totalFee",
+                "type": "uint256"
+            },
+            {
+                "name": "hashsum",
+                "type": "uint256"
+            },
+            {
+                "name": "message",
+                "type": "bytes"
+            }
+        ],
+        "inputs":
+        [
+            {
+                "name": "_indices",
+                "type": "uint256[]"
+            },
+            {
+                "name": "_out_commit",
+                "type": "uint256"
+            }
+        ],
+        "name": "collect",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "inputs":
+        [
+            {
+                "name": "_fallbackUser",
+                "type": "address"
+            },
+            {
+                "name": "_amount",
+                "type": "uint256"
+            },
+            {
+                "name": "_rawZkAddress",
+                "type": "bytes"
+            }
+        ],
+        "name": "directDeposit",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "inputs":
+        [
+            {
+                "name": "_fallbackUser",
+                "type": "address"
+            },
+            {
+                "name": "_amount",
+                "type": "uint256"
+            },
+            {
+                "name": "_zkAddress",
+                "type": "string"
+            }
+        ],
+        "name": "directDeposit",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint64"
+            }
+        ],
+        "name": "directDepositFee",
+        "stateMutability": "View",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint32"
+            }
+        ],
+        "name": "directDepositNonce",
+        "stateMutability": "View",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint40"
+            }
+        ],
+        "name": "directDepositTimeout",
+        "stateMutability": "View",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "tuple"
+            }
+        ],
+        "inputs":
+        [
+            {
+                "name": "_index",
+                "type": "uint256"
+            }
+        ],
+        "name": "getDirectDeposit",
+        "stateMutability": "View",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "bool"
+            }
+        ],
+        "inputs":
+        [
+            {
+                "name": "_from",
+                "type": "address"
+            },
+            {
+                "name": "_value",
+                "type": "uint256"
+            },
+            {
+                "name": "_data",
+                "type": "bytes"
+            }
+        ],
+        "name": "onTokenTransfer",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "operatorManager",
+        "stateMutability": "View",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "owner",
+        "stateMutability": "View",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "pool",
+        "stateMutability": "View",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "uint256"
+            }
+        ],
+        "name": "pool_id",
+        "stateMutability": "View",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_indices",
+                "type": "uint256[]"
+            }
+        ],
+        "name": "refundDirectDeposit",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_index",
+                "type": "uint256"
+            }
+        ],
+        "name": "refundDirectDeposit",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "name": "renounceOwnership",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_fee",
+                "type": "uint64"
+            }
+        ],
+        "name": "setDirectDepositFee",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_timeout",
+                "type": "uint40"
+            }
+        ],
+        "name": "setDirectDepositTimeout",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "_operatorManager",
+                "type": "address"
+            }
+        ],
+        "name": "setOperatorManager",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    },
+    {
+        "outputs":
+        [
+            {
+                "type": "address"
+            }
+        ],
+        "name": "token",
+        "stateMutability": "View",
+        "type": "Function"
+    },
+    {
+        "inputs":
+        [
+            {
+                "name": "newOwner",
+                "type": "address"
+            }
+        ],
+        "name": "transferOwnership",
+        "stateMutability": "Nonpayable",
+        "type": "Function"
+    }
+]
