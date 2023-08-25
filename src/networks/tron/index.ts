@@ -6,7 +6,7 @@ import tokenAbi from './abi/usdt-abi.json';
 import poolAbi from './abi/pool-abi.json';
 import ddAbi from './abi/dd-abi.json';
 import { SignTypedDataVersion, recoverPersonalSignature, recoverTypedSignature } from '@metamask/eth-sig-util';
-import { truncateHexPrefix } from '../../utils';
+import { bufToHex, hexToBuf, truncateHexPrefix } from '../../utils';
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from '../evm/calldata';
 
 const TronWeb = require('tronweb')
@@ -182,18 +182,18 @@ export class TronNetwork implements NetworkBackend {
         throw new InternalError(`Token nonce is currently unsupported for TRC20 tokens`)
     }
 
-    public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {    // in wei
+    public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {
         const token = await this.getTokenContract(tokenAddress);
         let result = await token.balanceOf(address).call();
 
-        return result.toString(10);
+        return BigInt(result);
     }
 
     public async allowance(tokenAddress: string, owner: string, spender: string): Promise<bigint> {
         const token = await this.getTokenContract(tokenAddress);
         let result = await token.allowance(owner, spender).call();
 
-        return result.toString(10);
+        return BigInt(result);
     }
 
     public async permit2NonceBitmap(permit2Address: string, owner: string, wordPos: bigint): Promise<bigint> {
@@ -423,6 +423,30 @@ export class TronNetwork implements NetworkBackend {
     // | Getting tx revert reason, chain ID, signature format, etc...                |
     // -------------------------------------------------------------------------------
 
+    public addressFromPrivateKey(privKeyBytes: Uint8Array): string {
+        return TronWeb.address.fromPrivateKey(bufToHex(privKeyBytes));
+    }
+
+    public addressToBytes(address: string): Uint8Array {
+        const hexAddr = TronWeb.address.toHex(address);
+        if (typeof hexAddr !== 'string' || hexAddr.length != 42) {
+            throw new InternalError(`Incorrect address format`);
+        }
+
+        return hexToBuf(hexAddr.slice(2), 20);
+    }
+
+    public bytesToAddress(bytes: Uint8Array): string {
+        const hexBytes = bufToHex(bytes);
+        if (hexBytes.length == 42) {
+            return TronWeb.address.fromHex(hexBytes)
+        } else if (hexBytes.length == 40) {
+            return TronWeb.address.fromHex('41' + hexBytes)
+        }
+
+        throw new InternalError(`Incorrect address buffer`);
+    }
+
     public async getTxRevertReason(txHash: string): Promise<string | null> {
         return 'UNKNOWN_REASON'
     }
@@ -462,11 +486,11 @@ export class TronNetwork implements NetworkBackend {
     public async getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null> {
         try {
             const tronTransaction = await this.tronWeb.trx.getTransaction(poolTxHash);
-            const tronTransactionInfo = await this.tronWeb.trx.getTransaction(poolTxHash);
-            const txData = tronTransaction.raw_data_hex;
+            //const tronTransactionInfo = await this.tronWeb.trx.getTransaction(poolTxHash);
+            const txData = tronTransaction?.raw_data?.contract?.parameter?.value?.data;
+            const timestamp = tronTransaction?.raw_data?.timestamp
 
-
-            if (txData && txData.blockNumber && txData.input) {
+            if (txData && timestamp) {
                 throw new InternalError(`unimplemented`);
                 /*const block = await this.activeWeb3().eth.getBlock(txData.blockNumber).catch(() => null);
                 if (block && block.timestamp) {

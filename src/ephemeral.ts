@@ -1,13 +1,11 @@
 import { hash } from 'tweetnacl';
-import { addHexPrefix, bufToHex, concatenateBuffers, hexToBuf } from './utils';
+import { bufToHex, concatenateBuffers, hexToBuf } from './utils';
 import { entropyToMnemonic, mnemonicToSeedSync } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
 import { NetworkType } from './network-type';
 import { NetworkBackend } from './networks';
-
-const util = require('ethereumjs-util');
 
 const GAS_PRICE_MULTIPLIER = 1.1;
 
@@ -40,6 +38,9 @@ export class EphemeralPool {
     private hdwallet: HDKey;
     private network: NetworkBackend;
     private poolDenominator: bigint; // we represent all amounts in that library as in pool
+
+    // addresses by index [to avoid extra generations]
+    private addresses = new Map<number, string>();
 
     // save last scanned address to decrease scan time
     private startScanIndex = 0;
@@ -100,15 +101,19 @@ export class EphemeralPool {
 
     // Get native address at the specified index without additional info
     public getAddress(index: number): string {
-        let key = this.hdwallet.deriveChild(index)
-        const publicKey = key.publicKey;
-        key.wipePrivateData();
-        if (publicKey) {
-            const fullPublicKey = util.importPublic(Buffer.from(publicKey));
-            return addHexPrefix(util.pubToAddress(fullPublicKey).toString('hex'));
+        let address = this.addresses.get(index);
+        if (address === undefined) {
+            const key = this.hdwallet.deriveChild(index)
+            if (key.privateKey == null) {
+                throw new InternalError(`Cannot generate private key for ephemeral address at index ${index}`);
+            }
+            address = this.network.addressFromPrivateKey(key.privateKey);
+            key.wipePrivateData();
+
+            this.addresses.set(index, address);
         }
 
-        throw new InternalError(`Cannot generate public key for ephemeral address at index ${index}`);
+        return address;
     }
 
     // Get address with asssociated info [may take some time]

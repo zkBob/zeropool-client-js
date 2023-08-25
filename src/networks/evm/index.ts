@@ -6,10 +6,11 @@ import { InternalError } from '../../errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
 import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType } from '../../tx';
-import { bigintToArrayLe, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
+import { addHexPrefix, bigintToArrayLe, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from './calldata';
 import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
         personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
+import { privateToAddress, bufferToHex } from '@ethereumjs/util';
 
 const RPC_ISSUES_THRESHOLD = 10;
 
@@ -446,6 +447,22 @@ export class EvmNetwork implements NetworkBackend {
     // ----------------------=========< Miscellaneous >=========----------------------
     // | Getting tx revert reason, chain ID, signature format, etc...                |
     // -------------------------------------------------------------------------------
+
+    public addressFromPrivateKey(privKeyBytes: Uint8Array): string {
+        const buf = Buffer.from(privKeyBytes);
+        const address = bufferToHex(privateToAddress(buf));
+        buf.fill(0);
+
+        return address;
+    }
+
+    public addressToBytes(address: string): Uint8Array {
+        return hexToBuf(address, 20);
+    }
+
+    public bytesToAddress(bytes: Uint8Array): string {
+        return addHexPrefix(bufToHex(bytes));
+    }
 
     public async getTxRevertReason(txHash: string): Promise<string | null> {
         const txReceipt = await this.activeWeb3().eth.getTransactionReceipt(txHash);

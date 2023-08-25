@@ -82,10 +82,6 @@ export function addHexPrefix(data: string): string {
   return data;
 }
 
-export function ethAddrToBuf(address: string): Uint8Array {
-  return hexToBuf(address, 20);
-}
-
 // Convert input hex number to the bytes array
 // extend (leading zero-bytes) or trim (trailing bytes)
 // output buffer to the bytesCnt bytes (only when bytesCnt > 0)

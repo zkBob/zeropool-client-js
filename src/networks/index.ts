@@ -49,6 +49,9 @@ export interface NetworkBackend {
     toCanonicalSignature(signature: string): string;
 
     // Miscellaneous
+    addressFromPrivateKey(privKeyBytes: Uint8Array): string;
+    addressToBytes(address: string): Uint8Array;
+    bytesToAddress(bytes: Uint8Array): string;
     getTxRevertReason(txHash: string): Promise<string | null>
     getChainId(): Promise<number>;
     getNativeBalance(address: string): Promise<bigint>;

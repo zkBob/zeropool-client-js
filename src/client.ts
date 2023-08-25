@@ -1,7 +1,7 @@
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
 import { Chains, Pools, SnarkConfigParams, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
-import { ethAddrToBuf, truncateHexPrefix,
+import { truncateHexPrefix,
           toTwosComplementHex, bufToHex, bigintToArrayLe
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
@@ -702,7 +702,7 @@ export class ZkBobClient extends ZkBobProvider {
         amount: (amountGwei + feeGwei).toString(),
         fee: feeGwei.toString(),
         deadline: String(deadline),
-        holder: ethAddrToBuf(fromAddress)
+        holder: this.network().addressToBytes(fromAddress)
       });
     }
 
@@ -722,7 +722,7 @@ export class ZkBobClient extends ZkBobProvider {
     signature = truncateHexPrefix(this.network().toCompactSignature(signature));
 
     // Checking signature correct (corresponded with declared address)
-    const claimedAddr = `0x${bufToHex(ethAddrToBuf(fromAddress))}`;
+    const claimedAddr = fromAddress;
     let recoveredAddr;
     try {
       recoveredAddr = await depositSigner.recoverAddress(dataToSign, signature);
@@ -730,7 +730,7 @@ export class ZkBobClient extends ZkBobProvider {
       throw new SignatureError(`Cannot recover address from the provided signature. Error: ${err.message}`);
     }
     if (recoveredAddr != claimedAddr) {
-      throw new SignatureError(`The address recovered from the permit signature ${recoveredAddr} doesn't match the declared one ${claimedAddr}`);
+      throw new SignatureError(`The address recovered from the provided signature ${recoveredAddr} doesn't match the declared one ${claimedAddr}`);
     }
 
     // We should also check deadline here because the user could introduce great delay
@@ -950,7 +950,7 @@ export class ZkBobClient extends ZkBobProvider {
     if (!isHexPrefixed(address) || !isAddress(address) || address.toLowerCase() == NULL_ADDRESS) {
       throw new TxInvalidArgumentError('Please provide a valid non-zero address');
     }
-    const addressBin = ethAddrToBuf(address);
+    const addressBin = this.network().addressToBytes(address);
 
     const supportedSwapAmount = await this.maxSupportedTokenSwap();
     if (swapAmount > supportedSwapAmount) {
@@ -1516,12 +1516,21 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }, CONTINUOUS_STATE_UPD_INTERVAL);
 
-    const hasOwnTxsInOptimisticState = await this.zpState().updateState(
-      this.relayer(),
-      async (index) => (await this.getPoolState(index)).root,
-      await this.coldStorageConfig(),
-      this.coldStorageBaseURL(),
-    );
+    let noOwnTxsInOptimisticState = true;
+
+    // REMOVE IT: avoid sync when state matches contract (debug case)
+    const poolState = await this.getPoolState();  // --------====>> REMOVE IT <<====--------
+    const localIndex = await this.zpState().getNextIndex();   // --------====>> REMOVE IT <<====--------
+    if (poolState.index != localIndex) {  // --------====>> REMOVE IT <<====--------
+
+      noOwnTxsInOptimisticState = await this.zpState().updateState(
+        this.relayer(),
+        async (index) => (await this.getPoolState(index)).root,
+        await this.coldStorageConfig(),
+        this.coldStorageBaseURL(),
+      );
+
+    }  // --------====>> REMOVE IT <<====--------
 
     clearInterval(timerId);
 
@@ -1530,7 +1539,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     this.setState(ClientState.FullMode);
 
-    return hasOwnTxsInOptimisticState;
+    return noOwnTxsInOptimisticState;
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------
