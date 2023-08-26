@@ -107,7 +107,7 @@ export abstract class DepositSigner {
             throw new InternalError(`Cannot sign typed data: ${err}`);
         }
 
-        return addHexPrefix(await signerAddress);
+        return signerAddress;
     }
 
 }

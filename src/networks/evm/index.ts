@@ -10,9 +10,11 @@ import { addHexPrefix, bigintToArrayLe, bufToHex, hexToBuf, toTwosComplementHex,
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from './calldata';
 import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
         personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
-import { privateToAddress, bufferToHex } from '@ethereumjs/util';
+import { privateToAddress, bufferToHex, isHexPrefixed } from '@ethereumjs/util';
+import { isAddress } from 'web3-utils';
 
 const RPC_ISSUES_THRESHOLD = 10;
+const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 export enum PoolSelector {
     Transact = "af989083",
@@ -387,18 +389,22 @@ export class EvmNetwork implements NetworkBackend {
     }
 
     public async recoverSigner(data: any, signature: string): Promise<string> {
-        return recoverPersonalSignature({
+        const address = await recoverPersonalSignature({
             data: data,
             signature: this.toCanonicalSignature(signature)
         });
+
+        return addHexPrefix(address);
     }
 
     public async recoverSignerTypedData(typedData: any, signature: string): Promise<string> {
-        return recoverTypedSignature({
+        const address = await recoverTypedSignature({
             data: typedData,
             signature: this.toCanonicalSignature(signature),
             version: SignTypedDataVersion.V4
         });
+
+        return addHexPrefix(address);
     }
 
     public toCompactSignature(signature: string): string {
@@ -448,6 +454,15 @@ export class EvmNetwork implements NetworkBackend {
     // | Getting tx revert reason, chain ID, signature format, etc...                |
     // -------------------------------------------------------------------------------
 
+    public validateAddress(address: string): boolean {
+        // Validate a given address:
+        //  - it should starts with '0x' prefix
+        //  - it should be 20-byte length
+        //  - if it contains checksum (EIP-55) it should be valid
+        //  - zero addresses are prohibited to withdraw
+        return isHexPrefixed(address) && isAddress(address) && address.toLowerCase() != NULL_ADDRESS;
+    }
+
     public addressFromPrivateKey(privKeyBytes: Uint8Array): string {
         const buf = Buffer.from(privKeyBytes);
         const address = bufferToHex(privateToAddress(buf));
@@ -462,6 +477,14 @@ export class EvmNetwork implements NetworkBackend {
 
     public bytesToAddress(bytes: Uint8Array): string {
         return addHexPrefix(bufToHex(bytes));
+    }
+
+    public isEqualAddresses(addr1: string, addr2: string): boolean {
+        return truncateHexPrefix(addr1).toLocaleLowerCase() == truncateHexPrefix(addr2).toLocaleLowerCase();
+    }
+
+    public txHashFromHexString(hexString: string): string {
+        return addHexPrefix(hexString);
     }
 
     public async getTxRevertReason(txHash: string): Promise<string | null> {
@@ -503,10 +526,10 @@ export class EvmNetwork implements NetworkBackend {
 
     public async getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null> {
         try {
-            const txData = await this.activeWeb3().eth.getTransaction(poolTxHash);
-            if (txData && txData.blockNumber && txData.input) {
-                //
-                const block = await this.activeWeb3().eth.getBlock(txData.blockNumber).catch(() => null);
+            const transactionObj = await this.activeWeb3().eth.getTransaction(poolTxHash);
+            if (transactionObj && transactionObj.blockNumber && transactionObj.input) {
+                const txData = truncateHexPrefix(transactionObj.input);
+                const block = await this.activeWeb3().eth.getBlock(transactionObj.blockNumber).catch(() => null);
                 if (block && block.timestamp) {
                     let timestamp: number = 0;
                     if (typeof block.timestamp === "number" ) {
@@ -521,9 +544,9 @@ export class EvmNetwork implements NetworkBackend {
                         isMined = true;
                     }
 
-                    const txSelector = txData.input.slice(2, 10).toLowerCase();
+                    const txSelector = txData.slice(0, 8).toLowerCase();
                     if (txSelector == PoolSelector.Transact) {
-                        const tx = decodeEvmCalldata(txData.input);
+                        const tx = decodeEvmCalldata(txData);
                         const feeAmount = BigInt('0x' + tx.memo.slice(0, 16));
                         
                         const txInfo = new RegularTxDetails();
@@ -541,7 +564,7 @@ export class EvmNetwork implements NetworkBackend {
                         if (tx.txType == RegularTxType.Deposit) {
                             if (tx.extra && tx.extra.length >= 128) {
                                 const fullSig = this.toCanonicalSignature(tx.extra.slice(0, 128));
-                                txInfo.depositAddr = await this.activeWeb3().eth.accounts.recover(txInfo.nullifier, fullSig);
+                                txInfo.depositAddr = await this.recoverSigner(txInfo.nullifier, fullSig);
                             } else {
                                 // incorrect signature
                                 throw new InternalError(`No signature for approve deposit`);
@@ -575,7 +598,7 @@ export class EvmNetwork implements NetworkBackend {
                         throw new InternalError(`[EvmNetwork]: Cannot decode calldata for tx ${poolTxHash} (incorrect selector ${txSelector})`);
                     }
                 } else {
-                    console.warn(`[EvmNetwork]: cannot get block (${txData.blockNumber}) to retrieve timestamp`);      
+                    console.warn(`[EvmNetwork]: cannot get block (${transactionObj.blockNumber}) to retrieve timestamp`);      
                 }
             } else {
               console.warn(`[EvmNetwork]: cannot get native tx ${poolTxHash} (tx still not mined?)`);

@@ -29,7 +29,6 @@ import { IDBPDatabase, openDB } from 'idb';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
-const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
 
@@ -729,7 +728,7 @@ export class ZkBobClient extends ZkBobProvider {
     } catch (err) {
       throw new SignatureError(`Cannot recover address from the provided signature. Error: ${err.message}`);
     }
-    if (recoveredAddr != claimedAddr) {
+    if (!this.network().isEqualAddresses(recoveredAddr, claimedAddr)) {
       throw new SignatureError(`The address recovered from the provided signature ${recoveredAddr} doesn't match the declared one ${claimedAddr}`);
     }
 
@@ -801,8 +800,6 @@ export class ZkBobClient extends ZkBobProvider {
 
     return this.deposit(amountGwei, async (signingRequest) => {
       const pool = this.pool();
-      const state = this.zpState();
-
       const privKey = this.getEphemeralAddressPrivateKey(ephemeralIndex);
 
       const depositSigner = DepositSignerFactory.createSigner(this.network(), pool.depositScheme);
@@ -824,7 +821,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     const limits = await this.getLimits(fromAddress);
     if (amount > limits.dd.total) {
-      throw new TxLimitError(amount, limits.dd.total);
+      //throw new TxLimitError(amount, limits.dd.total);
     }
 
     const fee = await processor.getFee();
@@ -942,12 +939,8 @@ export class ZkBobClient extends ZkBobProvider {
     const relayer = this.relayer();
     const state = this.zpState();
 
-    // Validate withdrawal address:
-    //  - it should starts with '0x' prefix
-    //  - it should be 20-byte length
-    //  - if it contains checksum (EIP-55) it should be valid
-    //  - zero addresses are prohibited to withdraw
-    if (!isHexPrefixed(address) || !isAddress(address) || address.toLowerCase() == NULL_ADDRESS) {
+    // Check is withdrawal address and nonzero
+    if (!this.network().validateAddress(address)) {
       throw new TxInvalidArgumentError('Please provide a valid non-zero address');
     }
     const addressBin = this.network().addressToBytes(address);
@@ -1146,7 +1139,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     if (txType === RegularTxType.Transfer || txType === RegularTxType.Withdraw) {
       // we set allowPartial flag here to get parts anywhere
-      const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: NULL_ADDRESS} });  // destination address is ignored for estimation purposes
+      const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: '0'} });  // destination address is ignored for estimation purposes
       const parts = await this.getTransactionParts(txType, requests, relayerFee, withdrawSwap, updateState, true);
       const totalBalance = await this.getTotalBalance(false);
 
@@ -1518,19 +1511,12 @@ export class ZkBobClient extends ZkBobProvider {
 
     let noOwnTxsInOptimisticState = true;
 
-    // REMOVE IT: avoid sync when state matches contract (debug case)
-    const poolState = await this.getPoolState();  // --------====>> REMOVE IT <<====--------
-    const localIndex = await this.zpState().getNextIndex();   // --------====>> REMOVE IT <<====--------
-    if (poolState.index != localIndex) {  // --------====>> REMOVE IT <<====--------
-
-      noOwnTxsInOptimisticState = await this.zpState().updateState(
-        this.relayer(),
-        async (index) => (await this.getPoolState(index)).root,
-        await this.coldStorageConfig(),
-        this.coldStorageBaseURL(),
-      );
-
-    }  // --------====>> REMOVE IT <<====--------
+    noOwnTxsInOptimisticState = await this.zpState().updateState(
+      this.relayer(),
+      async (index) => (await this.getPoolState(index)).root,
+      await this.coldStorageConfig(),
+      this.coldStorageBaseURL(),
+    );
 
     clearInterval(timerId);
 

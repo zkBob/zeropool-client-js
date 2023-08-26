@@ -216,7 +216,7 @@ export class HexStringReader {
     const elements: bigint[] = [];
     for (let i = 0; i < numElements; ++i) {
       const num = this.readBigInt(numBytesPerElement, le);
-      if (!num) {
+      if (num == null) {
         break;
       }
 

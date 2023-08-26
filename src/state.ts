@@ -83,6 +83,7 @@ interface ColdSyncResult {
 export class ZkBobState {
   public stateId: string; // should depends on pool and sk
   private sk: Uint8Array;
+  private network: NetworkBackend;
   private birthIndex?: number;
   public history?: HistoryStorage; // should work synchronically with the state
   private ephemeralAddrPool?: EphemeralPool; // depends on sk so we placed it here
@@ -118,6 +119,7 @@ export class ZkBobState {
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
     zpState.sk = new Uint8Array(sk);
+    zpState.network = network;
     zpState.birthIndex = birthIndex;
     
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
@@ -557,7 +559,7 @@ export class ZkBobState {
 
         // 3. Get txHash
         const txHash = tx.slice(1, 65);
-        txHashes[memo_idx] = '0x' + txHash;
+        txHashes[memo_idx] = this.network.txHashFromHexString(txHash);
 
         // 4. Get mined flag
         if (tx.slice(0, 1) === '1') {

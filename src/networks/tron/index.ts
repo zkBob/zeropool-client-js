@@ -1,13 +1,12 @@
 import { NetworkBackend, PreparedTransaction } from '..';
 import { InternalError, TxType } from '../../index';
-import { PoolTxDetails, RegularTxType } from '../../tx';
-
+import { DDBatchTxDetails, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from '../../tx';
 import tokenAbi from './abi/usdt-abi.json';
-import poolAbi from './abi/pool-abi.json';
-import ddAbi from './abi/dd-abi.json';
-import { SignTypedDataVersion, recoverPersonalSignature, recoverTypedSignature } from '@metamask/eth-sig-util';
-import { bufToHex, hexToBuf, truncateHexPrefix } from '../../utils';
+import { ddContractABI as ddAbi, poolContractABI as poolAbi} from '../evm/evm-abi';
+import { bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from '../evm/calldata';
+import { hexToBytes } from 'web3-utils';
+import { PoolSelector } from '../evm';
 
 const TronWeb = require('tronweb')
 const bs58 = require('bs58')
@@ -15,6 +14,7 @@ const bs58 = require('bs58')
 const DEFAULT_DECIMALS = 6;
 const DEFAULT_CHAIN_ID = 0x2b6653dc;
 const DEFAULT_ENERGY_FEE = 420;
+const ZERO_ADDRESS = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
 
 export class TronNetwork implements NetworkBackend {
     protected rpcUrls: string[];
@@ -82,7 +82,7 @@ export class TronNetwork implements NetworkBackend {
     protected async getTokenContract(tokenAddres: string): Promise<any> {
         let contract = this.tokenContracts.get(tokenAddres);
         if (!contract) {
-            contract = await this.tronWeb.contract(tokenAbi, tokenAddres);
+            contract = await this.activeTronweb().contract(tokenAbi, tokenAddres);
             if (contract) {
                 this.tokenContracts.set(tokenAddres, contract);
             } else {
@@ -96,7 +96,7 @@ export class TronNetwork implements NetworkBackend {
     protected async getPoolContract(poolAddres: string): Promise<any> {
         let contract = this.poolContracts.get(poolAddres);
         if (!contract) {
-            contract = await this.tronWeb.contract(poolAbi, poolAddres);
+            contract = await this.activeTronweb().contract(poolAbi, poolAddres);
             if (contract) {
                 this.poolContracts.set(poolAddres, contract);
             } else {
@@ -110,7 +110,7 @@ export class TronNetwork implements NetworkBackend {
     protected async getDdContract(ddQueueAddress: string): Promise<any> {
         let contract = this.ddContracts.get(ddQueueAddress);
         if (!contract) {
-            contract = await this.tronWeb.contract(ddAbi, ddQueueAddress);
+            contract = await this.activeTronweb().contract(ddAbi, ddQueueAddress);
             if (contract) {
                 this.ddContracts.set(ddQueueAddress, contract);
             } else {
@@ -253,7 +253,7 @@ export class TronNetwork implements NetworkBackend {
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
         const pool = await this.getPoolContract(poolAddress);
-        let addr = address ?? 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
+        let addr = address ?? ZERO_ADDRESS;
         
         return await pool.getLimitsFor(addr).call();
     }
@@ -312,13 +312,22 @@ export class TronNetwork implements NetworkBackend {
             {type: 'uint256', value: amount},
             {type: 'bytes', value: zkAddrBytes}
         ];
-        const tx = await this.tronWeb.transactionBuilder.triggerSmartContract(ddQueueAddress, selector, { feeLimit: 100_000_000 }, parameters);
-        //const protobuf = await this.tronWeb.utils.transaction.txJsonToPb(tx.transaction);
+        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(ddQueueAddress, selector, { feeLimit: 100_000_000 }, parameters);
+        const contract = tx?.transaction?.raw_data?.contract;
+        let txData: any | undefined;
+        if (Array.isArray(contract) && contract.length > 0) {
+            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
+        }
+        //const protobuf = await this.activeTronweb().utils.transaction.txJsonToPb(tx.transaction);
+
+        if (typeof txData !== 'string' && txData.length < 8) {
+            throw new InternalError('Unable to extract DD calldata');
+        }
 
         return {
             to: ddQueueAddress,
             amount: 0n,
-            data: tx.transaction.raw_data_hex, // TODO: check what inside a protobuf and get pure calldata
+            data: txData.slice(8),  // skip selector from the calldata
             selector,
         };
     }
@@ -337,41 +346,33 @@ export class TronNetwork implements NetworkBackend {
     // -------------------------------------------------------------------------------
 
     public async sign(data: any, privKey: string): Promise<string> {
-        return await this.tronWeb.trx.sign(data, privKey);
+        if (typeof data === 'string') {
+            const bytes = hexToBytes(data);
+            return this.activeTronweb().trx.signMessageV2(bytes, privKey);
+        }
+
+        throw new Error('Incorrect signing request: data must be a hex string');
     }
 
     public async signTypedData(typedData: any, privKey: string): Promise<string> {
         if (typedData && typedData.domain && typedData.types && typedData.message) {
-            return await this.tronWeb.trx._signTypedData(typedData.domain, typedData.types, typedData.message, privKey);
+            return this.activeTronweb().trx._signTypedData(typedData.domain, typedData.types, typedData.message, privKey);
         }
 
-        throw new Error('Incorrect signing request: it must contains at least domain, types and message keys')
+        throw new Error('Incorrect typed signing request: it must contains at least domain, types and message keys');
     }
 
-    // TODO: check it!
     public async recoverSigner(data: any, signature: string): Promise<string> {
-        const recovered = recoverPersonalSignature({
-            data: data,
-            signature: this.toCanonicalSignature(signature)
-        });
-        const tronAddress = '41' + recovered.slice(2);
-        const base58Address = TronWeb.address.fromHex(tronAddress);
+        if (typeof data === 'string') {
+            const bytes = hexToBytes(data);
+            return this.activeTronweb().trx.verifyMessageV2(bytes, this.toCanonicalSignature(signature));
+        }
 
-        return base58Address;
+        throw new Error('Cannot recover signature: data must be a hex string');
     }
 
-    // TODO: check it!
     public async recoverSignerTypedData(typedData: any, signature: string): Promise<string> {
-        const recovered = recoverTypedSignature({
-            data: typedData,
-            signature: this.toCanonicalSignature(signature),
-            version: SignTypedDataVersion.V4
-        });
-
-        const tronAddress = '41' + recovered.slice(2);
-        const base58Address = TronWeb.address.fromHex(tronAddress);
-
-        return base58Address;
+        throw new InternalError('recover typed data is unimplemented for Tron yet')
     }
 
     public toCompactSignature(signature: string): string {
@@ -423,6 +424,10 @@ export class TronNetwork implements NetworkBackend {
     // | Getting tx revert reason, chain ID, signature format, etc...                |
     // -------------------------------------------------------------------------------
 
+    public validateAddress(address: string): boolean {
+        return TronWeb.isAddress(address) && address != ZERO_ADDRESS;
+    }
+
     public addressFromPrivateKey(privKeyBytes: Uint8Array): string {
         return TronWeb.address.fromPrivateKey(bufToHex(privKeyBytes));
     }
@@ -445,6 +450,14 @@ export class TronNetwork implements NetworkBackend {
         }
 
         throw new InternalError(`Incorrect address buffer`);
+    }
+
+    public isEqualAddresses(addr1: string, addr2: string): boolean {
+        return addr1 == addr2;;
+    }
+
+    public txHashFromHexString(hexString: string): string {
+        return truncateHexPrefix(hexString);
     }
 
     public async getTxRevertReason(txHash: string): Promise<string | null> {
@@ -476,7 +489,7 @@ export class TronNetwork implements NetworkBackend {
     }
 
     public async getNativeBalance(address: string): Promise<bigint> {
-        return BigInt(await this.tronWeb.trx.getBalance(address));
+        return BigInt(await this.activeTronweb().trx.getBalance(address));
     }
 
     public async getNativeNonce(address: string): Promise<number> {
@@ -485,84 +498,72 @@ export class TronNetwork implements NetworkBackend {
 
     public async getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null> {
         try {
-            const tronTransaction = await this.tronWeb.trx.getTransaction(poolTxHash);
-            //const tronTransactionInfo = await this.tronWeb.trx.getTransaction(poolTxHash);
-            const txData = tronTransaction?.raw_data?.contract?.parameter?.value?.data;
+            const tronTransaction = await this.activeTronweb().trx.getTransaction(poolTxHash);
+            //const tronTransactionInfo = await this.activeTronweb().trx.getTransaction(poolTxHash);
             const timestamp = tronTransaction?.raw_data?.timestamp
+            const contract = tronTransaction?.raw_data?.contract;
+            let txData: any | undefined;
+            if (Array.isArray(contract) && contract.length > 0) {
+                txData = truncateHexPrefix(contract[0].parameter?.value?.data);
+            }
 
             if (txData && timestamp) {
-                throw new InternalError(`unimplemented`);
-                /*const block = await this.activeWeb3().eth.getBlock(txData.blockNumber).catch(() => null);
-                if (block && block.timestamp) {
-                    let timestamp: number = 0;
-                    if (typeof block.timestamp === "number" ) {
-                        timestamp = block.timestamp;
-                    } else if (typeof block.timestamp === "string" ) {
-                        timestamp = Number(block.timestamp);
-                    }
+                // TODO: get is tx mined!!!
+                let isMined = true;
 
-                    let isMined = false;
-                    const txReceipt = await this.activeWeb3().eth.getTransactionReceipt(poolTxHash);
-                    if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
-                        isMined = true;
-                    }
+                const txSelector = txData.slice(0, 8).toLowerCase();
+                if (txSelector == PoolSelector.Transact) {
+                    const tx = decodeEvmCalldata(txData);
+                    const feeAmount = BigInt('0x' + tx.memo.slice(0, 16));
+                    
+                    const txInfo = new RegularTxDetails();
+                    txInfo.txType = tx.txType;
+                    txInfo.tokenAmount = tx.tokenAmount;
+                    txInfo.feeAmount = feeAmount;
+                    txInfo.txHash = poolTxHash;
+                    txInfo.isMined = isMined
+                    txInfo.timestamp = timestamp;
+                    txInfo.nullifier = '0x' + toTwosComplementHex(BigInt((tx.nullifier)), 32);
+                    txInfo.commitment = '0x' + toTwosComplementHex(BigInt((tx.outCommit)), 32);
+                    txInfo.ciphertext = getCiphertext(tx);
 
-                    const txSelector = txData.input.slice(2, 10).toLowerCase();
-                    if (txSelector == PoolSelector.Transact) {
-                        const tx = decodeEvmCalldata(txData.input);
-                        const feeAmount = BigInt('0x' + tx.memo.slice(0, 16));
-                        
-                        const txInfo = new RegularTxDetails();
-                        txInfo.txType = tx.txType;
-                        txInfo.tokenAmount = tx.tokenAmount;
-                        txInfo.feeAmount = feeAmount;
-                        txInfo.txHash = poolTxHash;
-                        txInfo.isMined = isMined
-                        txInfo.timestamp = timestamp;
-                        txInfo.nullifier = '0x' + toTwosComplementHex(BigInt((tx.nullifier)), 32);
-                        txInfo.commitment = '0x' + toTwosComplementHex(BigInt((tx.outCommit)), 32);
-                        txInfo.ciphertext = getCiphertext(tx);
-
-                        // additional tx-specific fields for deposits and withdrawals
-                        if (tx.txType == RegularTxType.Deposit) {
-                            if (tx.extra && tx.extra.length >= 128) {
-                                const fullSig = this.toCanonicalSignature(tx.extra.slice(0, 128));
-                                txInfo.depositAddr = await this.activeWeb3().eth.accounts.recover(txInfo.nullifier, fullSig);
-                            } else {
-                                // incorrect signature
-                                throw new InternalError(`No signature for approve deposit`);
-                            }
-                        } else if (tx.txType == RegularTxType.BridgeDeposit) {
-                            txInfo.depositAddr = '0x' + tx.memo.slice(32, 72);
-                        } else if (tx.txType == RegularTxType.Withdraw) {
-                            txInfo.withdrawAddr = '0x' + tx.memo.slice(32, 72);
+                    // additional tx-specific fields for deposits and withdrawals
+                    if (tx.txType == RegularTxType.Deposit) {
+                        if (tx.extra && tx.extra.length >= 128) {
+                            const fullSig = this.toCanonicalSignature(tx.extra.slice(0, 128));
+                            txInfo.depositAddr = await this.recoverSigner(txInfo.nullifier, fullSig);
+                        } else {
+                            // incorrect signature
+                            throw new InternalError(`No signature for approve deposit`);
                         }
-
-                        return {
-                            poolTxType: PoolTxType.Regular,
-                            details: txInfo,
-                            index,
-                        };
-                    } else if (txSelector == PoolSelector.AppendDirectDeposit) {
-                        const txInfo = new DDBatchTxDetails();
-                        txInfo.txHash = poolTxHash;
-                        txInfo.isMined = isMined;
-                        txInfo.timestamp = timestamp;
-                        txInfo.deposits = [];    // TODO!!!
-
-                        // WIP
-
-                        return {
-                            poolTxType: PoolTxType.DirectDepositBatch,
-                            details: txInfo,
-                            index,
-                        };
-                    } else {
-                        throw new InternalError(`[EvmNetwork]: Cannot decode calldata for tx ${poolTxHash} (incorrect selector ${txSelector})`);
+                    } else if (tx.txType == RegularTxType.BridgeDeposit) {
+                        txInfo.depositAddr = '0x' + tx.memo.slice(32, 72);
+                    } else if (tx.txType == RegularTxType.Withdraw) {
+                        txInfo.withdrawAddr = '0x' + tx.memo.slice(32, 72);
                     }
+
+                    return {
+                        poolTxType: PoolTxType.Regular,
+                        details: txInfo,
+                        index,
+                    };
+                } else if (txSelector == PoolSelector.AppendDirectDeposit) {
+                    const txInfo = new DDBatchTxDetails();
+                    txInfo.txHash = poolTxHash;
+                    txInfo.isMined = isMined;
+                    txInfo.timestamp = timestamp;
+                    txInfo.deposits = [];    // TODO!!!
+
+                    // WIP
+
+                    return {
+                        poolTxType: PoolTxType.DirectDepositBatch,
+                        details: txInfo,
+                        index,
+                    };
                 } else {
-                    console.warn(`[EvmNetwork]: cannot get block (${txData.blockNumber}) to retrieve timestamp`);      
-                }*/
+                    throw new InternalError(`[EvmNetwork]: Cannot decode calldata for tx ${poolTxHash} (incorrect selector ${txSelector})`);
+                }
             } else {
               console.warn(`[TronNetwork]: cannot get native tx ${poolTxHash} (tx still not mined?)`);
             }
@@ -608,7 +609,7 @@ export class TronNetwork implements NetworkBackend {
     private async getEnergyCost(): Promise<number> {
         if (this.energyFee === undefined) {
             try {
-                const chainParams = await this.tronWeb.trx.getChainParameters();
+                const chainParams = await this.activeTronweb().trx.getChainParameters();
                 for (let aParam of chainParams) {
                     if (aParam.key == 'getEnergyFee') {
                         this.energyFee = Number(aParam.value);
@@ -628,7 +629,7 @@ export class TronNetwork implements NetworkBackend {
 
     private async getAccountEnergy(address: string): Promise<number> {
         try {
-            const accResources = await this.tronWeb.trx.getAccountResources(address);
+            const accResources = await this.activeTronweb().trx.getAccountResources(address);
             return Number(accResources.EnergyLimit ?? 0) - Number(accResources.EnergyUsed ?? 0);
         } catch(err) {
             console.warn(`Cannot get account energy: ${err}`);
@@ -646,7 +647,8 @@ export class TronNetwork implements NetworkBackend {
         validateBalance: boolean = true,
     ): Promise<string> {
         // create tx to validate it's correct
-        let tx = await this.tronWeb.transactionBuilder.triggerConstantContract(contractAddress, selector, { feeLimit }, parameters)
+        const signerAddress = TronWeb.address.fromPrivateKey(privateKey);
+        let tx = await this.activeTronweb().transactionBuilder.triggerConstantContract(contractAddress, selector, { feeLimit }, parameters, signerAddress)
             .catch((err: string) => {
                 throw new Error(`Tx validation error: ${err}`);
             });
@@ -667,10 +669,10 @@ export class TronNetwork implements NetworkBackend {
         // create actual tx with feeLimit field
         // it's a tronweb bug: triggerConstantContract doesn't include feeLimit in the transaction
         // so it can be reverted in case of out-of-energy
-        tx = await this.tronWeb.transactionBuilder.triggerSmartContract(contractAddress, selector, { feeLimit }, parameters);
+        tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(contractAddress, selector, { feeLimit }, parameters, signerAddress);
         // sign and send
-        const signedTx = await this.tronWeb.trx.sign(tx.transaction, privateKey);
-        const result = await this.tronWeb.trx.sendRawTransaction(signedTx);
+        const signedTx = await this.activeTronweb().trx.sign(tx.transaction, privateKey);
+        const result = await this.activeTronweb().trx.sendRawTransaction(signedTx);
 
         return result.txid;
     }
