@@ -406,9 +406,10 @@ export class ZkBobClient extends ZkBobProvider {
     const accId = accountId(giftCardAcc);
     if (!this.auxZpStates[accId]) {
       // create gift-card auxiliary state if needed
+      const network = this.network();
       const networkName = this.networkName();
       const poolId = await this.poolId();
-      const giftCardState = await ZkBobState.createNaked(giftCardAcc.sk, giftCardAcc.birthindex, networkName, poolId, this.worker);
+      const giftCardState = await ZkBobState.createNaked(giftCardAcc.sk, giftCardAcc.birthindex, network, networkName, poolId, this.worker);
 
       // state will be removed after gift card redemption or on logout
       this.auxZpStates[accId] = giftCardState;
@@ -524,7 +525,8 @@ export class ZkBobClient extends ZkBobProvider {
         if (job.state === 'failed') {
           throw new RelayerJobError(Number(jobId), job.failedReason ? job.failedReason : 'unknown reason');
         } else if (job.state === 'sent') {
-          if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'sent' state`);
+          //if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'sent' state`);
+          if (!job.txHash) console.error(`Relayer return job #${jobId} without txHash in 'sent' state`);
           break;
         } else if (job.state === 'reverted')  {
           throw new PoolJobError(Number(jobId), job.txHash ? job.txHash : 'no_txhash', job.failedReason ?? 'unknown reason');
@@ -574,7 +576,9 @@ export class ZkBobClient extends ZkBobProvider {
     const relayer = this.relayer();
     const state = this.zpState();
 
+    let issues = 0;
     const INTERVAL_MS = 1000;
+    const ISSUES_THRESHOLD = 20;
     let job: JobInfo;
     let lastTxHash = '';
     let lastJobState = '';
@@ -610,6 +614,7 @@ export class ZkBobClient extends ZkBobProvider {
             }
           } else {
             console.warn(`JobMonitoring: ${jobDescr} was sent to the pool but has no assigned txHash [relayer issue]`);
+            issues++;
           }
         } else if (job.state === 'reverted')  {
           // [TERMINAL STATE] Transaction was reverted on the Pool and won't resend
@@ -623,6 +628,7 @@ export class ZkBobClient extends ZkBobProvider {
             revertReason = retrievedReason ?? 'transaction was not found\\reverted'
           } else {
             console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
+            issues++;
           }
 
           state.history?.setSentTransactionFailedByPool(jobId, job.txHash ?? '', revertReason);
@@ -635,6 +641,7 @@ export class ZkBobClient extends ZkBobProvider {
             console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
           } else {
             console.warn(`JobMonitoring: ${jobDescr} was mined but has no assigned txHash [relayer issue]`);
+            issues++;
           }
           break;
         }
@@ -642,6 +649,11 @@ export class ZkBobClient extends ZkBobProvider {
         lastJobState = job.state;
         if (job.txHash) lastTxHash = job.txHash;
 
+      }
+
+      if (issues > ISSUES_THRESHOLD) {
+        console.warn(`JobMonitoring: job #${jobId} issues threshold achieved, stop monitoring`);
+        break;
       }
 
       await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
@@ -821,7 +833,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     const limits = await this.getLimits(fromAddress);
     if (amount > limits.dd.total) {
-      //throw new TxLimitError(amount, limits.dd.total);
+      throw new TxLimitError(amount, limits.dd.total);
     }
 
     const fee = await processor.getFee();

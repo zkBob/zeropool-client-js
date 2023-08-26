@@ -711,7 +711,8 @@ export class ZkBobProvider {
         writer.writeNumber(GIFT_CARD_CODE_VER, 1);
         writer.writeHex(bufToHex(giftCard.sk));
         writer.writeNumber(giftCard.birthIndex, 6);
-        writer.writeHex(pool.poolAddress.slice(-8));
+        const poolAddrHex = bufToHex(this.network().addressToBytes(pool.poolAddress));
+        writer.writeHex(poolAddrHex.slice(-8));
         writer.writeNumber(pool.chainId, 4);
         writer.writeBigInt(giftCard.balance, 8);
 
@@ -741,7 +742,8 @@ export class ZkBobProvider {
         
         let poolAlias: string | undefined = undefined;
         for (const [alias, pool] of Object.entries(this.pools)) {
-            if (pool.chainId == chainId && pool.poolAddress.slice(-8).toLowerCase() == poolAddrSlice.toLowerCase()) {
+            const poolAddrHex = bufToHex(this.network().addressToBytes(pool.poolAddress));
+            if (pool.chainId == chainId && poolAddrHex.slice(-8).toLowerCase() == poolAddrSlice.toLowerCase()) {
                 poolAlias = alias;
                 break;
             }

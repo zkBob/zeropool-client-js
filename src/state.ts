@@ -140,12 +140,14 @@ export class ZkBobState {
   public static async createNaked(
     sk: Uint8Array,
     birthIndex: number | undefined,
+    network: NetworkBackend,
     networkName: string,
     poolId: number,
     worker: any,
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
     zpState.sk = new Uint8Array(sk);
+    zpState.network = network;
     zpState.birthIndex = birthIndex;
 
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
