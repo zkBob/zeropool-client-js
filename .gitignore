@@ -108,3 +108,4 @@ dist
 .parcel-cache
 *.DS_Store
 /lib/
+/.vscode/launch.json
