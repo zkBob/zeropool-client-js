@@ -12,6 +12,7 @@ import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
         personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
 import { privateToAddress, bufferToHex, isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
+import promiseRetry from 'promise-retry';
 
 const RPC_ISSUES_THRESHOLD = 10;
 const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -109,6 +110,29 @@ export class EvmNetwork implements NetworkBackend {
 
         return this.token;
     }
+
+    private contractCallRetry(contract: Contract, method: string, args: any[] = []) {
+        return promiseRetry(
+          async retry => {
+            try {
+              return await contract.methods[method](...args).call()
+            } catch (e) {
+              if (isContractCallError(e as Error)) {
+                logger.warn('Retrying failed contract call', { method, args })
+                retry(e)
+              } else {
+                logger.debug('Unknown contract call error', { method, args, error: e })
+                throw e
+              }
+            }
+          },
+          {
+            retries: 2,
+            minTimeout: 500,
+            maxTimeout: 500,
+          }
+        )
+      }
 
     // ----------------------=========< RPC switching >=========----------------------
     // | Getting current RPC, registering issues, switching between RPCs             |
