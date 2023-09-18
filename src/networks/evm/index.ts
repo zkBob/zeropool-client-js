@@ -6,17 +6,18 @@ import { InternalError } from '../../errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
 import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType } from '../../tx';
-import { addHexPrefix, bigintToArrayLe, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
+import { addHexPrefix, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from './calldata';
 import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
         personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
 import { privateToAddress, bufferToHex, isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
 import promiseRetry from 'promise-retry';
+import { Transaction, TransactionReceipt } from 'web3-core';
 
-const RPC_ISSUES_THRESHOLD = 5;
+const RPC_ISSUES_THRESHOLD = 50;
 const RETRY_COUNT = 20;
-const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 export enum PoolSelector {
     Transact = "af989083",
@@ -50,7 +51,7 @@ export class EvmNetwork implements NetworkBackend {
         }
 
         this.rpcUrls = rpcUrls;
-        this.curRpcIdx = -1;
+        this.curRpcIdx = 0;
 
         if (enabled) {
             this.setEnabled(true);
@@ -112,25 +113,17 @@ export class EvmNetwork implements NetworkBackend {
         return this.token;
     }
 
-    private contractCallRetry(contract: Contract, method: string, args: any[] = []): Promise<any> {
-        return promiseRetry(
-          async (retry, attempt) => {
-            try {
+    private contractCallRetry(contract: Contract, address: string, method: string, args: any[] = []): Promise<any> {
+        return this.commonRpcRetry(async () => {
+                contract.options.address = address;
                 return await contract.methods[method](...args).call()
-            } catch (e) {
-                console.error(`Contract call error [attempt #${attempt}]: ${e.message}`);
-                retry(e)
-            }
-          },
-          {
-            retries: RETRY_COUNT,
-            minTimeout: 500,
-            maxTimeout: 500,
-          }
+            },
+            `Contract call (${method}) error`,
+            RETRY_COUNT
         );
     }
 
-    private commonRpcRetry(closure: () => any, errorPattern?: string): Promise<any> {
+    private commonRpcRetry(closure: () => any, errorPattern: string, retriesCnt: number): Promise<any> {
         return promiseRetry(
             async (retry, attempt) => {
               try {
@@ -142,7 +135,7 @@ export class EvmNetwork implements NetworkBackend {
               }
             },
             {
-              retries: RETRY_COUNT,
+              retries: retriesCnt,
               minTimeout: 500,
               maxTimeout: 500,
             }
@@ -196,8 +189,9 @@ export class EvmNetwork implements NetworkBackend {
         }
 
         if (newRpcIndex != this.curRpcIdx) {
+            this.setEnabled(false);
             this.curRpcIdx = newRpcIndex;
-            this.web3 = new Web3(this.curRpcUrl());
+            this.setEnabled(true);
             console.log(`[EvmNetwork]: RPC was switched to ${this.curRpcUrl()}`);
 
             return true;
@@ -212,65 +206,41 @@ export class EvmNetwork implements NetworkBackend {
     // -------------------------------------------------------------------------------
 
     public async getTokenName(tokenAddress: string): Promise<string> {
-        return this.commonRpcRetry(async () => {
-            this.tokenContract().options.address = tokenAddress;
-            return this.tokenContract().methods.name().call();
-        }, 'Cannot get token name');
+        return this.contractCallRetry(this.tokenContract(), tokenAddress, 'name');
     }
 
     public async getTokenDecimals(tokenAddress: string): Promise<number> {
-        return this.commonRpcRetry(async () => {
-            this.tokenContract().options.address = tokenAddress;
-            return Number(await this.tokenContract().methods.decimals().call());
-        }, 'Cannot get token decimals');
+        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'decimals');
+        return Number(res);
     }
 
     public async getDomainSeparator(tokenAddress: string): Promise<string> {
-        return this.commonRpcRetry(async () => {
-            this.tokenContract().options.address = tokenAddress;
-            return await this.tokenContract().methods.DOMAIN_SEPARATOR().call();
-        }, 'Cannot get domain separator');
+        return this.contractCallRetry(this.tokenContract(), tokenAddress, 'DOMAIN_SEPARATOR');
     }
     
     public async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
-        return this.commonRpcRetry(async () => {
-            this.tokenContract().options.address = tokenAddress;
-            return Number(await this.tokenContract().methods.nonces(address).call());
-        }, 'Cannot get token nonce');
+        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'nonces', [address]);
+        return Number(res);
     }
 
-    public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {    // in wei
-        return this.commonRpcRetry(async () => {
-            this.tokenContract().options.address = tokenAddress;
-            return BigInt(await this.tokenContract().methods.balanceOf(address).call());
-        }, 'Cannot get token balance');
+    public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {    // in token base units
+        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'balanceOf', [address]);
+        return BigInt(res);
     }
 
     public async allowance(tokenAddress: string, owner: string, spender: string): Promise<bigint> {
-        return this.commonRpcRetry(async () => {
-            this.tokenContract().options.address = tokenAddress;
-            const result = await this.tokenContract().methods.allowance(owner, spender).call();
-        
-            return BigInt(result);
-        }, 'Cannot get token allowance');
+        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'allowance', [owner, spender]);
+        return BigInt(res);
     }
 
     public async permit2NonceBitmap(permit2Address: string, owner: string, wordPos: bigint): Promise<bigint> {
-        return this.commonRpcRetry(async () => {
-            this.tokenContract().options.address = permit2Address;
-            const result = await this.tokenContract().methods.nonceBitmap(owner, wordPos).call();
-
-            return BigInt(result);
-        }, 'Cannot get Permit2 nonce bitmap');
+        const res = await this.contractCallRetry(this.tokenContract(), permit2Address, 'nonceBitmap', [owner, wordPos]);
+        return BigInt(res);
     }
 
     public async erc3009AuthState(tokenAddress: string, authorizer: string, nonce: bigint): Promise<bigint> {
-        return this.commonRpcRetry(async () => {
-            this.tokenContract().options.address = tokenAddress;
-            const result = await this.tokenContract().methods.authorizationState(authorizer, `0x${nonce.toString(16)}`).call();
-
-            return BigInt(result);
-        }, 'Cannot get ERC3009 authorization state');
+        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'authorizationState', [authorizer, `0x${nonce.toString(16)}`]);
+        return BigInt(res);
     }
 
     public async approveTokens(
@@ -288,15 +258,21 @@ export class EvmNetwork implements NetworkBackend {
             data: encodedTx,
         };
 
-        const gas = await this.activeWeb3().eth.estimateGas(txObject);
-        const gasPrice = Number(await this.activeWeb3().eth.getGasPrice());
-        const nonce = await this.activeWeb3().eth.getTransactionCount(holder);
+        const gas = await this.commonRpcRetry(async () => {
+            return Number(await this.activeWeb3().eth.estimateGas(txObject));
+        }, 'Unable to estimate gas', RETRY_COUNT);
+        const gasPrice = await this.commonRpcRetry(async () => {
+            return Number(await this.activeWeb3().eth.getGasPrice());
+        }, 'Unable to get gas price', RETRY_COUNT);
         txObject.gas = gas;
         txObject.gasPrice = `0x${BigInt(Math.ceil(gasPrice * (gasFactor ?? 1.0))).toString(16)}`;
-        txObject.nonce = nonce;
+        txObject.nonce = await this.getNativeNonce(holder);
 
         const signedTx = await this.activeWeb3().eth.accounts.signTransaction(txObject, privateKey);
-        const receipt = await this.activeWeb3().eth.sendSignedTransaction(signedTx.rawTransaction ?? '');
+
+        const receipt = await this.commonRpcRetry(async () => {
+            return this.activeWeb3().eth.sendSignedTransaction(signedTx.rawTransaction ?? '');
+        }, 'Unable to send approve tx', RETRY_COUNT);
 
         return receipt.transactionHash;
     }
@@ -307,62 +283,41 @@ export class EvmNetwork implements NetworkBackend {
     // -------------------------------------------------------------------------------
 
     public async getPoolId(poolAddress: string): Promise<number> {
-        return this.commonRpcRetry(async () => {
-            this.poolContract().options.address = poolAddress;
-            return Number(await this.poolContract().methods.pool_id().call());
-        }, 'Cannot get pool ID');
+        return Number(await this.contractCallRetry(this.poolContract(), poolAddress, 'pool_id'));
     }
 
     public async getDenominator(poolAddress: string): Promise<bigint> {
-        return this.commonRpcRetry(async () => {
-            this.poolContract().options.address = poolAddress;
-            return BigInt(await this.poolContract().methods.denominator().call());
-        }, 'Cannot get pool denominator');
+        return BigInt(await this.contractCallRetry(this.poolContract(), poolAddress, 'denominator'));
     }
 
     public async poolState(poolAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
-        return this.commonRpcRetry(async () => {
-            this.poolContract().options.address = poolAddress;
-            let idx;
-            if (index === undefined) {
-                idx = await this.poolContract().methods.pool_index().call();
-            } else {
-                idx = index?.toString();
-            }
-            const root = await this.poolContract().methods.roots(idx).call();
+        let idx: string;
+        if (index === undefined) {
+            idx = await this.contractCallRetry(this.poolContract(), poolAddress, 'pool_index');
+        } else {
+            idx = index?.toString();
+        }
+        const root = await this.contractCallRetry(this.poolContract(), poolAddress, 'roots', [idx]);
 
-
-            return {index: BigInt(idx), root: BigInt(root)};
-        }, 'Cannot get pool state');
+        return {index: BigInt(idx), root: BigInt(root)};
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
-        return this.commonRpcRetry(async () => {
-            this.poolContract().options.address = poolAddress;
-            let addr = address;
-            if (address === undefined) {
-                addr = '0x0000000000000000000000000000000000000000';
-            }
-            
-            return await this.poolContract().methods.getLimitsFor(addr).call();
-        }, 'Cannot get pool limits');
+        return await this.contractCallRetry(this.poolContract(), poolAddress, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
     }
 
     public async getTokenSellerContract(poolAddress: string): Promise<string> {
-        return this.commonRpcRetry(async () => {
-            let tokenSellerAddr = this.tokenSellerAddresses.get(poolAddress);
-            if (!tokenSellerAddr) {
-                this.poolContract().options.address = poolAddress;
-                tokenSellerAddr = await this.poolContract().methods.tokenSeller().call();
-                if (tokenSellerAddr) {
-                    this.tokenSellerAddresses.set(poolAddress, tokenSellerAddr);
-                } else {
-                    throw new InternalError(`Cannot fetch token seller contract address`);
-                }
+        let tokenSellerAddr = this.tokenSellerAddresses.get(poolAddress);
+        if (!tokenSellerAddr) {
+            tokenSellerAddr = await this.contractCallRetry(this.poolContract(), poolAddress, 'tokenSeller');
+            if (tokenSellerAddr) {
+                this.tokenSellerAddresses.set(poolAddress, tokenSellerAddr);
+            } else {
+                throw new InternalError(`Cannot fetch token seller contract address`);
             }
+        }
 
-            return tokenSellerAddr;
-        }, 'Cannot get token seller contract address');
+        return tokenSellerAddr;
     }
 
 
@@ -371,28 +326,22 @@ export class EvmNetwork implements NetworkBackend {
     // -------------------------------------------------------------------------------
 
     public async getDirectDepositQueueContract(poolAddress: string): Promise<string> {
-        return this.commonRpcRetry(async () => {
-            let ddContractAddr = this.ddContractAddresses.get(poolAddress);
-            if (!ddContractAddr) {
-                this.poolContract().options.address = poolAddress;
-                ddContractAddr = await this.poolContract().methods.direct_deposit_queue().call();
-                if (ddContractAddr) {
-                    this.ddContractAddresses.set(poolAddress, ddContractAddr);
-                } else {
-                    throw new InternalError(`Cannot fetch DD contract address`);
-                }
+        let ddContractAddr = this.ddContractAddresses.get(poolAddress);
+        if (!ddContractAddr) {
+            ddContractAddr = await this.contractCallRetry(this.poolContract(), poolAddress, 'direct_deposit_queue');
+            if (ddContractAddr) {
+                this.ddContractAddresses.set(poolAddress, ddContractAddr);
+            } else {
+                throw new InternalError(`Cannot fetch DD contract address`);
             }
+        }
 
-            return ddContractAddr;
-        }, 'Cannot get direct deposit contract address');
+        return ddContractAddr;
     }
 
     public async getDirectDepositFee(ddQueueAddress: string): Promise<bigint> {
-        return this.commonRpcRetry(async () => {
-            this.directDepositContract().options.address = ddQueueAddress;
-            
-            return BigInt(await this.directDepositContract().methods.directDepositFee().call());
-        }, 'Cannot get direct deposit fee');
+        const fee = await this.contractCallRetry(this.directDepositContract(), ddQueueAddress, 'directDepositFee');
+        return BigInt(fee);
     }
 
     public async createDirectDepositTx(
@@ -529,7 +478,7 @@ export class EvmNetwork implements NetworkBackend {
         //  - it should be 20-byte length
         //  - if it contains checksum (EIP-55) it should be valid
         //  - zero addresses are prohibited to withdraw
-        return isHexPrefixed(address) && isAddress(address) && address.toLowerCase() != NULL_ADDRESS;
+        return isHexPrefixed(address) && isAddress(address) && address.toLowerCase() != ZERO_ADDRESS;
     }
 
     public addressFromPrivateKey(privKeyBytes: Uint8Array): string {
@@ -556,12 +505,23 @@ export class EvmNetwork implements NetworkBackend {
         return addHexPrefix(hexString);
     }
 
+    private async getTransaction(txHash: string): Promise<any> {
+        return this.commonRpcRetry(() => {
+            return this.activeWeb3().eth.getTransaction(txHash);
+        }, 'Cannot get tx', RETRY_COUNT);
+    }
+
+    private async getTransactionReceipt(txHash: string): Promise<TransactionReceipt> {
+        return this.commonRpcRetry(() => {
+            return this.activeWeb3().eth.getTransactionReceipt(txHash);
+        }, 'Cannot get tx receipt', RETRY_COUNT);
+    }
+
     public async getTxRevertReason(txHash: string): Promise<string | null> {
-        const txReceipt = await this.activeWeb3().eth.getTransactionReceipt(txHash);
+        const txReceipt = await this.getTransactionReceipt(txHash);
         if (txReceipt && txReceipt.status !== undefined) {
             if (txReceipt.status == false) {
-                const txData = await this.activeWeb3().eth.getTransaction(txHash);
-                
+                const txData = await this.getTransaction(txHash);                
                 let reason = 'unknown reason';
                 try {
                     await this.activeWeb3().eth.call(txData as TransactionConfig, txData.blockNumber as number);
@@ -582,20 +542,26 @@ export class EvmNetwork implements NetworkBackend {
     }
 
     public async getChainId(): Promise<number> {
-        return await this.activeWeb3().eth.getChainId();
+        return this.commonRpcRetry(async () => {
+            return this.activeWeb3().eth.getChainId();
+        }, 'Cannot get chain ID', RETRY_COUNT);
     }
 
     public async getNativeBalance(address: string): Promise<bigint> {
-        return BigInt(await this.activeWeb3().eth.getBalance(address));
+        return this.commonRpcRetry(async () => {
+            return BigInt(await this.activeWeb3().eth.getBalance(address));
+        }, 'Cannot get native balance', RETRY_COUNT);
     }
 
     public async getNativeNonce(address: string): Promise<number> {
-        return Number(await this.activeWeb3().eth.getTransactionCount(address))
+        return this.commonRpcRetry(async () => {
+            return Number(await this.activeWeb3().eth.getTransactionCount(address))
+        }, 'Cannot get native nonce', RETRY_COUNT);
     }
 
     public async getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null> {
         try {
-            const transactionObj = await this.activeWeb3().eth.getTransaction(poolTxHash);
+            const transactionObj = await this.getTransaction(poolTxHash);
             if (transactionObj && transactionObj.blockNumber && transactionObj.input) {
                 const txData = truncateHexPrefix(transactionObj.input);
                 const block = await this.activeWeb3().eth.getBlock(transactionObj.blockNumber).catch(() => null);
@@ -608,7 +574,7 @@ export class EvmNetwork implements NetworkBackend {
                     }
 
                     let isMined = false;
-                    const txReceipt = await this.activeWeb3().eth.getTransactionReceipt(poolTxHash);
+                    const txReceipt = await this.getTransactionReceipt(poolTxHash);                    
                     if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
                         isMined = true;
                     }
