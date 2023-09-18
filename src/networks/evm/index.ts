@@ -12,11 +12,10 @@ import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
         personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
 import { privateToAddress, bufferToHex, isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
-import promiseRetry from 'promise-retry';
 import { Transaction, TransactionReceipt } from 'web3-core';
+import { RpcManagerDelegate, MultiRpcManager } from '../rpcman';
 
-const RPC_ISSUES_THRESHOLD = 50;
-const RETRY_COUNT = 20;
+const RETRY_COUNT = 10;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 export enum PoolSelector {
@@ -24,13 +23,7 @@ export enum PoolSelector {
     AppendDirectDeposit = "1dc4cb33",
   }
 
-export class EvmNetwork implements NetworkBackend {
-    // RPC URL management
-    private rpcUrls: string[];
-    private curRpcIdx: number;
-    private curRpcIssues = 0;
-    private badRpcs: number[] = []; // RPC indexes which are considered to be unstable or unavailable
-
+export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcManagerDelegate {
     // These properties can be undefined when backend in the disabled state
     private web3?: Web3;
     private pool?: Contract;
@@ -46,12 +39,8 @@ export class EvmNetwork implements NetworkBackend {
     // -------------------------------------------------------------------------------
 
     constructor(rpcUrls: string[], enabled: boolean = true) {
-        if (rpcUrls.length == 0) {
-            throw new InternalError(`Unable to initialize EvmNetwork without RPC URL`);
-        }
-
-        this.rpcUrls = rpcUrls;
-        this.curRpcIdx = 0;
+        super(rpcUrls);
+        super.delegate = this;
 
         if (enabled) {
             this.setEnabled(true);
@@ -68,7 +57,7 @@ export class EvmNetwork implements NetworkBackend {
     public setEnabled(enabled: boolean) {
         if (enabled) {
             if (!this.isEnabled()) {
-                this.web3 = new Web3(this.curRpcUrl());
+                this.web3 = new Web3(super.curRpcUrl());
                 this.pool = new this.web3.eth.Contract(poolContractABI) as unknown as Contract;
                 this.dd = new this.web3.eth.Contract(ddContractABI) as unknown as Contract;
                 this.token = new this.web3.eth.Contract(tokenABI) as unknown as Contract;
@@ -118,88 +107,10 @@ export class EvmNetwork implements NetworkBackend {
                 contract.options.address = address;
                 return await contract.methods[method](...args).call()
             },
-            `Contract call (${method}) error`,
+            `[EvmNetwork] Contract call (${method}) error`,
             RETRY_COUNT
         );
     }
-
-    private commonRpcRetry(closure: () => any, errorPattern: string, retriesCnt: number): Promise<any> {
-        return promiseRetry(
-            async (retry, attempt) => {
-              try {
-                  return await closure();
-              } catch (e) {
-                  console.error(`${errorPattern ?? 'Error occured'} [attempt #${attempt}]: ${e.message}`);
-                  this.registerRpcIssue();
-                  retry(e)
-              }
-            },
-            {
-              retries: retriesCnt,
-              minTimeout: 500,
-              maxTimeout: 500,
-            }
-          );
-    }
-
-    // ----------------------=========< RPC switching >=========----------------------
-    // | Getting current RPC, registering issues, switching between RPCs             |
-    // -------------------------------------------------------------------------------
-
-    public curRpcUrl(): string {
-        if (this.curRpcIdx < 0) {
-            return this.rpcUrls[0];
-        } else if (this.curRpcIdx >= this.rpcUrls.length) {
-            return this.rpcUrls[this.rpcUrls.length - 1];
-        } else {
-            return this.rpcUrls[this.curRpcIdx];
-        }
-    }
-
-    // Call this routine to increase issue counter
-    // The RPC will be swiching automatically on threshold
-    private registerRpcIssue() {
-        if (++this.curRpcIssues >= RPC_ISSUES_THRESHOLD) {
-            if (this.switchRPC(undefined, true)) {
-                this.curRpcIssues = 0;
-            }
-        }
-    }
-
-    private switchRPC(index?: number, markCurrentAsBad: boolean = true): boolean {
-        if (markCurrentAsBad && !this.badRpcs.includes(this.curRpcIdx)) {
-            this.badRpcs.push(this.curRpcIdx);
-            console.log(`[EvmNetwork]: RPC ${this.curRpcUrl()} marked as bad (${this.curRpcIssues} issues registered)`);
-        }
-
-
-        let newRpcIndex = index ?? this.curRpcIdx;
-        if (index === undefined && this.rpcUrls.length > 1) {
-            let passesCnt = 0;
-            do {
-                newRpcIndex = (newRpcIndex + 1) % this.rpcUrls.length;
-                if (!this.badRpcs.includes(newRpcIndex) || passesCnt > 0) {
-                    break;
-                }
-
-                if (newRpcIndex == this.curRpcIdx) {
-                    passesCnt++;
-                }
-            } while(passesCnt < 2)
-        }
-
-        if (newRpcIndex != this.curRpcIdx) {
-            this.setEnabled(false);
-            this.curRpcIdx = newRpcIndex;
-            this.setEnabled(true);
-            console.log(`[EvmNetwork]: RPC was switched to ${this.curRpcUrl()}`);
-
-            return true;
-        }
-
-        return false;
-    }
-
 
     // -----------------=========< Token-Related Routiness >=========-----------------
     // | Getting balance, allowance, nonce etc                                       |

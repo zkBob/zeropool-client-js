@@ -91,7 +91,7 @@ export class DirectDepositProcessor {
 
     public async pendingDirectDeposits(): Promise<DirectDeposit[]> {
         if (this.subgraph) {
-            return this.subgraph.pendingDirectDeposits(this.state);
+            return this.subgraph.pendingDirectDeposits(this.state).catch(() => []);
         } else {
             console.warn('There is no configured subraph to query pending DD')
         }

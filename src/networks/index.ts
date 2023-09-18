@@ -1,4 +1,4 @@
-import { EvmNetwork, TxType } from "..";
+import { EvmNetwork, InternalError, TxType } from "..";
 import { PoolTxDetails } from "../tx";
 import { TronNetwork } from "./tron";
 
@@ -14,7 +14,6 @@ export interface NetworkBackend {
     // Backend Maintenance
     isEnabled(): boolean;
     setEnabled(enabled: boolean);
-    curRpcUrl(): string
 
     // Token 
     getTokenName(tokenAddress: string): Promise<string>;

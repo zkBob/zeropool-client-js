@@ -7,18 +7,19 @@ import { bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../.
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from '../evm/calldata';
 import { hexToBytes } from 'web3-utils';
 import { PoolSelector } from '../evm';
+import promiseRetry from 'promise-retry';
+import { MultiRpcManager, RpcManagerDelegate } from '../rpcman';
 
 const TronWeb = require('tronweb')
 const bs58 = require('bs58')
 
+const RETRY_COUNT = 20;
 const DEFAULT_DECIMALS = 6;
 const DEFAULT_CHAIN_ID = 0x2b6653dc;
 const DEFAULT_ENERGY_FEE = 420;
 const ZERO_ADDRESS = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
 
-export class TronNetwork implements NetworkBackend {
-    protected rpcUrls: string[];
-    private curRpcIdx: number;
+export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcManagerDelegate {
     protected tronWeb;
     protected address: string;
     // We need to cache a contract object for the each token address separately
@@ -39,12 +40,8 @@ export class TronNetwork implements NetworkBackend {
     // | Init, enabling and disabling backend                                        |
     // -------------------------------------------------------------------------------
     constructor(rpcUrls: string[], enabled: boolean = true) {
-        if (rpcUrls.length == 0) {
-            throw new InternalError(`TronNetwork: Unable to initialize TronNetwork without RPC URL`);
-        }
-
-        this.rpcUrls = rpcUrls.map((aUrl) => aUrl.endsWith('/') ? aUrl : aUrl += '/' );
-        this.curRpcIdx = -1;
+        super(rpcUrls);
+        super.delegate = this;
 
         if (enabled) {
             this.setEnabled(true);
@@ -121,19 +118,13 @@ export class TronNetwork implements NetworkBackend {
         return contract;
     }
 
-
-    // ------------------=========< RPC-related routines >=========-------------------
-    // | Getting current RPC             |
-    // -------------------------------------------------------------------------------
-
-    public curRpcUrl(): string {
-        if (this.curRpcIdx < 0) {
-            return this.rpcUrls[0];
-        } else if (this.curRpcIdx >= this.rpcUrls.length) {
-            return this.rpcUrls[this.rpcUrls.length - 1];
-        } else {
-            return this.rpcUrls[this.curRpcIdx];
-        }
+    private contractCallRetry(contract: any, method: string, args: any[] = []): Promise<any> {
+        return this.commonRpcRetry(async () => {
+                return await contract[method](...args).call()
+            },
+            `[TronNetwork] Contract call (${method}) error`,
+            RETRY_COUNT,
+        );
     }
     
     // -----------------=========< Token-Related Routiness >=========-----------------
@@ -145,7 +136,7 @@ export class TronNetwork implements NetworkBackend {
         if (!res) {
             try {
                 const token = await this.getTokenContract(tokenAddress);
-                res = await token.symbol().call();
+                res = await this.contractCallRetry(token, 'symbol');
                 if (typeof res === 'string') {
                     this.tokenSymbols.set(tokenAddress, res);
                 } else {
@@ -164,7 +155,7 @@ export class TronNetwork implements NetworkBackend {
         if (!res) {
             try {
                 const token = await this.getTokenContract(tokenAddress);
-                res = Number(await token.decimals().call());
+                res = Number(await this.contractCallRetry(token, 'decimals'));
                 this.tokenDecimals.set(tokenAddress, res);
             } catch (err) {
                 console.warn(`Cannot fetch decimals for the token ${tokenAddress}, using default (${DEFAULT_DECIMALS}). Reason: ${err.message}`);
@@ -184,14 +175,14 @@ export class TronNetwork implements NetworkBackend {
 
     public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {
         const token = await this.getTokenContract(tokenAddress);
-        let result = await token.balanceOf(address).call();
+        let result = await this.contractCallRetry(token, 'balanceOf');
 
         return BigInt(result);
     }
 
     public async allowance(tokenAddress: string, owner: string, spender: string): Promise<bigint> {
         const token = await this.getTokenContract(tokenAddress);
-        let result = await token.allowance(owner, spender).call();
+        let result = await this.contractCallRetry(token, 'allowance', [owner, spender]);
 
         return BigInt(result);
     }
@@ -226,14 +217,14 @@ export class TronNetwork implements NetworkBackend {
 
     public async getPoolId(poolAddress: string): Promise<number> {
         const pool = await this.getPoolContract(poolAddress);
-        let result = await pool.pool_id().call();
+        let result = await this.contractCallRetry(pool, 'pool_id');
 
         return Number(result);
     }
 
     public async getDenominator(poolAddress: string): Promise<bigint> {
         const pool = await this.getPoolContract(poolAddress);
-        let result = await pool.denominator().call();
+        let result = await this.contractCallRetry(pool, 'denominator');
 
         return BigInt(result);
     }
@@ -242,27 +233,26 @@ export class TronNetwork implements NetworkBackend {
         const pool = await this.getPoolContract(poolAddress);
         let idx;
         if (index === undefined) {
-            idx = await pool.pool_index().call();
+            idx = await this.contractCallRetry(pool, 'pool_index');
         } else {
             idx = index.toString();
         }
-        const root = await pool.roots(idx).call();
+        const root = await this.contractCallRetry(pool, 'roots');
 
         return {index: BigInt(idx), root: BigInt(root)};
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
         const pool = await this.getPoolContract(poolAddress);
-        let addr = address ?? ZERO_ADDRESS;
-        
-        return await pool.getLimitsFor(addr).call();
+        return await this.contractCallRetry(pool, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
     }
 
     public async getTokenSellerContract(poolAddress: string): Promise<string> {
         let tokenSellerAddr = this.tokenSellerAddresses.get(poolAddress);
         if (!tokenSellerAddr) {
             const pool = await this.getPoolContract(poolAddress);
-            tokenSellerAddr = TronWeb.address.fromHex(await pool.tokenSeller().call());
+            const rawAddr = await this.contractCallRetry(pool, 'tokenSeller');
+            tokenSellerAddr = TronWeb.address.fromHex(rawAddr);
             if (tokenSellerAddr) {
                 this.tokenSellerAddresses.set(poolAddress, tokenSellerAddr);
             } else {
@@ -282,7 +272,8 @@ export class TronNetwork implements NetworkBackend {
         let ddContractAddr = this.ddContractAddresses.get(poolAddress);
         if (!ddContractAddr) {
             const pool = await this.getPoolContract(poolAddress);
-            ddContractAddr = TronWeb.address.fromHex(await pool.direct_deposit_queue().call());
+            const rawAddr = await this.contractCallRetry(pool, 'direct_deposit_queue');
+            ddContractAddr = TronWeb.address.fromHex(rawAddr);
             if (ddContractAddr) {
                 this.ddContractAddresses.set(poolAddress, ddContractAddr);
             } else {
@@ -295,8 +286,7 @@ export class TronNetwork implements NetworkBackend {
 
     public async getDirectDepositFee(ddQueueAddress: string): Promise<bigint> {
         const dd = await this.getDdContract(ddQueueAddress);
-        
-        return BigInt(await dd.directDepositFee().call());
+        return BigInt(await this.contractCallRetry(dd, 'directDepositFee'));
     }
 
     public async createDirectDepositTx(
@@ -318,7 +308,6 @@ export class TronNetwork implements NetworkBackend {
         if (Array.isArray(contract) && contract.length > 0) {
             txData = truncateHexPrefix(contract[0].parameter?.value?.data);
         }
-        //const protobuf = await this.activeTronweb().utils.transaction.txJsonToPb(tx.transaction);
 
         if (typeof txData !== 'string' && txData.length < 8) {
             throw new InternalError('Unable to extract DD calldata');
@@ -418,8 +407,6 @@ export class TronNetwork implements NetworkBackend {
     }
 
 
-
-
     // ----------------------=========< Miscellaneous >=========----------------------
     // | Getting tx revert reason, chain ID, signature format, etc...                |
     // -------------------------------------------------------------------------------
@@ -489,7 +476,9 @@ export class TronNetwork implements NetworkBackend {
     }
 
     public async getNativeBalance(address: string): Promise<bigint> {
-        return BigInt(await this.activeTronweb().trx.getBalance(address));
+        return this.commonRpcRetry(async () => {
+            return BigInt(await this.activeTronweb().trx.getBalance(address));
+        }, '[TronNetwork] Cannot get native balance', RETRY_COUNT);
     }
 
     public async getNativeNonce(address: string): Promise<number> {
@@ -498,7 +487,9 @@ export class TronNetwork implements NetworkBackend {
 
     public async getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null> {
         try {
-            const tronTransaction = await this.activeTronweb().trx.getTransaction(poolTxHash);
+            const tronTransaction = await this.commonRpcRetry(async () => {
+                return this.activeTronweb().trx.getTransaction(poolTxHash);
+            }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
             //const tronTransactionInfo = await this.activeTronweb().trx.getTransaction(poolTxHash);
             const timestamp = tronTransaction?.raw_data?.timestamp
             const contract = tronTransaction?.raw_data?.contract;
@@ -609,7 +600,9 @@ export class TronNetwork implements NetworkBackend {
     private async getEnergyCost(): Promise<number> {
         if (this.energyFee === undefined) {
             try {
-                const chainParams = await this.activeTronweb().trx.getChainParameters();
+                const chainParams = await this.commonRpcRetry(async () => {
+                    return this.activeTronweb().trx.getChainParameters();
+                }, '[TronNetwork] Cannot get chain parameters', RETRY_COUNT);
                 for (let aParam of chainParams) {
                     if (aParam.key == 'getEnergyFee') {
                         this.energyFee = Number(aParam.value);
@@ -629,7 +622,9 @@ export class TronNetwork implements NetworkBackend {
 
     private async getAccountEnergy(address: string): Promise<number> {
         try {
-            const accResources = await this.activeTronweb().trx.getAccountResources(address);
+            const accResources = await this.commonRpcRetry(async () => {
+                return this.activeTronweb().trx.getAccountResources(address);
+            }, '[TronNetwork] Cannot get account resources', RETRY_COUNT);
             return Number(accResources.EnergyLimit ?? 0) - Number(accResources.EnergyUsed ?? 0);
         } catch(err) {
             console.warn(`Cannot get account energy: ${err}`);
