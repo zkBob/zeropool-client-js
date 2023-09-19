@@ -5,7 +5,7 @@ import { NetworkBackend, PreparedTransaction} from '..';
 import { InternalError } from '../../errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
-import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType } from '../../tx';
+import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType, DirectDeposit, DirectDepositState } from '../../tx';
 import { addHexPrefix, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from './calldata';
 import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
@@ -14,6 +14,7 @@ import { privateToAddress, bufferToHex, isHexPrefixed } from '@ethereumjs/util';
 import { isAddress } from 'web3-utils';
 import { Transaction, TransactionReceipt } from 'web3-core';
 import { RpcManagerDelegate, MultiRpcManager } from '../rpcman';
+import { ZkBobState } from '../../state';
 
 const RETRY_COUNT = 10;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -286,6 +287,38 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
             data: encodedTx,
         };
     }
+
+    public async getDirectDeposit(ddQueueAddress: string, idx: number, state: ZkBobState): Promise<DirectDeposit | undefined> {
+        const ddInfo = await this.contractCallRetry(this.directDepositContract(), ddQueueAddress, 'getDirectDeposit', [idx]);
+        if (ddInfo.status != 0) {
+            const dd: DirectDeposit = {
+                id: BigInt(idx),            // DD queue unique identifier
+                state: Number(ddInfo.status) - 1,
+                amount: BigInt(ddInfo.deposit),        // in pool resolution
+                destination: await state.assembleAddress(ddInfo.diversifier, ddInfo.pk),   // zk-addresss
+                fee: BigInt(ddInfo.fee),           // relayer fee
+                fallback: ddInfo.fallbackReceiver,      // 0x-address to refund DD
+                sender: '',        // 0x-address of sender [to the queue]
+                queueTimestamp: Number(ddInfo.timestamp), // when it was created
+                queueTxHash: '',   // transaction hash to the queue
+                //timestamp?: number;    // when it was sent to the pool
+                //txHash?: string;       // transaction hash to the pool
+                //payment?: DDPaymentInfo;
+            }
+
+            return dd;
+        } 
+        
+        return undefined;
+    }
+
+    /*public async getPendingDirectDeposits(state: ZkBobState): Promise<DirectDeposit[]> {
+        const ddEvents = await this.directDepositContract().getPastEvents('SubmitDirectDeposit');
+        const completedDdEvents = await this.directDepositContract().getPastEvents('CompleteDirectDepositBatch');
+        const refundedDdEvents = await this.directDepositContract().getPastEvents('RefundDirectDeposit');
+
+        return [];
+    }*/
 
 
     // ------------------------=========< Signatures >=========-----------------------

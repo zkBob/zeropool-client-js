@@ -310,6 +310,65 @@ export const ddContractABI: AbiItem[] = [
         type: 'function'
     },
     {
+        inputs: [],
+        name: 'directDepositNonce',
+        outputs: [{
+            internalType: 'uint32',
+            name: '',
+            type: 'uint32'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    },
+    {
+        inputs: [{
+            internalType: 'uint256',
+            name: '_index',
+            type: 'uint256'
+        }],
+        name: 'getDirectDeposit',
+        outputs: [{
+            components: [{
+                internalType: 'address',
+                name: 'fallbackReceiver',
+                type: 'address'
+            }, {
+                internalType: 'uint96',
+                name: 'sent',
+                type: 'uint96'
+            }, {
+                internalType: 'uint64',
+                name: 'deposit',
+                type: 'uint64'
+            }, {
+                internalType: 'uint64',
+                name: 'fee',
+                type: 'uint64'
+            }, {
+                internalType: 'uint40',
+                name: 'timestamp',
+                type: 'uint40'
+            }, {
+                internalType: 'enum IZkBobDirectDeposits.DirectDepositStatus',
+                name: 'status',
+                type: 'uint8'
+            }, {
+                internalType: 'bytes10',
+                name: 'diversifier',
+                type: 'bytes10'
+            }, {
+                internalType: 'bytes32',
+                name: 'pk',
+                type: 'bytes32'
+            }],
+            internalType: 'struct IZkBobDirectDeposits.DirectDeposit',
+            name: '',
+            type: 'tuple'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    },
+    {
         inputs: [{
             internalType: 'address',
             name: '_fallbackUser',
@@ -350,5 +409,77 @@ export const ddContractABI: AbiItem[] = [
         }],
         stateMutability: 'payable',
         type: 'function'
+    },
+    {
+        anonymous: false,
+        inputs: [{
+            indexed: true,
+            internalType: 'address',
+            name: 'sender',
+            type: 'address'
+        }, {
+            indexed: true,
+            internalType: 'uint256',
+            name: 'nonce',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'address',
+            name: 'fallbackUser',
+            type: 'address'
+        }, {
+            components: [{
+                internalType: 'bytes10',
+                name: 'diversifier',
+                type: 'bytes10'
+            }, {
+                internalType: 'bytes32',
+                name: 'pk',
+                type: 'bytes32'
+            }],
+            indexed: false,
+            internalType: 'struct ZkAddress.ZkAddress',
+            name: 'zkAddress',
+            type: 'tuple'
+        }, {
+            indexed: false,
+            internalType: 'uint64',
+            name: 'deposit',
+            type: 'uint64'
+        }],
+        name: 'SubmitDirectDeposit',
+        type: 'event'
+    },
+    {
+        anonymous: false,
+        inputs: [{
+            indexed: false,
+            internalType: 'uint256[]',
+            name: 'indices',
+            type: 'uint256[]'
+        }],
+        name: 'CompleteDirectDepositBatch',
+        type: 'event'
+    },
+    {
+        anonymous: false,
+        inputs: [{
+            indexed: true,
+            internalType: 'uint256',
+            name: 'nonce',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'address',
+            name: 'receiver',
+            type: 'address'
+        }, {
+            indexed: false,
+            internalType: 'uint256',
+            name: 'amount',
+            type: 'uint256'
+        }],
+        name: 'RefundDirectDeposit',
+        type: 'event'
     },
 ];
