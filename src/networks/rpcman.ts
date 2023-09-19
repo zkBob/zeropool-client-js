@@ -1,7 +1,7 @@
 import { InternalError } from "../errors";
 import promiseRetry from 'promise-retry';
 
-const RPC_ISSUES_THRESHOLD = 50;    // number of errors needed to switch RPC
+const RPC_ISSUES_THRESHOLD = 20;    // number of errors needed to switch RPC
 
 export interface RpcManagerDelegate {
     setEnabled(enabled: boolean); 
@@ -93,6 +93,7 @@ export class MultiRpcManager {
             this.delegate?.setEnabled(false);
             this.curRpcIdx = newRpcIndex;
             this.delegate?.setEnabled(true);
+            this.curRpcIssues = 0;
             console.log(`[MultiRpcManager]: RPC was switched to ${this.curRpcUrl()}`);
 
             return true;

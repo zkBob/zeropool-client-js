@@ -173,6 +173,7 @@ export class ZkBobSubgraph {
                         if (shieldedTx.extra && shieldedTx.extra.length >= 128) {
                             const approveSigner = DepositSignerFactory.createSigner(network, DepositType.Approve);
                             const depositData: DepositData = {
+                                // this stub needed to recover approve signature (just a nullifier make sense here)
                                 tokenAddress: '', owner: '', spender: '', amount: 0n, deadline: 0n, nullifier: txDetails.nullifier
                             }
                             const signature = shieldedTx.extra.slice(0, 128);

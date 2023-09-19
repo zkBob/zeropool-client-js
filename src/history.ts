@@ -656,7 +656,7 @@ export class HistoryStorage {
           recTs < (toTimestamp ?? Number.MAX_VALUE) &&
           value.state == HistoryRecordState.Mined
       ) {
-        const txDetails = await this.network.getTxDetails(treeIndex, value.txHash);
+        const txDetails = await this.network.getTxDetails(treeIndex, value.txHash, this.state);
         const details = txDetails?.details;
         if (txDetails && details instanceof RegularTxDetails) {  // txDetails belongs to a regular transaction
           // regular transaction
@@ -934,14 +934,14 @@ export class HistoryStorage {
     // get unprocessed memos
     const unparsedMemos = memos.filter((aMemo) => !fetchedIndexes.includes(aMemo.index));
 
-    // fetch fromthe RPC node unprocessed txs by subgraph
+    // fetch from the RPC node unprocessed txs by subgraph
     if (this.subgraph && unparsedMemos.length > 0) {
       console.warn(`[HistoryStorage] Cannot fetch ${unparsedMemos.length} of ${memos.length} indexes from subgraph. Fallbacking to RPC node: ${unparsedMemos.map((aMemo) => aMemo.index).join(', ')}`);
     }
     const promises: Promise<PoolTxDetails | null>[] = [];
     for (let aMemo of unparsedMemos) {
       if (aMemo.txHash) {
-        promises.push(this.network.getTxDetails(aMemo.index, aMemo.txHash));
+        promises.push(this.network.getTxDetails(aMemo.index, aMemo.txHash, this.state));
       }
     }
     const res = await Promise.all(promises);
@@ -1037,7 +1037,7 @@ export class HistoryStorage {
           details.deposits.forEach(async (aDeposit, idx) => {
             const tokenMoving = {to: aDeposit.destination, amount: aDeposit.amount };
             const rec = await HistoryRecord.directDeposit(
-              aDeposit.sender,
+              aDeposit.sender && aDeposit.sender != '' ? aDeposit.sender : aDeposit.fallback,
               aDeposit.destination,
               aDeposit.amount,
               aDeposit.fee,

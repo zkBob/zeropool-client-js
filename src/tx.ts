@@ -14,7 +14,7 @@ export function txTypeToString(txType: RegularTxType): string {
   }
 }
 
-/** The raw low-level transaction data used on most networks. */
+// The raw low-level transaction data used on most networks
 export class ShieldedTx {
   nullifier: bigint;
   outCommit: bigint;
@@ -29,8 +29,22 @@ export class ShieldedTx {
   extra: string;
 }
 
-// The top-level transaction details needed in the client library (HistoryStorage for example)
+// The raw low-level append direct deposit calldata
+/*export class AppendDDTx {
+  nullifier: bigint;
+  outCommit: bigint;
+  transferIndex: bigint;
+  energyAmount: bigint;
+  tokenAmount: bigint;
+  transactProof: bigint[];
+  rootAfter: bigint;
+  treeProof: bigint[];
+  txType: RegularTxType;
+  memo: string;
+  extra: string;
+}*/
 
+// The top-level transaction details needed in the client library (HistoryStorage for example)
 export enum PoolTxType {
   Regular,
   DirectDepositBatch,

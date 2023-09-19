@@ -290,10 +290,11 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public async getDirectDeposit(ddQueueAddress: string, idx: number, state: ZkBobState): Promise<DirectDeposit | undefined> {
         const ddInfo = await this.contractCallRetry(this.directDepositContract(), ddQueueAddress, 'getDirectDeposit', [idx]);
-        if (ddInfo.status != 0) {
-            const dd: DirectDeposit = {
+        const ddStatusCode = Number(ddInfo.status);
+        if (ddStatusCode != 0) {
+            return {
                 id: BigInt(idx),            // DD queue unique identifier
-                state: Number(ddInfo.status) - 1,
+                state: (ddStatusCode - 1) as DirectDepositState,
                 amount: BigInt(ddInfo.deposit),        // in pool resolution
                 destination: await state.assembleAddress(ddInfo.diversifier, ddInfo.pk),   // zk-addresss
                 fee: BigInt(ddInfo.fee),           // relayer fee
@@ -304,9 +305,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                 //timestamp?: number;    // when it was sent to the pool
                 //txHash?: string;       // transaction hash to the pool
                 //payment?: DDPaymentInfo;
-            }
-
-            return dd;
+            };
         } 
         
         return undefined;
@@ -449,7 +448,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         return addHexPrefix(hexString);
     }
 
-    private async getTransaction(txHash: string): Promise<any> {
+    private async getTransaction(txHash: string): Promise<Transaction> {
         return this.commonRpcRetry(() => {
             return this.activeWeb3().eth.getTransaction(txHash);
         }, 'Cannot get tx', RETRY_COUNT);
@@ -503,7 +502,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         }, 'Cannot get native nonce', RETRY_COUNT);
     }
 
-    public async getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null> {
+    public async getTxDetails(index: number, poolTxHash: string, state: ZkBobState): Promise<PoolTxDetails | null> {
         try {
             const transactionObj = await this.getTransaction(poolTxHash);
             if (transactionObj && transactionObj.blockNumber && transactionObj.input) {
@@ -564,9 +563,33 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                         txInfo.txHash = poolTxHash;
                         txInfo.isMined = isMined;
                         txInfo.timestamp = timestamp;
-                        txInfo.deposits = [];    // TODO!!!
+                        txInfo.deposits = [];
 
-                        // WIP
+                        // get appendDirectDeposits input ABI
+                        const ddAbi = poolContractABI.find((val) => val.name == 'appendDirectDeposits');
+                        if (ddAbi && ddAbi.inputs) {
+                            const decoded = this.activeWeb3().eth.abi.decodeParameters(ddAbi.inputs, txData.slice(8));
+                            if (decoded._indices && Array.isArray(decoded._indices) && transactionObj.to) {
+                                const ddQueue = await this.getDirectDepositQueueContract(transactionObj.to)
+                                const directDeposits = (await Promise.all(decoded._indices.map(async (ddIdx) => {
+                                    const dd = await this.getDirectDeposit(ddQueue, Number(ddIdx), state);
+                                    const isOwn = dd ? await state.isOwnAddress(dd.destination) : false;
+                                    return {dd, isOwn}
+                                })))
+                                .filter((val) => val.dd && val.isOwn )  // exclude not own DDs
+                                .map((val) => {
+                                    const aDD = val.dd as DirectDeposit;
+                                    aDD.txHash = poolTxHash;
+                                    aDD.timestamp = timestamp;
+                                    return aDD;
+                                });
+                                txInfo.deposits = directDeposits;
+                            } else {
+                                console.error(`Could not decode appendDirectDeposits calldata`);
+                            }
+                        } else {
+                            console.error(`Could not find appendDirectDeposits method input ABI`);
+                        }
 
                         return {
                             poolTxType: PoolTxType.DirectDepositBatch,

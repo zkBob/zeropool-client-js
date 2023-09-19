@@ -5,7 +5,7 @@ import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
           Note,
       } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
-import { bufToHex, isRangesIntersected } from './utils';
+import { bufToHex, forceDecimal, isRangesIntersected } from './utils';
 import { hash } from 'tweetnacl';
 import { EphemeralPool } from './ephemeral';
 import { NetworkType } from './network-type';
@@ -268,7 +268,7 @@ export class ZkBobState {
   }
 
   public async assembleAddress(d: string, p_d: string): Promise<string> {
-    return this.worker.assembleAddress(this.stateId, d, p_d);
+    return this.worker.assembleAddress(this.stateId, forceDecimal(d), forceDecimal(p_d));
   }
 
   // Converts zk-addresss from the old prefixless format to the new chain-specific one

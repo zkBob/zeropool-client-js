@@ -108,6 +108,14 @@ export function hexToBuf(hex: string, bytesCnt: number = 0): Uint8Array {
   return buffer;
 }
 
+export function forceDecimal(hexOrDec: string): string {
+  if (hexOrDec.startsWith('0x')) {
+    return BigInt(hexOrDec).toString(10);
+  }
+
+  return hexOrDec;
+}
+
 export function isEqualBuffers(buf1: Uint8Array, buf2: Uint8Array): boolean {
   if (buf1.length != buf2.length) {
     return false;

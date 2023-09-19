@@ -7,13 +7,13 @@ import { bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../.
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from '../evm/calldata';
 import { hexToBytes } from 'web3-utils';
 import { PoolSelector } from '../evm';
-import promiseRetry from 'promise-retry';
 import { MultiRpcManager, RpcManagerDelegate } from '../rpcman';
+import { ZkBobState } from '../../state';
 
 const TronWeb = require('tronweb')
 const bs58 = require('bs58')
 
-const RETRY_COUNT = 20;
+const RETRY_COUNT = 5;
 const DEFAULT_DECIMALS = 6;
 const DEFAULT_CHAIN_ID = 0x2b6653dc;
 const DEFAULT_ENERGY_FEE = 420;
@@ -175,7 +175,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
 
     public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {
         const token = await this.getTokenContract(tokenAddress);
-        let result = await this.contractCallRetry(token, 'balanceOf');
+        let result = await this.contractCallRetry(token, 'balanceOf', [address]);
 
         return BigInt(result);
     }
@@ -237,7 +237,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         } else {
             idx = index.toString();
         }
-        const root = await this.contractCallRetry(pool, 'roots');
+        const root = await this.contractCallRetry(pool, 'roots', [idx]);
 
         return {index: BigInt(idx), root: BigInt(root)};
     }
@@ -485,7 +485,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return 0;
     }
 
-    public async getTxDetails(index: number, poolTxHash: string): Promise<PoolTxDetails | null> {
+    public async getTxDetails(index: number, poolTxHash: string, state: ZkBobState): Promise<PoolTxDetails | null> {
         try {
             const tronTransaction = await this.commonRpcRetry(async () => {
                 return this.activeTronweb().trx.getTransaction(poolTxHash);

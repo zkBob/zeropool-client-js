@@ -19,73 +19,77 @@ export const CALLDATA_DEPOSIT_SIGNATURE_LENGTH: number = 64;
 
 
 export function estimateEvmCalldataLength(txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
-    let txSpecificLen = 0;
-    switch (txType) {
-      case RegularTxType.Deposit:
-        txSpecificLen = CALLDATA_MEMO_APPROVE_DEPOSIT_BASE_LENGTH + CALLDATA_DEPOSIT_SIGNATURE_LENGTH;
-        break;
-  
-      case RegularTxType.BridgeDeposit:
-        txSpecificLen = CALLDATA_MEMO_DEPOSIT_BASE_LENGTH + CALLDATA_DEPOSIT_SIGNATURE_LENGTH;
-        break;
-  
-      case RegularTxType.Transfer:
-        txSpecificLen = CALLDATA_MEMO_TRANSFER_BASE_LENGTH;
-        break;
-  
-      case RegularTxType.Withdraw:
-        txSpecificLen = CALLDATA_MEMO_WITHDRAW_BASE_LENGTH;
-        break;
-    }
-  
-    return CALLDATA_BASE_LENGTH + txSpecificLen + extraDataLen + notesCnt * CALLDATA_MEMO_NOTE_LENGTH;
+  let txSpecificLen = 0;
+  switch (txType) {
+    case RegularTxType.Deposit:
+      txSpecificLen = CALLDATA_MEMO_APPROVE_DEPOSIT_BASE_LENGTH + CALLDATA_DEPOSIT_SIGNATURE_LENGTH;
+      break;
+
+    case RegularTxType.BridgeDeposit:
+      txSpecificLen = CALLDATA_MEMO_DEPOSIT_BASE_LENGTH + CALLDATA_DEPOSIT_SIGNATURE_LENGTH;
+      break;
+
+    case RegularTxType.Transfer:
+      txSpecificLen = CALLDATA_MEMO_TRANSFER_BASE_LENGTH;
+      break;
+
+    case RegularTxType.Withdraw:
+      txSpecificLen = CALLDATA_MEMO_WITHDRAW_BASE_LENGTH;
+      break;
   }
 
-  export function decodeEvmCalldata(calldata: string): ShieldedTx {
-    const tx = new ShieldedTx();
-    const reader = new HexStringReader(calldata);
+  return CALLDATA_BASE_LENGTH + txSpecificLen + extraDataLen + notesCnt * CALLDATA_MEMO_NOTE_LENGTH;
+}
 
-    const selector = reader.readHex(4)!;
-    if (selector.toLocaleLowerCase() != PoolSelector.Transact) {
-        throw new InternalError(`[EvmNetwork] Cannot decode transaction: incorrect selector ${selector} (expected ${PoolSelector.Transact})`);
-    }
-    
-    tx.nullifier = reader.readBigInt(32)!;
-    assertNotNull(tx.nullifier);
-    tx.outCommit = reader.readBigInt(32)!;
-    assertNotNull(tx.outCommit);
-    tx.transferIndex = reader.readBigInt(6)!;
-    assertNotNull(tx.transferIndex);
-    tx.energyAmount = reader.readSignedBigInt(14)!;
-    assertNotNull(tx.energyAmount);
-    tx.tokenAmount = reader.readSignedBigInt(8)!;
-    assertNotNull(tx.tokenAmount);
-    tx.transactProof = reader.readBigIntArray(8, 32);
-    tx.rootAfter = reader.readBigInt(32)!;
-    assertNotNull(tx.rootAfter);
-    tx.treeProof = reader.readBigIntArray(8, 32);
-    tx.txType = reader.readHex(2) as RegularTxType;
-    assertNotNull(tx.txType);
-    const memoSize = reader.readNumber(2);
-    assertNotNull(memoSize);
-    tx.memo = reader.readHex(memoSize)!;
-    assertNotNull(tx.memo);
+export function decodeEvmCalldata(calldata: string): ShieldedTx {
+  const tx = new ShieldedTx();
+  const reader = new HexStringReader(calldata);
 
-    // Extra data
-    // It contains deposit holder signature for deposit transactions
-    // or any other data which user can append
-    tx.extra = reader.readHexToTheEnd()!;
-    assertNotNull(tx.extra);
+  const selector = reader.readHex(4)!;
+  if (selector.toLocaleLowerCase() != PoolSelector.Transact) {
+      throw new InternalError(`[EvmNetwork] Cannot decode transaction: incorrect selector ${selector} (expected ${PoolSelector.Transact})`);
+  }
+  
+  tx.nullifier = reader.readBigInt(32)!;
+  assertNotNull(tx.nullifier);
+  tx.outCommit = reader.readBigInt(32)!;
+  assertNotNull(tx.outCommit);
+  tx.transferIndex = reader.readBigInt(6)!;
+  assertNotNull(tx.transferIndex);
+  tx.energyAmount = reader.readSignedBigInt(14)!;
+  assertNotNull(tx.energyAmount);
+  tx.tokenAmount = reader.readSignedBigInt(8)!;
+  assertNotNull(tx.tokenAmount);
+  tx.transactProof = reader.readBigIntArray(8, 32);
+  tx.rootAfter = reader.readBigInt(32)!;
+  assertNotNull(tx.rootAfter);
+  tx.treeProof = reader.readBigIntArray(8, 32);
+  tx.txType = reader.readHex(2) as RegularTxType;
+  assertNotNull(tx.txType);
+  const memoSize = reader.readNumber(2);
+  assertNotNull(memoSize);
+  tx.memo = reader.readHex(memoSize)!;
+  assertNotNull(tx.memo);
 
-    return tx;
+  // Extra data
+  // It contains deposit holder signature for deposit transactions
+  // or any other data which user can append
+  tx.extra = reader.readHexToTheEnd()!;
+  assertNotNull(tx.extra);
+
+  return tx;
 }
 
 export function getCiphertext(tx: ShieldedTx): string {
-    if (tx.txType === RegularTxType.Withdraw) {
-      return tx.memo.slice(MEMO_META_WITHDRAW_SIZE * 2);
-    } else if (tx.txType === RegularTxType.BridgeDeposit) {
-      return tx.memo.slice(MEMO_META_PERMITDEPOSIT_SIZE * 2);
-    }
-
-    return tx.memo.slice(MEMO_META_DEFAULT_SIZE * 2);
+  if (tx.txType === RegularTxType.Withdraw) {
+    return tx.memo.slice(MEMO_META_WITHDRAW_SIZE * 2);
+  } else if (tx.txType === RegularTxType.BridgeDeposit) {
+    return tx.memo.slice(MEMO_META_PERMITDEPOSIT_SIZE * 2);
   }
+
+  return tx.memo.slice(MEMO_META_DEFAULT_SIZE * 2);
+}
+
+export function decodeEvmCalldataAppendDD(calldata: string) {
+  
+}
