@@ -1692,7 +1692,7 @@ export class ZkBobClient extends ZkBobProvider {
   protected ddProcessor(): DirectDepositProcessor {
     const proccessor = this.ddProcessors[this.curPool];
     if (!proccessor) {
-        throw new InternalError(`No direct deposit processer initialized for the pool ${this.curPool}`);
+        throw new InternalError(`No direct deposit processor initialized for the pool ${this.curPool}`);
     }
 
     return proccessor;
@@ -1703,7 +1703,13 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   public async directDepositFee(): Promise<bigint> {
-    return this.ddProcessor().getFee();
+    try {
+      return await this.ddProcessor().getFee();
+    } catch {
+      // fallback in case of DD-processor isn't initialized yet (e.g. for clientless mode)
+      const ddQueueAddr = await this.network().getDirectDepositQueueContract(this.pool().poolAddress);
+      return this.network().getDirectDepositFee(ddQueueAddr);
+    }
   }
   
 }
