@@ -4,7 +4,9 @@ import promiseRetry from 'promise-retry';
 const RPC_ISSUES_THRESHOLD = 20;    // number of errors needed to switch RPC
 
 export interface RpcManagerDelegate {
-    setEnabled(enabled: boolean); 
+    setEnabled(enabled: boolean);
+    getBlockNumber(): Promise<number>;
+    getBlockNumberFrom(rpcurl: string): Promise<number>;
 }
 
 export class MultiRpcManager {
@@ -97,6 +99,27 @@ export class MultiRpcManager {
             console.log(`[MultiRpcManager]: RPC was switched to ${this.curRpcUrl()}`);
 
             return true;
+        }
+
+        return false;
+    }
+
+    protected async switchToTheBestRPC(): Promise<boolean> {
+        if (this.rpcUrls.length - this.badRpcs.length > 1) {
+            const blockNums = await Promise.all(this.rpcUrls.map(async (rpcurl, index) => {
+                if (this.badRpcs.includes(index) == false) {
+                    const latestBlock = await this.delegate?.getBlockNumberFrom(rpcurl)
+                    return {index, latestBlock: latestBlock ?? 0};
+                }
+
+                return {index, latestBlock: 0};
+            }));
+
+            const curRpc = blockNums.find((val) => val.index == this.curRpcIdx);
+            const bestRpc = blockNums.reduce((prev, cur) => (prev && prev.latestBlock > cur.latestBlock) ? prev : cur);
+            if (bestRpc.index != curRpc?.index && bestRpc.latestBlock > (curRpc?.latestBlock ?? 0)) {
+                return this.switchRPC(bestRpc.index, false);
+            }
         }
 
         return false;

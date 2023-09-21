@@ -701,4 +701,52 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return result.txid;
     }
 
+    // ----------------------=========< Syncing >=========----------------------
+    // | Getting block number, waiting for a block...                          |
+    // -------------------------------------------------------------------------
+
+    public async getBlockNumber(): Promise<number> {
+        return this.commonRpcRetry(async () => {
+            const block = await this.activeTronweb().trx.getCurrentBlock();
+            return block.block_header.raw_data.number;
+        }, '[TronNetwork] Cannot get block number', RETRY_COUNT);
+    }
+
+    public async getBlockNumberFrom(rpcurl: string): Promise<number> {
+        const tmpTronweb = new TronWeb({
+            fullHost: rpcurl,
+            privateKey: '01',
+        });
+        return this.commonRpcRetry(async () => {
+            const block = await tmpTronweb.trx.getCurrentBlock();
+            return block.block_header.raw_data.number;
+        }, `[TronNetwork] Cannot get block number from ${rpcurl}`, 2);
+    }
+
+    public async waitForBlock(blockNumber: number, timeoutSec?: number): Promise<boolean> {
+        const startTime = Date.now();
+        const SWITCH_RPC_DELAY = 60;
+        let curBlock: number;
+        do {
+            curBlock = await this.getBlockNumber().catch(() => 0);
+
+            if (Date.now() > startTime + (timeoutSec ?? Number.MAX_SAFE_INTEGER) * 1000) {
+                console.warn(`[TronNetwork]: timeout reached while waiting for a block ${blockNumber} (current block ${curBlock})`)
+                return false;
+            }
+
+            if (curBlock < blockNumber) {
+                if (Date.now() > startTime + SWITCH_RPC_DELAY * 1000) {
+                    if (await this.switchToTheBestRPC()) {
+                        console.warn(`[TronNetwork]: RPC was auto switched because the block ${blockNumber} was not reached yet`);
+                    }
+                } else {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        } while(curBlock < blockNumber);
+
+        return true;
+    }
+
 }

@@ -64,6 +64,10 @@ export interface NetworkBackend {
     getTxDetails(index: number, poolTxHash: string, state: ZkBobState): Promise<PoolTxDetails | null>;
     calldataBaseLength(): number;
     estimateCalldataLength(txType: TxType, notesCnt: number, extraDataLen: number): number;
+
+    // syncing with external providers
+    getBlockNumber(): Promise<number>;
+    waitForBlock(blockNumber: number, timeoutSec?: number): Promise<boolean>;
 }
 
 
