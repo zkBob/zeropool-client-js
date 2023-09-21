@@ -1,6 +1,6 @@
 import { ZkBobState } from "../state";
 import { EvmNetwork, InternalError, TxType } from "..";
-import { PoolTxDetails } from "../tx";
+import { DirectDeposit, PoolTxDetails } from "../tx";
 import { TronNetwork } from "./tron";
 
 export interface PreparedTransaction {
@@ -37,6 +37,8 @@ export interface NetworkBackend {
     // Direct Deposits
     getDirectDepositQueueContract(poolAddress: string): Promise<string>;
     getDirectDepositFee(ddQueueAddress: string): Promise<bigint>;
+    getDirectDeposit(ddQueueAddress: string, idx: number, state: ZkBobState): Promise<DirectDeposit | undefined>;
+    getDirectDepositNonce(ddQueueAddress: string): Promise<number>;
     createDirectDepositTx(ddQueueAddress: string, amount: bigint, zkAddress: string, fallbackAddress: string): Promise<PreparedTransaction>;
     createNativeDirectDepositTx(ddQueueAddress: string, nativeAmount: bigint, zkAddress: string, fallbackAddress: string): Promise<PreparedTransaction>;
 

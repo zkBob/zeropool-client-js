@@ -3,9 +3,11 @@ import { InternalError } from "./errors";
 import { NetworkBackend, PreparedTransaction } from "./networks";
 import { ZkBobState } from "./state";
 import { ZkBobSubgraph } from "./subgraph";
-import { DirectDeposit } from "./tx";
+import { DirectDeposit, DirectDepositState } from "./tx";
 
 const DD_FEE_LIFETIME = 3600;
+const DD_SCAN_BATCH = 10;    // number of simultaneously request DDs during the manual scan
+const DD_SCAN_DEPTH = 10080; // 7 days (in minutes): How old DDd should be searched during the manual scan
 
 export enum DirectDepositType {
     Token,  // using directDeposit contract method, amount in the pool token resolution
@@ -28,6 +30,10 @@ export class DirectDepositProcessor {
     protected isNativeSupported: boolean;
 
     protected cachedFee?: FeeFetch;
+
+    // variables for manual DD scanning
+    protected lastScannedIndex: number = -1;
+    protected directDeposits = new Map<number, DirectDeposit>();
     
     constructor(pool: Pool, network: NetworkBackend, state: ZkBobState, subgraph?: ZkBobSubgraph) {
         this.network = network;
@@ -90,13 +96,69 @@ export class DirectDepositProcessor {
     }
 
     public async pendingDirectDeposits(): Promise<DirectDeposit[]> {
+        let result: DirectDeposit[] | undefined;
         if (this.subgraph) {
-            return this.subgraph.pendingDirectDeposits(this.state).catch(() => []);
-        } else {
-            console.warn('There is no configured subraph to query pending DD')
+            try {
+                result = await this.subgraph.pendingDirectDeposits(this.state)
+            } catch (err) {
+                console.warn(`Cannot get pending DDs from subgraph: ${err.message}. Falbacking to the direct request`);
+            }
         }
 
-        return [];
+        if (result === undefined) {
+            try {
+                result = await this.manualPendingDirectDepositScan();
+            } catch (err) {
+                console.warn(`Cannot get pending DDs from contract directly: ${err.message}`);
+            }
+        }
+
+        return result ?? [];
+    }
+
+    protected async manualPendingDirectDepositScan(): Promise<DirectDeposit[]> {
+        const ddQueueAddr = await this.getQueueContract();
+
+        // check cached pending DDs and remove not pending ones
+        const dds = await Promise.all([...this.directDeposits.keys()].map(async (index) => {
+            const dd = await this.network.getDirectDeposit(ddQueueAddr, index, this.state)
+            return {index, dd};
+        }));
+        dds.forEach((val) => {
+            if (val.dd && val.dd.state != DirectDepositState.Queued) {
+                this.directDeposits.delete(val.index);
+            }
+        });
+
+        // look for new pending DDs
+        const ddNonce = await this.network.getDirectDepositNonce(ddQueueAddr);
+        const range = (from, to) => [...Array(to + 1).keys()].slice(from);
+        const scanTimestampLimit = (Date.now() / 1000) - (DD_SCAN_DEPTH * 60);
+        for (let idx = ddNonce - 1; idx > this.lastScannedIndex; idx -= DD_SCAN_BATCH) {
+            const indexes = range(idx - DD_SCAN_BATCH + 1, idx);
+            const rangeDDs = (await Promise.all(indexes.map(async (index) => {
+                const dd = await this.network.getDirectDeposit(ddQueueAddr, index, this.state);
+                const isOwn = dd ? await this.state.isOwnAddress(dd.destination) : false;
+                return {index, dd, isOwn};
+            })))
+            .filter((val) => val.dd !== undefined)
+            .map((val) => ({index: val.index, dd: val.dd as DirectDeposit, isOwn: val.isOwn}) );
+
+            rangeDDs.forEach((val) => {
+                if (val.dd.state == DirectDepositState.Queued && val.isOwn) {
+                    this.directDeposits.set(val.index, val.dd);
+                }
+            });
+
+            if (rangeDDs.length > 0 && (rangeDDs[0].dd.timestamp ?? 0) < scanTimestampLimit) {
+                // scan limit (by timestamp) reached => abort scan
+                break;
+            }
+        }
+
+        this.lastScannedIndex = ddNonce - 1;
+
+        return [...this.directDeposits.values()];
     }
 
     

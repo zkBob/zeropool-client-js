@@ -1,6 +1,6 @@
 import { NetworkBackend, PreparedTransaction } from '..';
 import { InternalError, TxType } from '../../index';
-import { DDBatchTxDetails, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from '../../tx';
+import { DDBatchTxDetails, DirectDeposit, DirectDepositState, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from '../../tx';
 import tokenAbi from './abi/usdt-abi.json';
 import { ddContractABI as ddAbi, poolContractABI as poolAbi} from '../evm/evm-abi';
 import { bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
@@ -330,6 +330,35 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         throw new InternalError(`Native direct deposits are currently unsupported for Tron deployments`)
     }
 
+    public async getDirectDeposit(ddQueueAddress: string, idx: number, state: ZkBobState): Promise<DirectDeposit | undefined> {
+        const dd = await this.getDdContract(ddQueueAddress);
+        const ddInfo = await this.contractCallRetry(dd, 'getDirectDeposit', [idx]);
+        const ddStatusCode = Number(ddInfo.status);
+        if (ddStatusCode != 0) {
+            return {
+                id: BigInt(idx),            // DD queue unique identifier
+                state: (ddStatusCode - 1) as DirectDepositState,
+                amount: BigInt(ddInfo.deposit),        // in pool resolution
+                destination: await state.assembleAddress(ddInfo.diversifier, ddInfo.pk),   // zk-addresss
+                fee: BigInt(ddInfo.fee),           // relayer fee
+                fallback: ddInfo.fallbackReceiver,      // 0x-address to refund DD
+                sender: '',        // 0x-address of sender [to the queue]
+                queueTimestamp: Number(ddInfo.timestamp), // when it was created
+                queueTxHash: '',   // transaction hash to the queue
+                //timestamp?: number;    // when it was sent to the pool
+                //txHash?: string;       // transaction hash to the pool
+                //payment?: DDPaymentInfo;
+            };
+        } 
+        
+        return undefined;
+    }
+
+    public async getDirectDepositNonce(ddQueueAddress: string): Promise<number> {
+        const dd = await this.getDdContract(ddQueueAddress);
+        return Number(await this.contractCallRetry(dd, 'directDepositNonce'));
+    }
+
     // ------------------------=========< Signatures >=========-----------------------
     // | Signing and recovery                                                        |
     // -------------------------------------------------------------------------------
@@ -543,9 +572,9 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                     txInfo.txHash = poolTxHash;
                     txInfo.isMined = isMined;
                     txInfo.timestamp = timestamp;
-                    txInfo.deposits = [];    // TODO!!!
+                    txInfo.deposits = [];
 
-                    // WIP
+                    // TODO: decode input with ABI, request DDs by indexes
 
                     return {
                         poolTxType: PoolTxType.DirectDepositBatch,

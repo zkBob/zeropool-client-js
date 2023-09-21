@@ -311,13 +311,11 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         return undefined;
     }
 
-    /*public async getPendingDirectDeposits(state: ZkBobState): Promise<DirectDeposit[]> {
-        const ddEvents = await this.directDepositContract().getPastEvents('SubmitDirectDeposit');
-        const completedDdEvents = await this.directDepositContract().getPastEvents('CompleteDirectDepositBatch');
-        const refundedDdEvents = await this.directDepositContract().getPastEvents('RefundDirectDeposit');
+    public async getDirectDepositNonce(ddQueueAddress: string): Promise<number> {
+        const res = await this.contractCallRetry(this.directDepositContract(), ddQueueAddress, 'directDepositNonce');
 
-        return [];
-    }*/
+        return Number(res);
+    }
 
 
     // ------------------------=========< Signatures >=========-----------------------
