@@ -21,7 +21,7 @@ export class MultiRpcManager {
             throw new InternalError(`MultiRpcManager: Unable to initialize without RPC URL`);
         }
 
-        this.rpcUrls = rpcUrls.map((aUrl) => aUrl.endsWith('/') ? aUrl : aUrl += '/' );
+        this.rpcUrls = rpcUrls;
         this.curRpcIdx = 0;
     }
 
@@ -108,7 +108,7 @@ export class MultiRpcManager {
         if (this.rpcUrls.length - this.badRpcs.length > 1) {
             const blockNums = await Promise.all(this.rpcUrls.map(async (rpcurl, index) => {
                 if (this.badRpcs.includes(index) == false) {
-                    const latestBlock = await this.delegate?.getBlockNumberFrom(rpcurl)
+                    const latestBlock = await this.delegate?.getBlockNumberFrom(rpcurl).catch(() => 0);
                     return {index, latestBlock: latestBlock ?? 0};
                 }
 

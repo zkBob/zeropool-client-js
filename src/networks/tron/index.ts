@@ -40,7 +40,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     // | Init, enabling and disabling backend                                        |
     // -------------------------------------------------------------------------------
     constructor(rpcUrls: string[], enabled: boolean = true) {
-        super(rpcUrls);
+        super(rpcUrls.map((aUrl) => aUrl.endsWith('/') ? aUrl : aUrl += '/' ));
         super.delegate = this;
 
         if (enabled) {
@@ -237,9 +237,20 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         } else {
             idx = index.toString();
         }
-        const root = await this.contractCallRetry(pool, 'roots', [idx]);
+        let root = BigInt(await this.contractCallRetry(pool, 'roots', [idx]));
+        if (root == 0n) {
+            // it's seems the RPC node got behind the actual blockchain state
+            // let's try to find the best one and retry root request
+            const switched = await this.switchToTheBestRPC();
+            if (switched) {
+                root = BigInt(await this.contractCallRetry(pool, 'roots', [idx]));
+            }
+            if (root == 0n) {
+                console.warn(`[TronNetwork] cannot retrieve root at index ${idx} (is it exist?)`);
+            }
+        }
 
-        return {index: BigInt(idx), root: BigInt(root)};
+        return {index: BigInt(idx), root};
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
@@ -727,6 +738,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         const startTime = Date.now();
         const SWITCH_RPC_DELAY = 60;
         let curBlock: number;
+        let waitMsgLogged = false;
         do {
             curBlock = await this.getBlockNumber().catch(() => 0);
 
@@ -736,6 +748,11 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             }
 
             if (curBlock < blockNumber) {
+                if (!waitMsgLogged) {
+                    console.warn(`[EvmNetwork]: waiting for a block ${blockNumber} (current ${curBlock})...`);
+                    waitMsgLogged = true;
+                }
+
                 if (Date.now() > startTime + SWITCH_RPC_DELAY * 1000) {
                     if (await this.switchToTheBestRPC()) {
                         console.warn(`[TronNetwork]: RPC was auto switched because the block ${blockNumber} was not reached yet`);
@@ -745,6 +762,10 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                 }
             }
         } while(curBlock < blockNumber);
+
+        if (waitMsgLogged) {
+            console.log(`[EvmNetwork]: internal provider was synced with block ${blockNumber}`);
+        }
 
         return true;
     }

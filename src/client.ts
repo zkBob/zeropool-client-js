@@ -20,8 +20,6 @@ import { DepositSignerFactory } from './signers/signer-factory'
 import { PERMIT2_CONTRACT } from './signers/permit2-signer';
 import { DirectDepositProcessor, DirectDepositType } from './dd';
 
-import { isHexPrefixed } from '@ethereumjs/util';
-import { isAddress } from 'web3-utils';
 import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks';
 import { Privkey } from 'hdwallet-babyjub';
@@ -34,6 +32,8 @@ const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx p
 
 const CONTINUOUS_STATE_UPD_INTERVAL = 200; // updating client's state timer interval for continuous states (in ms)
 const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous after that interval (in ms)
+
+const PROVIDER_SYNC_TIMEOUT = 60;  // maximum time to sync network backend by blockNumber (in seconds)
 
 // Common database table's name
 const SYNC_PERFORMANCE = 'SYNC_PERFORMANCE';
@@ -674,6 +674,7 @@ export class ZkBobClient extends ZkBobProvider {
     signatureCallback: (request: SignatureRequest) => Promise<string>,
     fromAddress: string,
     relayerFee?: RelayerFee,
+    blockNumber?: number, // synchronize internal provider with the block
   ): Promise<string> {
     const pool = this.pool();
     const relayer = this.relayer();
@@ -715,6 +716,15 @@ export class ZkBobClient extends ZkBobProvider {
         deadline: String(deadline),
         holder: this.network().addressToBytes(fromAddress)
       });
+    }
+
+    // sync by block number if needed
+    if (blockNumber !== undefined) {
+      const ready = await this.network().waitForBlock(blockNumber, PROVIDER_SYNC_TIMEOUT);
+      if (!ready) {
+        // do not throw error here, pass to validation anyway
+        console.warn(`Unable to sync network backend (sync block ${blockNumber}, current ${await this.network().getBlockNumber()}). Validation may failed!`);
+      }
     }
 
     // Preparing signature request and sending it via callback
@@ -824,7 +834,8 @@ export class ZkBobClient extends ZkBobProvider {
     type: DirectDepositType,
     fromAddress: string,
     amount: bigint, // in pool resolution
-    sendTxCallback: (tx: PreparedTransaction) => Promise<string>, // txHash
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>, // => txHash
+    blockNumber?: number, // synchronize internal provider with the block
   ): Promise<void> {
     const pool = this.pool();
     const processor = this.ddProcessor();
@@ -839,11 +850,31 @@ export class ZkBobClient extends ZkBobProvider {
     const fee = await processor.getFee();
     let fullAmountNative = await this.shieldedAmountToWei(amount + fee);
 
+    // Sync by block number if needed
+    if (blockNumber !== undefined) {
+      const ready = await this.network().waitForBlock(blockNumber, PROVIDER_SYNC_TIMEOUT);
+      if (!ready) {
+        // do not throw error here, pass to validation
+        console.warn(`Unable to sync network backend (sync block ${blockNumber}, current ${await this.network().getBlockNumber()}). Validation may failed!`);
+      }
+    }
+
+    // Validate the sender's account are ready for direct deposit
     if (type == DirectDepositType.Token) {
-      // For the token-based DD we should check allowance first
-      const curAllowance = await this.network().allowance(pool.tokenAddress, fromAddress, ddQueueAddress);
+      const [curAllowance, curBalance] = await Promise.all([
+        this.network().allowance(pool.tokenAddress, fromAddress, ddQueueAddress),
+        this.network().getTokenBalance(pool.tokenAddress, fromAddress),
+      ]);
       if (curAllowance < fullAmountNative) {
         throw new TxDepositAllowanceTooLow(fullAmountNative, curAllowance, ddQueueAddress);
+      }
+      if (curBalance < fullAmountNative) {
+        throw new TxInsufficientFundsError(fullAmountNative, curBalance);
+      }
+    } else if (type == DirectDepositType.Native) {
+      const curNativeBalance = await this.network().getNativeBalance(fromAddress);
+      if (curNativeBalance < fullAmountNative) {
+        throw new TxInsufficientFundsError(fullAmountNative, curNativeBalance);
       }
     }
     

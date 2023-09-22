@@ -209,9 +209,20 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         } else {
             idx = index?.toString();
         }
-        const root = await this.contractCallRetry(this.poolContract(), poolAddress, 'roots', [idx]);
+        let root = BigInt(await this.contractCallRetry(this.poolContract(), poolAddress, 'roots', [idx]));
+        if (root == 0n) {
+            // it's seems the RPC node got behind the actual blockchain state
+            // let's try to find the best one and retry root request
+            const switched = await this.switchToTheBestRPC();
+            if (switched) {
+                root = await this.contractCallRetry(this.poolContract(), poolAddress, 'roots', [idx]);
+            }
+            if (root == 0n) {
+                console.warn(`[EvmNetwork] cannot retrieve root at index ${idx} (is it exist?)`);
+            }
+        }
 
-        return {index: BigInt(idx), root: BigInt(root)};
+        return {index: BigInt(idx), root};
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
@@ -637,17 +648,18 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public async waitForBlock(blockNumber: number, timeoutSec?: number): Promise<boolean> {
         const startTime = Date.now();
-        const SWITCH_RPC_DELAY = 60;
+        const SWITCH_RPC_DELAY = 30;
         let curBlock: number;
+        let waitMsgLogged = false;
         do {
             curBlock = await this.getBlockNumber().catch(() => 0);
 
-            if (Date.now() > startTime + (timeoutSec ?? Number.MAX_SAFE_INTEGER) * 1000) {
-                console.warn(`[EvmNetwork]: timeout reached while waiting for a block ${blockNumber} (current block ${curBlock})`)
-                return false;
-            }
-
             if (curBlock < blockNumber) {
+                if (!waitMsgLogged) {
+                    console.warn(`[EvmNetwork]: waiting for a block ${blockNumber} (current ${curBlock})...`);
+                    waitMsgLogged = true;
+                }
+
                 if (Date.now() > startTime + SWITCH_RPC_DELAY * 1000) {
                     if (await this.switchToTheBestRPC()) {
                         console.warn(`[EvmNetwork]: RPC was auto switched because the block ${blockNumber} was not reached yet`);
@@ -656,7 +668,16 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             }
+
+            if (Date.now() > startTime + (timeoutSec ?? Number.MAX_SAFE_INTEGER) * 1000) {
+                console.warn(`[EvmNetwork]: timeout reached while waiting for a block ${blockNumber} (current block ${curBlock})`)
+                return false;
+            }
         } while(curBlock < blockNumber);
+
+        if (waitMsgLogged) {
+            console.log(`[EvmNetwork]: internal provider was synced with block ${blockNumber}`);
+        }
 
         return true;
     }
