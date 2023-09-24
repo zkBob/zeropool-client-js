@@ -184,7 +184,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
         const receipt = await this.commonRpcRetry(async () => {
             return this.activeWeb3().eth.sendSignedTransaction(signedTx.rawTransaction ?? '');
-        }, 'Unable to send approve tx', RETRY_COUNT);
+        }, 'Unable to send approve tx', 0); // do not retry sending to avoid any side effects
 
         return receipt.transactionHash;
     }
@@ -648,7 +648,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public async waitForBlock(blockNumber: number, timeoutSec?: number): Promise<boolean> {
         const startTime = Date.now();
-        const SWITCH_RPC_DELAY = 30;
+        const SWITCH_RPC_DELAY = 30; // force switch RPC node after that time interval (in seconds)
         let curBlock: number;
         let waitMsgLogged = false;
         do {
