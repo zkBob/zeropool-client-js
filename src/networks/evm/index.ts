@@ -32,8 +32,9 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     private token?: Contract;
 
     // Local cache
-    private tokenSellerAddresses = new Map<string, string>();    // poolContractAddress -> tokenSellerContractAddress
+    private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
+    private supportsNonces = new Map<string, boolean>();        // tokenAddress -> isSupportsNonceMethod
 
     // ------------------------=========< Lifecycle >=========------------------------
     // | Init, enabling and disabling backend                                        |
@@ -187,6 +188,25 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         }, 'Unable to send approve tx', 0); // do not retry sending to avoid any side effects
 
         return receipt.transactionHash;
+    }
+
+    public async isSupportNonce(tokenAddres: string): Promise<boolean> {
+        let isSupport = this.supportsNonces.get(tokenAddres);
+        if (isSupport === undefined) {
+            try {
+                const tokenContract = this.tokenContract();
+                tokenContract.options.address = tokenAddres;
+                await tokenContract.methods['nonces'](ZERO_ADDRESS).call()
+                isSupport = true;
+            } catch (err) {
+                console.warn(`The token seems doesn't support nonces method`);
+                isSupport = false;
+            }
+
+            this.supportsNonces.set(tokenAddres, isSupport);
+        };
+
+        return isSupport
     }
 
 

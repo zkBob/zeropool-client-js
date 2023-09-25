@@ -259,9 +259,12 @@ export class EphemeralPool {
         let promises = [
             this.getTokenBalance(existing.address),
             this.network.getNativeBalance(existing.address),
-            this.network.getTokenNonce(this.tokenAddress, existing.address).catch(() => {
-                // fallback for tokens without permit support (e.g. WETH)
-                return 0;
+            this.network.isSupportNonce(this.tokenAddress).then((isSupport) => {
+                if (isSupport) {
+                    return this.network.getTokenNonce(this.tokenAddress, existing.address).catch(() => 0);
+                } else {
+                    return 0;
+                }
             }),
             this.network.getNativeNonce(existing.address),
         ];

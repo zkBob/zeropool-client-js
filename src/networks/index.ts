@@ -26,6 +26,7 @@ export interface NetworkBackend {
     permit2NonceBitmap(permit2Address: string, owner: string, wordPos: bigint): Promise<bigint>;
     erc3009AuthState(tokenAddress: string, authorizer: string, nonce: bigint): Promise<bigint>;
     approveTokens(tokenAddress: string, privateKey: string, holder: string, spender: string, amount: bigint, gasFactor?: number): Promise<string>
+    isSupportNonce(tokenAddres: string): Promise<boolean>;
 
     // Pool Interaction
     getPoolId(poolAddress: string): Promise<number>;

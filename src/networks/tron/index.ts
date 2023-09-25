@@ -32,8 +32,9 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     private energyFee: number | undefined = undefined;
     private tokenSymbols = new Map<string, string>();  // tokenAddress -> token_symbol
     private tokenDecimals = new Map<string, number>();  // tokenAddress -> decimals
-    private tokenSellerAddresses = new Map<string, string>();    // poolContractAddress -> tokenSellerContractAddress
-    private ddContractAddresses = new Map<string, string>();  // poolAddress -> ddQueueAddress
+    private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
+    private ddContractAddresses = new Map<string, string>();    // poolAddress -> ddQueueAddress
+    private supportsNonces = new Map<string, boolean>();        // tokenAddress -> isSupportsNonceMethod
 
 
     // ------------------------=========< Lifecycle >=========------------------------
@@ -207,6 +208,24 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         const parameters = [{type: 'address', value: spender}, {type: 'uint256', value: amount}]
         
         return this.verifyAndSendTx(tokenAddress, selector, parameters, privateKey)
+    }
+
+    public async isSupportNonce(tokenAddres: string): Promise<boolean> {
+        let isSupport = this.supportsNonces.get(tokenAddres);
+        if (isSupport === undefined) {
+            const contract = await this.commonRpcRetry(() => {
+                return this.activeTronweb().trx.getContract(tokenAddres);
+            }, 'Unable to retrieve smart contract object', RETRY_COUNT);
+            const methods = contract.abi.entrys;
+            if (Array.isArray(methods)) {
+                isSupport = methods.find((val) => val.name == 'nonces') !== undefined;
+                this.supportsNonces.set(tokenAddres, isSupport);
+            } else {
+                isSupport = false;
+            }
+        }
+
+        return isSupport;
     }
 
 
