@@ -4986,15 +4986,15 @@ levn@^0.3.0, levn@~0.3.0:
     prelude-ls "~1.1.2"
     type-check "~0.3.2"
 
-libzkbob-rs-wasm-web-mt@1.4.2-beta:
-  version "1.4.2-beta"
-  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web-mt/-/libzkbob-rs-wasm-web-mt-1.4.2-beta.tgz#6d4c1b2d8fd16af3f067ddcd50e88efd1d533f46"
-  integrity sha512-N8DApn2+6RDpusKccZMh+IfRFuKwbYhlxe98vwjC013FmWbgGs/5LsfTmhJ1DvwrNIxSkyQ2JrSX8WvRxbT4LA==
+libzkbob-rs-wasm-web-mt@1.4.2-beta2:
+  version "1.4.2-beta2"
+  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web-mt/-/libzkbob-rs-wasm-web-mt-1.4.2-beta2.tgz#4037681744277b155e4140ceabfb3c805bb166f8"
+  integrity sha512-PAJ8WvozfUHjuoRhVmjDaCjXmLCCJxGR7KbnR2hO3dkULSs124jAP59dATAGSWJNwG2vbBmLROjEmQeTCnUhtw==
 
-libzkbob-rs-wasm-web@1.4.2-beta:
-  version "1.4.2-beta"
-  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web/-/libzkbob-rs-wasm-web-1.4.2-beta.tgz#b489663666bd69cdedfb043fa63d151827b27140"
-  integrity sha512-iKfEr+w0FX9IVoK85zp7J7+L8a/pbVpE3N8fEAI1QoY1OcWMeMqqJNMiF0TLkxU7F8QpG832G4LyTqCi+ByBYA==
+libzkbob-rs-wasm-web@1.4.2-beta2:
+  version "1.4.2-beta2"
+  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web/-/libzkbob-rs-wasm-web-1.4.2-beta2.tgz#6fcf49ae678013370d906f041d0cc4c82b67d98c"
+  integrity sha512-DCmEDcQKRWsf5e8jpfBcld5Ox4/V1Jvyofutgh6J2UyC3hqdjWtv90UxvqAx4jF5R9yaKerPs3mSZHCMnJLmMg==
 
 lie@3.1.1:
   version "3.1.1"

@@ -14,8 +14,6 @@ const TronWeb = require('tronweb')
 const bs58 = require('bs58')
 
 const RETRY_COUNT = 5;
-const DEFAULT_DECIMALS = 6;
-const DEFAULT_CHAIN_ID = 0x2b6653dc;
 const DEFAULT_ENERGY_FEE = 420;
 const ZERO_ADDRESS = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
 
@@ -154,16 +152,12 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     public async getTokenDecimals(tokenAddress: string): Promise<number> {
         let res = this.tokenDecimals.get(tokenAddress);
         if (!res) {
-            try {
-                const token = await this.getTokenContract(tokenAddress);
-                res = Number(await this.contractCallRetry(token, 'decimals'));
-                this.tokenDecimals.set(tokenAddress, res);
-            } catch (err) {
-                console.warn(`Cannot fetch decimals for the token ${tokenAddress}, using default (${DEFAULT_DECIMALS}). Reason: ${err.message}`);
-            }
+            const token = await this.getTokenContract(tokenAddress);
+            res = Number(await this.contractCallRetry(token, 'decimals'));
+            this.tokenDecimals.set(tokenAddress, res);
         }
         
-        return res ?? DEFAULT_DECIMALS;
+        return res;
     }
 
     public async getDomainSeparator(tokenAddress: string): Promise<string> {
@@ -526,9 +520,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             }
 
             // unable to fetch
-            console.warn(`Unable to get actual chainId. Will using default for Tron mainnet (${DEFAULT_CHAIN_ID})`)
-
-            return DEFAULT_CHAIN_ID;
+            throw new InternalError('Unable to get actual chainId');
         }
 
         return this.chainId;
