@@ -774,7 +774,7 @@ export class HistoryStorage {
     });
 
 
-    // Remove records after the specified idex from the database
+    // Remove records after the specified index from the database
     await this.db.delete(TX_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
     await this.db.delete(DECRYPTED_MEMO_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
     await this.db.delete(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
@@ -847,6 +847,7 @@ export class HistoryStorage {
       const historyRecords = minedHistory.records.concat(pendingHistory.records);
       const processedIndexes = minedHistory.succIdxs.concat(pendingHistory.succIdxs);
       const unprocessedIndexes = minedHistory.failIdxs.concat(pendingHistory.failIdxs);
+      const needToResyncIndexes = minedHistory.resyncIdxs.concat(pendingHistory.resyncIdxs);
 
       // delete all pending history records [we'll refresh them immediately]
       for (const [index, record] of this.currentHistory.entries()) {
@@ -872,22 +873,29 @@ export class HistoryStorage {
       }
 
       if (unprocessedIndexes.length > 0) {
-        console.warn(`[HistoryStorage] unprocessed: ${unprocessedIndexes.sort().map((idx) => `@${idx}`).join(', ')}`);
+        console.warn(`[HistoryStorage] unable to sync indexes: ${unprocessedIndexes.sort().map((idx) => `@${idx}`).join(', ')}`);
+      }
+      if (needToResyncIndexes.length > 0) {
+        console.warn(`[HistoryStorage] need to resync later: ${needToResyncIndexes.sort().map((idx) => `@${idx}`).join(', ')}`);
       }
 
-      // we should save unprocessed records to restore them in case of library reload
-      this.db.put(HISTORY_STATE_TABLE, unprocessedIndexes, 'fail_indexes');
+      // we should save unprocessed and incompleted records to restore them in case of library reload
+      this.db.put(HISTORY_STATE_TABLE, [...unprocessedIndexes, ...needToResyncIndexes], 'fail_indexes');
 
       for (const oneIndex of processedIndexes) {
-        this.unparsedMemo.delete(oneIndex);
+        if (!needToResyncIndexes.includes(oneIndex)) {
+          // remove memo from the unparsed list if it shouldn't be resynced
+          this.unparsedMemo.delete(oneIndex);
+        }
       }
 
       this.syncIndex = Math.max(this.syncIndex, newSyncIndex);  // prevent sync index decreasing
       this.db.put(HISTORY_STATE_TABLE, this.syncIndex, 'sync_index');
 
       const timeMs = Date.now() - startTime;
-      const remainsStr = unprocessedIndexes.length > 0 ? ` (${unprocessedIndexes.length} memos remain unprecessed)` : '';
-      console.log(`[HistoryStorage] history has been synced up to index ${this.syncIndex}${remainsStr} in ${timeMs} msec (records: ${[...this.currentHistory.keys()].length})`);
+      const remainStr = unprocessedIndexes.length > 0 ? ` (${unprocessedIndexes.length} memos remain unprocessed)` : '';
+      const resyncStr = needToResyncIndexes.length > 0 ? ` (${needToResyncIndexes.length} memos will be re-synced)` : '';
+      console.log(`[HistoryStorage] history has been synced up to index ${this.syncIndex}${remainStr}${resyncStr} in ${timeMs} msec (records: ${[...this.currentHistory.keys()].length})`);
     } else {
       // No any records (new or pending) => delete all pending history records
       for (const [index, record] of this.currentHistory.entries()) {
@@ -912,10 +920,19 @@ export class HistoryStorage {
     return data;
   }
 
-  private async getTxesDetails(memos: DecryptedMemo[]): Promise<{details: PoolTxDetails[], fetched: number[], notFetched: number[]}> {
+  private async getTxesDetails(
+    memos: DecryptedMemo[]
+  ): Promise<{
+    details: PoolTxDetails[], // all fetched txes details
+    fetched: number[],        // fetched tx's indexes (in Merkle tree)
+    notFetched: number[],     // failed to fetch tx's indexes
+    needResync: number[]}>    // indexes which are fetched incompletely
+                              // (e.g. DD via fallback with existing subgraph)
+  {
     const requestedIndexes = memos.map((aMemo) => aMemo.index);
     let fetchedTxs: PoolTxDetails[] = [];
     let fetchedIndexes: number[] = [];
+    let fetchedIncompletely: number[] = [];
     if (this.subgraph) {
       // try to fetch txes from the sugraph (if available)
       fetchedTxs = await this.subgraph.getTxesDetails(requestedIndexes, this.state, this.network);
@@ -944,19 +961,35 @@ export class HistoryStorage {
         promises.push(this.network.getTxDetails(aMemo.index, aMemo.txHash, this.state));
       }
     }
-    const res = await Promise.all(promises);
-    for (let aTx of res) {
+    const resFromRpc = await Promise.all(promises);
+    for (let aTx of resFromRpc) {
       if (aTx) {
         fetchedTxs.push(aTx);
         fetchedIndexes.push(aTx.index);
+        if (aTx.poolTxType == PoolTxType.DirectDepositBatch && this.subgraph !== undefined) {
+          fetchedIncompletely.push(aTx.index);
+        }
       }
     }
 
     const notFetchedIndexes = requestedIndexes.filter((aIdx) => !fetchedIndexes.includes(aIdx));
-    return {details: fetchedTxs, fetched: fetchedIndexes, notFetched: notFetchedIndexes};
+    return {
+      details: fetchedTxs,
+      fetched: fetchedIndexes,
+      notFetched: notFetchedIndexes,
+      needResync: fetchedIncompletely,
+    };
   }
 
-  private async convertToHistory(memos: DecryptedMemo[], pending: boolean): Promise<{records: HistoryRecordIdx[], succIdxs: number[], failIdxs: number[]}> {
+  private async convertToHistory(
+    memos: DecryptedMemo[],
+    pending: boolean
+  ): Promise<{
+    records: HistoryRecordIdx[],
+    succIdxs: number[],     // fetched successfully
+    failIdxs: number[],     // the related txs are not presented in records 
+    resyncIdxs: number[]}>  // the fetched txs which should be updated again for any reason
+  {
     const result = await this.getTxesDetails(memos);
     const txesDetails = result.details;
     const fetched = result.fetched;
@@ -1084,6 +1117,6 @@ export class HistoryStorage {
       }
     }
 
-    return {records: allRecords, succIdxs: fetched, failIdxs: notFetched};
+    return {records: allRecords, succIdxs: fetched, failIdxs: notFetched, resyncIdxs: result.needResync};
   }
 }
