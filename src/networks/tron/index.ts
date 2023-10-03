@@ -75,28 +75,28 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         }
     }
 
-    protected async getTokenContract(tokenAddres: string): Promise<any> {
-        let contract = this.tokenContracts.get(tokenAddres);
+    protected async getTokenContract(tokenAddress: string): Promise<any> {
+        let contract = this.tokenContracts.get(tokenAddress);
         if (!contract) {
-            contract = await this.activeTronweb().contract(tokenAbi, tokenAddres);
+            contract = await this.activeTronweb().contract(tokenAbi, tokenAddress);
             if (contract) {
-                this.tokenContracts.set(tokenAddres, contract);
+                this.tokenContracts.set(tokenAddress, contract);
             } else {
-                throw new Error(`Cannot initialize a contact object for the token ${tokenAddres}`);
+                throw new Error(`Cannot initialize a contact object for the token ${tokenAddress}`);
             }
         }
 
         return contract;
     }
 
-    protected async getPoolContract(poolAddres: string): Promise<any> {
-        let contract = this.poolContracts.get(poolAddres);
+    protected async getPoolContract(poolAddress: string): Promise<any> {
+        let contract = this.poolContracts.get(poolAddress);
         if (!contract) {
-            contract = await this.activeTronweb().contract(poolAbi, poolAddres);
+            contract = await this.activeTronweb().contract(poolAbi, poolAddress);
             if (contract) {
-                this.poolContracts.set(poolAddres, contract);
+                this.poolContracts.set(poolAddress, contract);
             } else {
-                throw new Error(`Cannot initialize a contact object for the pool ${poolAddres}`);
+                throw new Error(`Cannot initialize a contact object for the pool ${poolAddress}`);
             }
         }
 
@@ -204,16 +204,16 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return this.verifyAndSendTx(tokenAddress, selector, parameters, privateKey)
     }
 
-    public async isSupportNonce(tokenAddres: string): Promise<boolean> {
-        let isSupport = this.supportsNonces.get(tokenAddres);
+    public async isSupportNonce(tokenAddress: string): Promise<boolean> {
+        let isSupport = this.supportsNonces.get(tokenAddress);
         if (isSupport === undefined) {
             const contract = await this.commonRpcRetry(() => {
-                return this.activeTronweb().trx.getContract(tokenAddres);
+                return this.activeTronweb().trx.getContract(tokenAddress);
             }, 'Unable to retrieve smart contract object', RETRY_COUNT);
             const methods = contract.abi.entrys;
             if (Array.isArray(methods)) {
                 isSupport = methods.find((val) => val.name == 'nonces') !== undefined;
-                this.supportsNonces.set(tokenAddres, isSupport);
+                this.supportsNonces.set(tokenAddress, isSupport);
             } else {
                 isSupport = false;
             }

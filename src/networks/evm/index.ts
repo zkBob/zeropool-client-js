@@ -190,12 +190,12 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         return receipt.transactionHash;
     }
 
-    public async isSupportNonce(tokenAddres: string): Promise<boolean> {
-        let isSupport = this.supportsNonces.get(tokenAddres);
+    public async isSupportNonce(tokenAddress: string): Promise<boolean> {
+        let isSupport = this.supportsNonces.get(tokenAddress);
         if (isSupport === undefined) {
             try {
                 const tokenContract = this.tokenContract();
-                tokenContract.options.address = tokenAddres;
+                tokenContract.options.address = tokenAddress;
                 await tokenContract.methods['nonces'](ZERO_ADDRESS).call()
                 isSupport = true;
             } catch (err) {
@@ -203,7 +203,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                 isSupport = false;
             }
 
-            this.supportsNonces.set(tokenAddres, isSupport);
+            this.supportsNonces.set(tokenAddress, isSupport);
         };
 
         return isSupport

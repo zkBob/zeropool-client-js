@@ -11,6 +11,7 @@ export enum NetworkType {
   goerli = 'goerli',
   goerliOptimism = 'goerli-optimism',
   shasta = 'shasta', // TRON testnet
+  nile = 'nile',     // TRON testnet
   localNode = 'local-node',
 }
 
@@ -37,6 +38,7 @@ export namespace NetworkType {
       case NetworkType.goerli:
       case NetworkType.goerliOptimism:
       case NetworkType.shasta:
+      case NetworkType.nile:
       case NetworkType.localNode:
         return `/0'/0/${account}`;
         
@@ -60,6 +62,7 @@ export namespace NetworkType {
       case NetworkType.goerli:
       case NetworkType.goerliOptimism:
       case NetworkType.shasta:
+      case NetworkType.nile:
       case NetworkType.localNode:
         return 1;
 
@@ -87,6 +90,8 @@ export namespace NetworkType {
         return 'goerli-optimism';
       case 0x94a9059e:  // 2494104990
         return 'shasta';
+      case 0xcd8690dc:  //3448148188
+        return 'nile';
       case 1337:
       case 31337:
         return 'local-node';
