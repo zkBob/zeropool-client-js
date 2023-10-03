@@ -685,50 +685,19 @@ export class HistoryStorage {
           let nextNullifier: Uint8Array | undefined;
           if (value.type != HistoryTransactionType.TransferIn) {
             // tx is user-initiated
-            nullifier = hexToBuf(details.nullifier);  // !?!?!??!?! WHAT ABOUT BYTE ORDER??? //bigintToArrayLe(tx.nullifier);
+            nullifier = hexToBuf(details.nullifier);
             inputs = await this.state.getTxInputs(treeIndex);
             if (decryptedMemo && decryptedMemo.acc) {
               const strNullifier = await this.state.calcNullifier(decryptedMemo.index, decryptedMemo.acc);
               const writer = new HexStringWriter();
-              writer.writeBigInt(BigInt(strNullifier), 32, true);
+              writer.writeBigInt(BigInt(strNullifier), 32);
               nextNullifier = hexToBuf(writer.toString());
             } else {
               throw new InternalError(`Account was not decrypted @${treeIndex}`);
             }
           }
-
-          // TEST-CASE: I'll remove it before merging
-          // Currently you could check key extracting correctness with that code
-          for (const aChunk of chunks) {
-            if(aChunk.index == treeIndex) {
-              // account
-              const restoredAcc = await this.state.decryptAccount(aChunk.key, aChunk.encrypted);
-              if (JSON.stringify(restoredAcc) != JSON.stringify(decryptedMemo?.acc)) {
-                throw new InternalError(`Cannot restore source account @${aChunk.index} from the compliance report!`);
-              }
-            } else if (decryptedMemo) {
-              // notes
-              const restoredNote = await this.state.decryptNote(aChunk.key, aChunk.encrypted);
-              let srcNote: Note | undefined;
-              for (const aNote of decryptedMemo.outNotes) {
-                if (aNote.index == aChunk.index) { srcNote = aNote.note; break; }
-              }
-              if (!srcNote) {
-                for (const aNote of decryptedMemo.inNotes) {
-                  if (aNote.index == aChunk.index) { srcNote = aNote.note; break; }
-                } 
-              }
-
-              if (!srcNote) {
-                throw new InternalError(`Cannot find associated note @${aChunk.index} to check decryption!`);
-              } else if ( JSON.stringify(restoredNote) != JSON.stringify(srcNote)) {
-                throw new InternalError(`Cannot restore source note @${aChunk.index} from the compliance report!`);
-              }
-            }
-          };
-          // --- END-OF-TEST-CASE ---
           
-          const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, nextNullifier, decryptedMemo, chunks, inputs);
+          const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, nextNullifier, decryptedMemo as DecryptedMemo, chunks, inputs);
           complienceRecords.push(aRec);
         } else if (txDetails && details instanceof DDBatchTxDetails) { // txDetails belongs to direct deposit batch
           // Here is direct deposit batch transaction
