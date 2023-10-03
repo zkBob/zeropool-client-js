@@ -18,6 +18,10 @@ export type Pools = {
   [name: string]: Pool;
 };
 
+export type Parameters = {
+  [name: string]: SnarkConfigParams;
+}
+
 export enum DepositType {
   Approve = 'approve',  // deprecated but still supported deposit scheme
   SaltedPermit = 'permit',  // based on EIP-2612 (salt was added to the signing message)
@@ -27,7 +31,8 @@ export enum DepositType {
 }
 
 export interface Pool {
-  chainId: number,
+  chainId: number;
+  parameters: string;
   poolAddress: string;
   tokenAddress: string,
   relayerUrls: string[];
@@ -51,9 +56,9 @@ export interface ClientConfig {
   pools: Pools;
   // A map of supported chains (chain id => chain params)
   chains: Chains;
-  // Pathses for params and verification keys
-  // (currenly we assume the parameters are the same for the all pools)
-  snarkParams: SnarkConfigParams;
+  // Patches for params and verification keys
+  // (separated parameters for different pools are supported)
+  parameters: Parameters;
   // Support ID - unique random string to track user's activity for support purposes
   supportId?: string;
   // By default MT mode selects automatically depended on browser

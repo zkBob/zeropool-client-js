@@ -1,5 +1,5 @@
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
-import { Chains, Pools, SnarkConfigParams, ClientConfig,
+import { Chains, Pools, Parameters, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
 import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
           toTwosComplementHex, bufToHex, bigintToArrayLe
@@ -153,28 +153,10 @@ export class ZkBobClient extends ZkBobProvider {
     this.statDb = statDb;
   }
 
-  private async workerInit(
-    snarkParams: SnarkConfigParams,
-    forcedMultithreading: boolean | undefined = undefined, // specify this parameter to override multithreading autoselection
-  ): Promise<Worker> {
-    // Get tx parameters hash from the relayer
-    // to check local params consistence
-    let txParamsHash: string | undefined = undefined;
-    try {
-      txParamsHash = await this.relayer().txParamsHash();
-    } catch (err) {
-      console.warn(`Cannot fetch tx parameters hash from the relayer (${err.message})`);
-    }
-  
+  private async workerInit(snarkParams: Parameters, forcedMultithreading?: boolean): Promise<Worker> {
     let worker: any;
-  
     worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
-      await worker.initWasm(
-        snarkParams.transferParamsUrl,
-        txParamsHash, 
-        snarkParams.transferVkUrl,
-        forcedMultithreading
-      );
+    await worker.initWasm(snarkParams, forcedMultithreading);
   
     return worker;
   }
@@ -199,7 +181,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "", callback, commonDb);
 
-    const worker = await client.workerInit(config.snarkParams);
+    const worker = await client.workerInit(config.parameters);
 
     client.zpStates = {};
     client.worker = worker;
@@ -1361,7 +1343,9 @@ export class ZkBobClient extends ZkBobProvider {
   // ----------------------------------------------------------------------------
   public async setProverMode(mode: ProverMode) {
     if (mode != ProverMode.Delegated) {
-        this.worker.loadTxParams();
+        const paramsName = this.pool().parameters;
+        const relayerParamsHash = await this.relayer().txParamsHash().catch(() => undefined);
+        this.worker.loadTxParams(paramsName, relayerParamsHash);
     }
     await super.setProverMode(mode);
   }
@@ -1375,7 +1359,8 @@ export class ZkBobClient extends ZkBobProvider {
       try {
         const proof = await prover.proveTx(pub, sec);
         const inputs = Object.values(pub);
-        const txValid = await this.worker.verifyTxProof(inputs, proof);
+        const paramsName = this.pool().parameters;
+        const txValid = await this.worker.verifyTxProof(paramsName, inputs, proof);
         if (!txValid) {
           throw new TxProofError();
         }
@@ -1390,8 +1375,9 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }
 
-    const txProof = await this.worker.proveTx(pub, sec);
-    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+    const paramsName = this.pool().parameters;
+    const txProof = await this.worker.proveTx(paramsName, pub, sec);
+    const txValid = await this.worker.verifyTxProof(paramsName, txProof.inputs, txProof.proof);
     if (!txValid) {
       throw new TxProofError();
     }
