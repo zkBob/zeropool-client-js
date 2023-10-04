@@ -215,11 +215,6 @@ export class ZkBobClient extends ZkBobProvider {
   public async login(account: AccountConfig) {
     this.account = account;
     await this.switchToPool(account.pool, account.birthindex);
-    try {
-      await this.setProverMode(this.account.proverMode);
-    } catch (err) {
-      console.error(err);
-    }
   }
 
   public async logout() {
@@ -283,6 +278,12 @@ export class ZkBobClient extends ZkBobProvider {
         );
       this.zpStates[newPoolAlias] = state;
       this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state)
+
+      try {
+        await this.setProverMode(this.account.proverMode);
+      } catch (err) {
+        console.error(err);
+      }
 
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {

@@ -46,8 +46,9 @@ export class SnarkParams {
     // VK doesn't stored at the local storage (no verification ability currently)
     public async getVk(): Promise<any> {
         let attempts = 0;
+        const filename = this.vkUrl.substring(this.vkUrl.lastIndexOf('/') + 1);
+        const startTs = Date.now();
         while (!this.isVkReady() && attempts++ < MAX_VK_LOAD_ATTEMPTS) {
-          console.time(`VK initializing`);
           try {
             const vk = await (await fetch(this.vkUrl, { headers: { 'Cache-Control': 'no-cache' } })).json();
             // verify VK structure
@@ -64,10 +65,10 @@ export class SnarkParams {
             }
 
             this.vk = vk;
+
+            console.log(`VK ${filename} loaded in ${Date.now() - startTs} ms`);
           } catch(err) {
             console.warn(`VK loading attempt has failed: ${err.message}`);
-          } finally {
-            console.timeEnd(`VK initializing`);
           }
         }
 
