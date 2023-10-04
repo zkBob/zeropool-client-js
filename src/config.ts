@@ -32,7 +32,6 @@ export enum DepositType {
 
 export interface Pool {
   chainId: number;
-  parameters: string;
   poolAddress: string;
   tokenAddress: string,
   relayerUrls: string[];
@@ -43,6 +42,7 @@ export interface Pool {
   feeDecimals?: number;
   isNative?: boolean;
   ddSubgraph?: string;
+  parameters?: string;
 }
 
 export enum ProverMode {
@@ -57,8 +57,9 @@ export interface ClientConfig {
   // A map of supported chains (chain id => chain params)
   chains: Chains;
   // Patches for params and verification keys
+  snarkParams?: SnarkConfigParams;
   // (separated parameters for different pools are supported)
-  parameters: Parameters;
+  snarkParamsSet?: Parameters;
   // Support ID - unique random string to track user's activity for support purposes
   supportId?: string;
   // By default MT mode selects automatically depended on browser

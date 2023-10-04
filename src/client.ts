@@ -36,6 +36,8 @@ const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx p
 const CONTINUOUS_STATE_UPD_INTERVAL = 200; // updating client's state timer interval for continuous states (in ms)
 const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous after that interval (in ms)
 
+const GLOBAL_PARAMS_NAME = '__globalParams';
+
 // Common database table's name
 const SYNC_PERFORMANCE = 'SYNC_PERFORMANCE';
 const WRITE_DB_TIME_PERF_TABLE_KEY = 'average.db.writing.time.per.tx';
@@ -181,7 +183,31 @@ export class ZkBobClient extends ZkBobProvider {
     
     const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "", callback, commonDb);
 
-    const worker = await client.workerInit(config.parameters);
+    // collecting SNARK params config
+    const allParamsSet: Parameters = {};
+    const usedParams: string[] = Object.keys(config.pools)
+      .map((aPool) => config.pools[aPool].parameters ?? GLOBAL_PARAMS_NAME)
+      .filter((val, idx, arr) => arr.indexOf(val) === idx); // only unique values
+    usedParams.forEach((val) => {
+      if (val != GLOBAL_PARAMS_NAME) {
+        if (config.snarkParamsSet && config.snarkParamsSet[val]) {
+          allParamsSet[val] = config.snarkParamsSet[val];
+        } else {
+          throw new InternalError(`Cannot find SNARK parameters \'${val}\' in the client config (check snarkParamsSet)`);
+        }
+      } else {
+        if (config.snarkParams) {
+          allParamsSet[GLOBAL_PARAMS_NAME] = config.snarkParams;
+        } else {
+          throw new InternalError(`Not all pools have assigned SNARK parameters (check snarkParams in client config)`);
+        }
+      }
+    });
+    if (usedParams.length > 1) {
+      console.log(`The following SNARK parameters are supported: ${usedParams.join(', ')}`);
+    }
+
+    const worker = await client.workerInit(allParamsSet);
 
     client.zpStates = {};
     client.worker = worker;
@@ -305,6 +331,11 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     return this.zpStates[requestedPool];
+  }
+
+  private snarkParamsAlias(): string {
+    const pool = this.pool();
+    return pool.parameters ?? GLOBAL_PARAMS_NAME;
   }
 
   // ------------------=========< Balances and History >=========-------------------
@@ -1344,9 +1375,8 @@ export class ZkBobClient extends ZkBobProvider {
   // ----------------------------------------------------------------------------
   public async setProverMode(mode: ProverMode) {
     if (mode != ProverMode.Delegated) {
-        const paramsName = this.pool().parameters;
         const relayerParamsHash = await this.relayer().txParamsHash().catch(() => undefined);
-        this.worker.loadTxParams(paramsName, relayerParamsHash);
+        this.worker.loadTxParams(this.snarkParamsAlias(), relayerParamsHash);
     }
     await super.setProverMode(mode);
   }
@@ -1360,8 +1390,7 @@ export class ZkBobClient extends ZkBobProvider {
       try {
         const proof = await prover.proveTx(pub, sec);
         const inputs = Object.values(pub);
-        const paramsName = this.pool().parameters;
-        const txValid = await this.worker.verifyTxProof(paramsName, inputs, proof);
+        const txValid = await this.worker.verifyTxProof(this.snarkParamsAlias(), inputs, proof);
         if (!txValid) {
           throw new TxProofError();
         }
@@ -1376,9 +1405,8 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }
 
-    const paramsName = this.pool().parameters;
-    const txProof = await this.worker.proveTx(paramsName, pub, sec);
-    const txValid = await this.worker.verifyTxProof(paramsName, txProof.inputs, txProof.proof);
+    const txProof = await this.worker.proveTx(this.snarkParamsAlias(), pub, sec);
+    const txValid = await this.worker.verifyTxProof(this.snarkParamsAlias(), txProof.inputs, txProof.proof);
     if (!txValid) {
       throw new TxProofError();
     }
