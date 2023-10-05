@@ -56,9 +56,16 @@ export interface ClientConfig {
   pools: Pools;
   // A map of supported chains (chain id => chain params)
   chains: Chains;
-  // Patches for params and verification keys
+  // URLs for params and verification keys:
+  // pools without 'parameters' field assumed to use that params
   snarkParams?: SnarkConfigParams;
-  // (separated parameters for different pools are supported)
+  // Separated parameters for different pools are also supported:
+  //  - the `Pool` object can contain the params name from that set
+  //    in the 'parameters' optional fields
+  //  - you can combine snarkParams (as global ones) 
+  //    with snarkParamsSet (as custom for the specified pools)
+  //  - you MUST define at least snarkParams or snarkParamsSet in the config
+  //    otherwise the error will thrown during the client initialization
   snarkParamsSet?: Parameters;
   // Support ID - unique random string to track user's activity for support purposes
   supportId?: string;
@@ -70,7 +77,7 @@ export interface ClientConfig {
 export interface AccountConfig {
   // Spending key for the account
   sk: Uint8Array;
-  // Initial (current) pool alias (e.g. 'BOB-Polygon' or 'BOB-Optimism')
+  // Initial (current) pool alias (e.g. 'USDC-Polygon' or 'BOB-Sepolia')
   // The pool can be switched later without logout
   pool: string;
   // Account birthday for selected pool

@@ -101,7 +101,6 @@ export class ZkBobClient extends ZkBobProvider {
   // Direct deposit processors are used to create DD and fetch DD pending txs
   private ddProcessors: { [poolAlias: string]: DirectDepositProcessor } = {};
   // The single worker for the all pools
-  // Currently we assume parameters are the same for the all pools
   private worker: any;
   // Performance estimation (msec per tx)
   private wasmSpeed: number | undefined;
