@@ -1698,5 +1698,45 @@ export class ZkBobClient extends ZkBobProvider {
   public async directDepositFee(): Promise<bigint> {
     return this.ddProcessor().getFee();
   }
-  
+
+  // --------------------=========< Forced Exit >=========--------------------
+  // | Emergency withdrawing funds (direct contract interaction)             |
+  // -------------------------------------------------------------------------
+
+  public async isForcedExitSupported(): Promise<boolean> {
+    // TODO: check pool contract associated methods availability
+    return false;
+  }
+
+  public async isForcedExitCompleted(): Promise<boolean> {
+    // TODO: check committedForcedExits[_nullifier] value
+    // pattern: poolIndex | 0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead0000000000000000
+    return false;
+  }
+
+  public async isForcedExitCommited(): Promise<boolean> {
+    // TODO: check committedForcedExits[_nullifier]
+    return false;
+  }
+
+  public async requestForcedExit(): Promise<number> {
+    // TODO
+    throw new InternalError('unimplemented');
+  }
+
+  public async activeForcedExit(): Promise<any | undefined> {
+    // TODO: create ne interface to describe forced exit entity
+    // scan through the events to fill this object
+    throw new InternalError('unimplemented');
+  }
+
+  public async executeForcedExit(): Promise<number> {
+    // TODO
+    throw new InternalError('unimplemented');
+  }
+
+  public async cancelForcedExit(): Promise<number> {
+    // TODO
+    throw new InternalError('unimplemented');
+  }
 }
