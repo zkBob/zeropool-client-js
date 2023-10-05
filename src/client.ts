@@ -1374,11 +1374,13 @@ export class ZkBobClient extends ZkBobProvider {
   // | Local and delegated prover support                                       |
   // ----------------------------------------------------------------------------
   public async setProverMode(mode: ProverMode) {
-    if (mode != ProverMode.Delegated) {
+    await super.setProverMode(mode).finally(async () => {
+      // The invoked setProverMode method doesn't ensure the requested mode will set
+      if (this.getProverMode() != ProverMode.Delegated) {
         const relayerParamsHash = await this.relayer().txParamsHash().catch(() => undefined);
         this.worker.loadTxParams(this.snarkParamsAlias(), relayerParamsHash);
-    }
-    await super.setProverMode(mode);
+      }
+    });
   }
 
   // Universal proving routine

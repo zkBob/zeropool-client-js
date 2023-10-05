@@ -86,7 +86,6 @@ export class GiftCardProperties {
 // without attaching the user account
 export class ZkBobProvider {
     private chains:           { [chainId: string]: ChainConfig } = {};
-    private params:           { [set:  string]: SnarkConfigParams } = {};
     private pools:            { [name: string]: Pool } = {};
     private relayers:         { [name: string]: ZkBobRelayer } = {};
     private provers:          { [name: string]: ZkBobDelegatedProver } = {};
