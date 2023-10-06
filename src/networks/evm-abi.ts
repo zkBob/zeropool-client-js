@@ -294,7 +294,165 @@ export const poolContractABI: AbiItem[] = [
         }],
         stateMutability: 'view',
         type: 'function'
-    }
+    },
+    {
+        anonymous: false,
+        inputs: [{
+            indexed: true,
+            internalType: 'uint256',
+            name: 'nullifier',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'address',
+            name: 'operator',
+            type: 'address'
+        }, {
+            indexed: false,
+            internalType: 'address',
+            name: 'to',
+            type: 'address'
+        }, {
+            indexed: false,
+            internalType: 'uint256',
+            name: 'amount',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'uint256',
+            name: 'exitStart',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'uint256',
+            name: 'exitEnd',
+            type: 'uint256'
+        }],
+        name: 'CommitForcedExit',
+        type: 'event'
+    },
+    {
+        anonymous: false,
+        inputs: [{
+            indexed: true,
+            internalType: 'uint256',
+            name: 'nullifier',
+            type: 'uint256'
+        }],
+        name: 'CancelForcedExit',
+        type: 'event'
+    },
+    {
+        inputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        name: 'committedForcedExits',
+        outputs: [{
+            internalType: 'bytes32',
+            name: '',
+            type: 'bytes32'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    },
+    {
+        inputs: [{
+            internalType: 'address',
+            name: '_operator',
+            type: 'address'
+        }, {
+            internalType: 'address',
+            name: '_to',
+            type: 'address'
+        }, {
+            internalType: 'uint256',
+            name: '_amount',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_index',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_nullifier',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_out_commit',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256[8]',
+            name: '_transfer_proof',
+            type: 'uint256[8]'
+        }],
+        name: 'commitForcedExit',
+        outputs: [],
+        stateMutability: 'nonpayable',
+        type: 'function'
+    },
+    {
+        anonymous: false,
+        inputs: [{
+            indexed: true,
+            internalType: 'uint256',
+            name: 'index',
+            type: 'uint256'
+        }, {
+            indexed: true,
+            internalType: 'uint256',
+            name: 'nullifier',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'address',
+            name: 'to',
+            type: 'address'
+        }, {
+            indexed: false,
+            internalType: 'uint256',
+            name: 'amount',
+            type: 'uint256'
+        }],
+        name: 'ForcedExit',
+        type: 'event'
+    },
+    {
+        inputs: [{
+            internalType: 'uint256',
+            name: '_nullifier',
+            type: 'uint256'
+        }, {
+            internalType: 'address',
+            name: '_operator',
+            type: 'address'
+        }, {
+            internalType: 'address',
+            name: '_to',
+            type: 'address'
+        }, {
+            internalType: 'uint256',
+            name: '_amount',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_exitStart',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_exitEnd',
+            type: 'uint256'
+        }, {
+            internalType: 'bool',
+            name: '_cancel',
+            type: 'bool'
+        }],
+        name: 'executeForcedExit',
+        outputs: [],
+        stateMutability: 'nonpayable',
+        type: 'function'
+    },
 ];
 
 export const ddContractABI: AbiItem[] = [
