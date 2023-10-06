@@ -564,7 +564,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                     txInfo.feeAmount = feeAmount;
                     txInfo.txHash = poolTxHash;
                     txInfo.isMined = isMined
-                    txInfo.timestamp = timestamp;
+                    txInfo.timestamp = timestamp / 1000;    // timestamp should be in seconds
                     txInfo.nullifier = '0x' + toTwosComplementHex(BigInt((tx.nullifier)), 32);
                     txInfo.commitment = '0x' + toTwosComplementHex(BigInt((tx.outCommit)), 32);
                     txInfo.ciphertext = getCiphertext(tx);
@@ -593,7 +593,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                     const txInfo = new DDBatchTxDetails();
                     txInfo.txHash = poolTxHash;
                     txInfo.isMined = isMined;
-                    txInfo.timestamp = timestamp;
+                    txInfo.timestamp = timestamp / 1000;
                     txInfo.deposits = [];
 
                     // TODO: decode input with ABI, request DDs by indexes
