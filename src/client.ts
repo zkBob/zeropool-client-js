@@ -154,10 +154,34 @@ export class ZkBobClient extends ZkBobProvider {
     this.statDb = statDb;
   }
 
-  private async workerInit(snarkParams: Parameters, forcedMultithreading?: boolean): Promise<Worker> {
+  private async workerInit(config: ClientConfig): Promise<Worker> {
+    // collecting SNARK params config (only used)
+    const allParamsSet: Parameters = {};
+    const usedParams: string[] = Object.keys(config.pools)
+      .map((aPool) => config.pools[aPool].parameters ?? GLOBAL_PARAMS_NAME)
+      .filter((val, idx, arr) => arr.indexOf(val) === idx); // only unique values
+    usedParams.forEach((val) => {
+      if (val != GLOBAL_PARAMS_NAME) {
+        if (config.snarkParamsSet && config.snarkParamsSet[val]) {
+          allParamsSet[val] = config.snarkParamsSet[val];
+        } else {
+          throw new InternalError(`Cannot find SNARK parameters \'${val}\' in the client config (check snarkParamsSet)`);
+        }
+      } else {
+        if (config.snarkParams) {
+          allParamsSet[GLOBAL_PARAMS_NAME] = config.snarkParams;
+        } else {
+          throw new InternalError(`Not all pools have assigned SNARK parameters (check snarkParams in client config)`);
+        }
+      }
+    });
+    if (usedParams.length > 1) {
+      console.log(`The following SNARK parameters are supported: ${usedParams.join(', ')}`);
+    }
+
     let worker: any;
     worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
-    await worker.initWasm(snarkParams, forcedMultithreading);
+    await worker.initWasm(allParamsSet, config.forcedMultithreading);
   
     return worker;
   }
@@ -182,31 +206,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "", callback, commonDb);
 
-    // collecting SNARK params config
-    const allParamsSet: Parameters = {};
-    const usedParams: string[] = Object.keys(config.pools)
-      .map((aPool) => config.pools[aPool].parameters ?? GLOBAL_PARAMS_NAME)
-      .filter((val, idx, arr) => arr.indexOf(val) === idx); // only unique values
-    usedParams.forEach((val) => {
-      if (val != GLOBAL_PARAMS_NAME) {
-        if (config.snarkParamsSet && config.snarkParamsSet[val]) {
-          allParamsSet[val] = config.snarkParamsSet[val];
-        } else {
-          throw new InternalError(`Cannot find SNARK parameters \'${val}\' in the client config (check snarkParamsSet)`);
-        }
-      } else {
-        if (config.snarkParams) {
-          allParamsSet[GLOBAL_PARAMS_NAME] = config.snarkParams;
-        } else {
-          throw new InternalError(`Not all pools have assigned SNARK parameters (check snarkParams in client config)`);
-        }
-      }
-    });
-    if (usedParams.length > 1) {
-      console.log(`The following SNARK parameters are supported: ${usedParams.join(', ')}`);
-    }
-
-    const worker = await client.workerInit(allParamsSet);
+    const worker = await client.workerInit(config);
 
     client.zpStates = {};
     client.worker = worker;
