@@ -1,4 +1,4 @@
-import { Chains, ProverMode, Pool, Pools, SnarkConfigParams } from "./config";
+import { Chains, ProverMode, Pool, Pools } from "./config";
 import { InternalError } from "./errors";
 import { EvmNetwork } from "./networks/evm";
 import { NetworkType } from "./network-type";
