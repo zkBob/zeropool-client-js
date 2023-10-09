@@ -7,7 +7,7 @@ export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount,
       } from './client';
 export { ZkBobProvider as ZkBobAccountlessClient, GiftCardProperties } from './client-provider';
 export { SyncStat } from './state';
-export { TxType } from './tx';
+export { RegularTxType as TxType, DirectDeposit } from './tx';
 export { RelayerFee } from './services/relayer'
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState, ComplianceHistoryRecord } from './history';
 export { EphemeralAddress, EphemeralPool } from './ephemeral';
@@ -18,6 +18,6 @@ export { EvmNetwork } from './networks/evm'
 export { deriveSpendingKeyZkBob } from './utils'
 export { IAddressComponents } from 'libzkbob-rs-wasm-web';
 export { SignatureType } from './signers/abstract-signer'
-export { DirectDepositType, DirectDeposit } from './dd'
+export { DirectDepositType } from './dd'
 
 export * from './errors'

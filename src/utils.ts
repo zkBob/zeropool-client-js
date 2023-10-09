@@ -82,10 +82,6 @@ export function addHexPrefix(data: string): string {
   return data;
 }
 
-export function ethAddrToBuf(address: string): Uint8Array {
-  return hexToBuf(address, 20);
-}
-
 // Convert input hex number to the bytes array
 // extend (leading zero-bytes) or trim (trailing bytes)
 // output buffer to the bytesCnt bytes (only when bytesCnt > 0)
@@ -110,6 +106,14 @@ export function hexToBuf(hex: string, bytesCnt: number = 0): Uint8Array {
   }
 
   return buffer;
+}
+
+export function forceDecimal(hexOrDec: string): string {
+  if (hexOrDec.startsWith('0x')) {
+    return BigInt(hexOrDec).toString(10);
+  }
+
+  return hexOrDec;
 }
 
 export function isEqualBuffers(buf1: Uint8Array, buf2: Uint8Array): boolean {
@@ -220,7 +224,7 @@ export class HexStringReader {
     const elements: bigint[] = [];
     for (let i = 0; i < numElements; ++i) {
       const num = this.readBigInt(numBytesPerElement, le);
-      if (!num) {
+      if (num == null) {
         break;
       }
 
@@ -251,75 +255,6 @@ export function toTwosComplementHex(num: bigint, numBytes: number): string {
   }
 
   return padLeft(hex, numBytes * 2);
-}
-
-export function toCompactSignature(signature: string): string {
-  signature = truncateHexPrefix(signature);
-
-  if (signature.length > 128) {
-    // it seems it's an extended signature, let's compact it!
-    const v = signature.substr(128, 2);
-    if (v == "1c") {
-      return `${signature.slice(0, 64)}${(parseInt(signature[64], 16) | 8).toString(16)}${signature.slice(65, 128)}`;
-    } else if (v != "1b") {
-      throw new InternalError("invalid signature: v should be 27 or 28");
-    }
-
-    return signature.slice(0, 128);
-  } else if (signature.length < 128) {
-    throw new InternalError("invalid signature: it should consist at least 64 bytes (128 chars)");
-  }
-
-  // it seems the signature already compact
-  return signature;
-}
-
-export function parseCompactSignature(signature: string): {v: string, r: string, s: string} {
-  signature = truncateHexPrefix(signature);
-
-  if (signature.length == 128) {
-    const r = `0x${signature.substr(0, 64)}`;
-    let s = `0x${signature.slice(64)}`;
-    
-    let v = `0x1b`;
-    const sHiDigit = parseInt(s[0], 16);
-    if (sHiDigit > 7) {
-      v = `0x1c`;
-      s = `0x${(sHiDigit & 7).toString(16)}${s.slice(1)}`;
-    }
-
-    return {v, r, s};
-
-  }else {
-    throw ("invalid signature length");
-  }
-
-}
-
-export function toCanonicalSignature(signature: string): string {
-  let sig = truncateHexPrefix(signature);
-
-  let v = "1b";
-  if (parseInt(sig[64], 16) > 7) {
-    v = "1c";
-    sig = sig.substr(0, 64) + `${(parseInt(sig[64], 16) & 7).toString(16)}` + sig.slice(65);
-  }
-  return `0x` + sig + v;
-}
-
-export function addressFromSignature(signature: string, signedData: string): string {
-  const sigFields = util.fromRpcSig(addHexPrefix(signature));
-
-  const dataBuf = hexToBuf(signedData);
-  const prefix = Buffer.from("\x19Ethereum Signed Message:\n");
-  const prefixedSignedData = util.keccak(
-    Buffer.concat([prefix, Buffer.from(String(dataBuf.length)), dataBuf])
-  );
-
-  const pub = util.ecrecover(prefixedSignedData, sigFields.v, sigFields.r, sigFields.s);
-  const addrBuf = util.pubToAddress(pub);
-
-  return addHexPrefix(bufToHex(addrBuf));
 }
 
 export function nodeToHex(node: TreeNode): string {
@@ -362,4 +297,19 @@ export function rangesIntersectionLength(r1from: number, r1to: number, r2from: n
   }
 
   return 0;
+}
+
+export function assertNotNull<T>(val: T): asserts val is NonNullable<T> {
+  if (val === undefined || val === null) {
+      throw new InternalError('Unexpected null');
+  }
+}
+
+export function removeDuplicates<T>(array: T[]): T[] {
+  return array.reduce((acc: T[], cur: T) => {
+      if (!acc.includes(cur)) {
+          acc.push(cur);
+      }
+      return acc;
+  }, [])
 }

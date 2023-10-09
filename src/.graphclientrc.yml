@@ -1,8 +1,8 @@
 sources:
-  - name: zkbob-bob-goerli
+  - name: zkbob-usdc-polygon
     handler:
       graphql:
-        endpoint: '{context.subgraphEndpoint:https://api.thegraph.com/subgraphs/name/zkbob/zkbob-bob-goerli}'
+        endpoint: '{context.subgraphEndpoint:https://api.thegraph.com/subgraphs/name/zkbob/zkbob-usdc-polygon}'
 
 additionalTypeDefs: |
   extend type DirectDeposit {
@@ -10,10 +10,11 @@ additionalTypeDefs: |
   }
 
 additionalResolvers:
-  - ./dd/dd-resolvers
+  - ./subgraph/resolvers
 
 documents:
-  - ./dd/dd-query.graphql
+  - ./subgraph/tx-query.graphql
+  - ./subgraph/dd-query.graphql
 
 codegen:
   contextType: 'MeshContext & { subgraphEndpoint: string }'

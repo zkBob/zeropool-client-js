@@ -5,7 +5,7 @@ import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
           Note,
       } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
-import { bufToHex, isRangesIntersected } from './utils';
+import { bufToHex, forceDecimal, isRangesIntersected } from './utils';
 import { hash } from 'tweetnacl';
 import { EphemeralPool } from './ephemeral';
 import { NetworkType } from './network-type';
@@ -13,7 +13,8 @@ import { ColdStorageConfig } from './coldstorage';
 import { InternalError } from './errors';
 import { ZkBobRelayer } from './services/relayer';
 import { CONSTANTS } from './constants';
-import { NetworkBackend } from './networks/network';
+import { NetworkBackend } from './networks';
+import { ZkBobSubgraph } from './subgraph';
 
 const LOG_STATE_HOTSYNC = false;
 
@@ -82,8 +83,8 @@ interface ColdSyncResult {
 export class ZkBobState {
   public stateId: string; // should depends on pool and sk
   private sk: Uint8Array;
-  private birthIndex?: number;
   private network: NetworkBackend;
+  private birthIndex?: number;
   public history?: HistoryStorage; // should work synchronically with the state
   private ephemeralAddrPool?: EphemeralPool; // depends on sk so we placed it here
   private worker: any;
@@ -109,8 +110,8 @@ export class ZkBobState {
     sk: Uint8Array,
     birthIndex: number | undefined,
     network: NetworkBackend,
+    subgraph: ZkBobSubgraph | undefined,
     networkName: string,
-    rpcUrl: string,
     denominator: bigint,
     poolId: number,
     tokenAddress: string,
@@ -118,20 +119,18 @@ export class ZkBobState {
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
     zpState.sk = new Uint8Array(sk);
+    zpState.network = network;
     zpState.birthIndex = birthIndex;
     
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
 
-    zpState.network = network;
-
     await worker.createAccount(zpState.stateId, zpState.sk, poolId, networkName);
     zpState.worker = worker;
     
-    zpState.history = await HistoryStorage.init(zpState.stateId, rpcUrl, zpState);
-
-
-    zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, networkName as NetworkType, rpcUrl, denominator);
+    zpState.history = await HistoryStorage.init(zpState.stateId, network, zpState, subgraph);
+    
+    zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, networkName as NetworkType, network, denominator);
 
     return zpState;
   }
@@ -141,12 +140,14 @@ export class ZkBobState {
   public static async createNaked(
     sk: Uint8Array,
     birthIndex: number | undefined,
+    network: NetworkBackend,
     networkName: string,
     poolId: number,
     worker: any,
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
     zpState.sk = new Uint8Array(sk);
+    zpState.network = network;
     zpState.birthIndex = birthIndex;
 
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
@@ -267,7 +268,7 @@ export class ZkBobState {
   }
 
   public async assembleAddress(d: string, p_d: string): Promise<string> {
-    return this.worker.assembleAddress(this.stateId, d, p_d);
+    return this.worker.assembleAddress(this.stateId, forceDecimal(d), forceDecimal(p_d));
   }
 
   // Converts zk-addresss from the old prefixless format to the new chain-specific one
@@ -560,7 +561,7 @@ export class ZkBobState {
 
         // 3. Get txHash
         const txHash = tx.slice(1, 65);
-        txHashes[memo_idx] = '0x' + txHash;
+        txHashes[memo_idx] = this.network.txHashFromHexString(txHash);
 
         // 4. Get mined flag
         if (tx.slice(0, 1) === '1') {
@@ -583,6 +584,10 @@ export class ZkBobState {
         maxPendingIndex,
         txHashes,
       }
+    })
+    .catch((err) => {
+      console.log(`🔥[HotSync] cannot get txs batch from index ${fromIndex}: ${err.message}`)
+      throw new InternalError(`Cannot fetch txs from the relayer: ${err.message}`);
     });
   }
 
