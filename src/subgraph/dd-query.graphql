@@ -1,0 +1,43 @@
+query DirectDepositById($id: ID!) {
+    directDeposit(id: $id) {
+        id
+        pending
+        refunded
+        completed
+        zkAddress_pk
+        zkAddress_diversifier
+        deposit
+        fee
+        fallbackUser
+        sender
+        tsInit
+        tsClosed
+        txInit
+        txClosed
+        payment {
+            note
+            sender
+            token
+        }
+  }
+}
+
+query PendingDirectDeposits {
+    directDeposits(orderBy: bnInit, where: {pending: true}) {
+        id
+        pending
+        zkAddress_pk
+        zkAddress_diversifier
+        deposit
+        fee
+    	fallbackUser
+        sender
+        tsInit
+        txInit
+        payment {
+            note
+            sender
+            token
+        }
+    }
+}

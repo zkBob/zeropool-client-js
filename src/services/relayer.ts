@@ -1,4 +1,4 @@
-import { TxType } from "../tx";
+import { RegularTxType } from "../tx";
 import { hexToNode } from "../utils";
 import { InternalError, ServiceError } from "../errors";
 import { IZkBobService, ServiceType,
@@ -10,7 +10,7 @@ import { Proof, TreeNode } from 'libzkbob-rs-wasm-web';
 const RELAYER_VERSION_REQUEST_THRESHOLD = 3600; // relayer's version expiration (in seconds)
 
 export interface TxToRelayer {
-  txType: TxType;
+  txType: RegularTxType;
   memo: string;
   proof: Proof;
   depositSignature?: string
