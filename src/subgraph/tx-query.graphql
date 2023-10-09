@@ -1,0 +1,63 @@
+query PoolTxesByIndexes($index_in: [BigInt!], $first: Int = 100) {
+  poolTxes(where: {index_in: $index_in}, first: $first) {
+    index
+    type
+    zk {
+      out_commit
+    }
+    ts
+    tx
+    message
+    operation {
+      ... on DepositOperation {
+        fee
+        nullifier
+        token_amount
+        pooltx {
+          calldata
+        }
+      }
+      ... on PermittableDepositOperation {
+        fee
+        nullifier
+        permit_holder
+        token_amount
+      }
+      ... on TransferOperation {
+        fee
+        nullifier
+      }
+      ... on WithdrawalOperation {
+        fee
+        native_amount
+        nullifier
+        receiver
+        token_amount
+      }
+      ... on DDBatchOperation {
+        id
+        delegated_deposits {
+          id
+          pending
+          refunded
+          completed
+          zkAddress_pk
+          zkAddress_diversifier
+          deposit
+          fee
+          fallbackUser
+          sender
+          tsInit
+          tsClosed
+          txInit
+          txClosed
+          payment {
+              note
+              sender
+              token
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,11 +1,12 @@
 import { openDB, IDBPDatabase } from 'idb';
-import Web3 from 'web3';
 import { Account, Note, TxMemoChunk, IndexedTx, ParseTxsResult, TxInput } from 'libzkbob-rs-wasm-web';
-import { ShieldedTx, TxType } from './tx';
-import { bigintToArrayLe, bufToHex, HexStringWriter, hexToBuf, toCanonicalSignature } from './utils';
+import { DDBatchTxDetails, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from './tx';
+import { HexStringWriter, hexToBuf, removeDuplicates } from './utils';
 import { CONSTANTS } from './constants';
 import { InternalError } from './errors';
 import { ZkBobState } from './state';
+import { NetworkBackend } from './networks';
+import { ZkBobSubgraph } from './subgraph';
 
 const LOG_HISTORY_SYNC = false;
 const MAX_SYNC_ATTEMPTS = 3;  // if sync was not fully completed due to RPR errors
@@ -46,14 +47,10 @@ export interface TokensMoving {
   from: string,
   to: string,
   amount: bigint,
+  ddFee?: bigint, // for direct deposits only
   // This property is applicable only for outcoming transfers
   // true - destination address is belongs to the sender account
   isLoopback: boolean,
-}
-
-enum PoolSelector {
-  Transact = "af989083",
-  AppendDirectDeposit = "1dc4cb33",
 }
 
 export class HistoryRecord {
@@ -65,6 +62,7 @@ export class HistoryRecord {
     public txHash: string,
     public state: HistoryRecordState,
     public failureReason?: string,
+    public extraInfo?: any,
   ) {}
 
   public static async deposit(
@@ -73,11 +71,12 @@ export class HistoryRecord {
     fee: bigint,
     ts: number,
     txHash: string,
-    pending: boolean
+    pending: boolean,
+    extraInfo?: any,
   ): Promise<HistoryRecord> {
     const action: TokensMoving = {from, to: "", amount, isLoopback: false};
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
-    return new HistoryRecord(HistoryTransactionType.Deposit, ts, [action], fee, txHash, state);
+    return new HistoryRecord(HistoryTransactionType.Deposit, ts, [action], fee, txHash, state, undefined, extraInfo);
   }
 
   public static async transferIn(
@@ -85,11 +84,12 @@ export class HistoryRecord {
     fee: bigint,
     ts: number,
     txHash: string,
-    pending: boolean
+    pending: boolean,
+    extraInfo?: any,
   ): Promise<HistoryRecord> {
     const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount, isLoopback: false}) });
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
-    return new HistoryRecord(HistoryTransactionType.TransferIn, ts, actions, fee, txHash, state);
+    return new HistoryRecord(HistoryTransactionType.TransferIn, ts, actions, fee, txHash, state, undefined, extraInfo);
   }
 
   public static async transferOut(
@@ -98,13 +98,14 @@ export class HistoryRecord {
     ts: number,
     txHash: string,
     pending: boolean,
-    getIsLoopback: (shieldedAddress: string) => Promise<boolean>
+    getIsLoopback: (shieldedAddress: string) => Promise<boolean>,
+    extraInfo?: any,
   ): Promise<HistoryRecord> {
     const actions: TokensMoving[] = await Promise.all(transfers.map(async ({to, amount}) => { 
       return ({from: "", to, amount, isLoopback: await getIsLoopback(to)})
     }));
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
-    return new HistoryRecord(HistoryTransactionType.TransferOut, ts, actions, fee, txHash, state);
+    return new HistoryRecord(HistoryTransactionType.TransferOut, ts, actions, fee, txHash, state, undefined, extraInfo);
   }
 
   public static async withdraw(
@@ -113,33 +114,38 @@ export class HistoryRecord {
     fee: bigint,
     ts: number,
     txHash: string,
-    pending: boolean
+    pending: boolean,
+    extraInfo?: any,
   ): Promise<HistoryRecord> {
     const action: TokensMoving = {from: "", to, amount, isLoopback: false};
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
-    return new HistoryRecord(HistoryTransactionType.Withdrawal, ts, [action], fee, txHash, state);
+    return new HistoryRecord(HistoryTransactionType.Withdrawal, ts, [action], fee, txHash, state, undefined, extraInfo);
   }
 
   public static async aggregateNotes(
     fee: bigint,
     ts: number,
     txHash: string,
-    pending: boolean
+    pending: boolean,
+    extraInfo?: any,
   ): Promise<HistoryRecord> {
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
-    return new HistoryRecord(HistoryTransactionType.AggregateNotes, ts, [], fee, txHash, state);
+    return new HistoryRecord(HistoryTransactionType.AggregateNotes, ts, [], fee, txHash, state, undefined, extraInfo);
   }
 
   public static async directDeposit(
-    transfers: {to: string, amount: bigint}[],
+    from: string,
+    to: string,
+    amount: bigint,
     fee: bigint,
     ts: number,
     txHash: string,
-    pending: boolean
+    pending: boolean,
+    extraInfo?: any,
   ): Promise<HistoryRecord> {
-    const actions: TokensMoving[] = transfers.map(({to, amount}) => { return ({from: "", to, amount, isLoopback: false}) });
+    const actions: TokensMoving[] = [ {from, to, amount, isLoopback: false} ];
     const state: HistoryRecordState = pending ? HistoryRecordState.Pending : HistoryRecordState.Mined;
-    return new HistoryRecord(HistoryTransactionType.DirectDeposit, ts, actions, fee, txHash, state);
+    return new HistoryRecord(HistoryTransactionType.DirectDeposit, ts, actions, fee, txHash, state, undefined, extraInfo);
   }
 
   public toJson(): string {
@@ -230,6 +236,8 @@ export class HistoryStorage {
   private syncIndex = -1;
   private syncAttempts = 0;
   private state: ZkBobState;
+  private network: NetworkBackend;
+  private subgraph?: ZkBobSubgraph;
 
   private queuedTxs = new Map<string, HistoryRecord[]>(); // jobId -> HistoryRecord[]
                                           //(while tx isn't processed on relayer)
@@ -250,15 +258,16 @@ export class HistoryStorage {
 
 
   private syncHistoryPromise: Promise<void> | undefined;
-  private web3;
 
-  constructor(db: IDBPDatabase, rpcUrl: string, state: ZkBobState) {
+
+  constructor(db: IDBPDatabase, network: NetworkBackend, state: ZkBobState, subgraph?: ZkBobSubgraph) {
     this.db = db;
-    this.web3 = new Web3(rpcUrl);
+    this.network = network;
     this.state = state;
+    this.subgraph = subgraph;
   }
 
-  static async init(db_id: string, rpcUrl: string, state: ZkBobState): Promise<HistoryStorage> {
+  static async init(db_id: string, network: NetworkBackend, state: ZkBobState, subgraph?: ZkBobSubgraph): Promise<HistoryStorage> {
     let isNewDB = false;
     const db = await openDB(`zkb.${db_id}.history`, 4, {
       upgrade(db, oldVersion, newVersions) {
@@ -318,7 +327,7 @@ export class HistoryStorage {
       await db.put(HISTORY_STATE_TABLE, HISTORY_RECORD_VERSION, 'version');
     }
 
-    const storage = new HistoryStorage(db, rpcUrl, state);
+    const storage = new HistoryStorage(db, network, state, subgraph);
     await storage.preloadCache();
 
     return storage;
@@ -647,100 +656,59 @@ export class HistoryStorage {
           recTs < (toTimestamp ?? Number.MAX_VALUE) &&
           value.state == HistoryRecordState.Mined
       ) {
-        const calldata = await this.getNativeTx(treeIndex, value.txHash);
-        if (calldata && calldata.blockNumber && calldata.input) {
-          try {
-            const txSelector = calldata.input.slice(2, 10).toLowerCase();
-            if (txSelector == PoolSelector.Transact) {
-              const tx = ShieldedTx.decode(calldata.input);
-              const memoblock = hexToBuf(tx.ciphertext);
+        const txDetails = await this.network.getTxDetails(treeIndex, value.txHash, this.state);
+        const details = txDetails?.details;
+        if (txDetails && details instanceof RegularTxDetails) {  // txDetails belongs to a regular transaction
+          // regular transaction
+          const memoblock = hexToBuf(details.ciphertext);
 
-              let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
-              if (!decryptedMemo) {
-                // If the decrypted memo cannot be retrieved from the database => decrypt it again
-                const indexedTx: IndexedTx = {
-                  index: treeIndex,
-                  memo: tx.ciphertext,
-                  commitment: bufToHex(bigintToArrayLe(tx.outCommit)),
-                }
-                const res: ParseTxsResult = await this.state.decryptMemos(indexedTx);
-                if (res.decryptedMemos.length == 1) {
-                  decryptedMemo = res.decryptedMemos[0];
-                } else {
-                  throw new InternalError(`Cannot decrypt tx. Excepted 1 memo, got ${res.decryptedMemos.length}`);
-                }
-              }
-
-              const chunks: TxMemoChunk[] = await this.state.extractDecryptKeys(treeIndex, memoblock);
-
-              let nullifier: Uint8Array | undefined;
-              let inputs: TxInput | undefined;
-              let nextNullifier: Uint8Array | undefined;
-              if (value.type != HistoryTransactionType.TransferIn) {
-                // tx is user-initiated
-                nullifier = bigintToArrayLe(tx.nullifier);
-                inputs = await this.state.getTxInputs(treeIndex);
-                if (decryptedMemo && decryptedMemo.acc) {
-                  const strNullifier = await this.state.calcNullifier(decryptedMemo.index, decryptedMemo.acc);
-                  const writer = new HexStringWriter();
-                  writer.writeBigInt(BigInt(strNullifier), 32, true);
-                  nextNullifier = hexToBuf(writer.toString());
-                } else {
-                  throw new InternalError(`Account was not decrypted @${treeIndex}`);
-                }
-              }
-
-              // TEST-CASE: I'll remove it before merging
-              // Currently you could check key extracting correctness with that code
-              for (const aChunk of chunks) {
-                if(aChunk.index == treeIndex) {
-                  // account
-                  const restoredAcc = await this.state.decryptAccount(aChunk.key, aChunk.encrypted);
-                  if (JSON.stringify(restoredAcc) != JSON.stringify(decryptedMemo?.acc)) {
-                    throw new InternalError(`Cannot restore source account @${aChunk.index} from the compliance report!`);
-                  }
-                } else if (decryptedMemo) {
-                  // notes
-                  const restoredNote = await this.state.decryptNote(aChunk.key, aChunk.encrypted);
-                  let srcNote: Note | undefined;
-                  for (const aNote of decryptedMemo.outNotes) {
-                    if (aNote.index == aChunk.index) { srcNote = aNote.note; break; }
-                  }
-                  if (!srcNote) {
-                    for (const aNote of decryptedMemo.inNotes) {
-                      if (aNote.index == aChunk.index) { srcNote = aNote.note; break; }
-                    } 
-                  }
-
-                  if (!srcNote) {
-                    throw new InternalError(`Cannot find associated note @${aChunk.index} to check decryption!`);
-                  } else if ( JSON.stringify(restoredNote) != JSON.stringify(srcNote)) {
-                    throw new InternalError(`Cannot restore source note @${aChunk.index} from the compliance report!`);
-                  }
-                }
-              };
-              // --- END-OF-TEST-CASE ---
-              
-              const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, nextNullifier, decryptedMemo, chunks, inputs);
-              complienceRecords.push(aRec);
-            } else if(txSelector == PoolSelector.AppendDirectDeposit) {
-              // Here is direct deposit transaction
-              // It isn't encrypted so we do not need any extra info
-              let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
-              if (decryptedMemo) {
-                const aRec = new ComplianceHistoryRecord(value, treeIndex, undefined, undefined, decryptedMemo, [], undefined);
-                complienceRecords.push(aRec);
-              }
-
+          let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
+          if (!decryptedMemo) {
+            // If the decrypted memo cannot be retrieved from the database => decrypt it again
+            const indexedTx: IndexedTx = {
+              index: treeIndex,
+              memo: details.ciphertext,
+              commitment: details.commitment,
+            }
+            const res: ParseTxsResult = await this.state.decryptMemos(indexedTx);
+            if (res.decryptedMemos.length == 1) {
+              decryptedMemo = res.decryptedMemos[0];
             } else {
-              throw new InternalError(`Cannot decode calldata for tx @ ${treeIndex}: incorrect selector ${txSelector}`);
+              throw new InternalError(`Cannot decrypt tx. Excepted 1 memo, got ${res.decryptedMemos.length}`);
             }
           }
-          catch (e) {
-            throw new InternalError(`Cannot generate compliance report for tx @ ${treeIndex}: ${e}`);
+
+          const chunks: TxMemoChunk[] = await this.state.extractDecryptKeys(treeIndex, memoblock);
+
+          let nullifier: Uint8Array | undefined;
+          let inputs: TxInput | undefined;
+          let nextNullifier: Uint8Array | undefined;
+          if (value.type != HistoryTransactionType.TransferIn) {
+            // tx is user-initiated
+            nullifier = hexToBuf(details.nullifier);
+            inputs = await this.state.getTxInputs(treeIndex);
+            if (decryptedMemo && decryptedMemo.acc) {
+              const strNullifier = await this.state.calcNullifier(decryptedMemo.index, decryptedMemo.acc);
+              const writer = new HexStringWriter();
+              writer.writeBigInt(BigInt(strNullifier), 32);
+              nextNullifier = hexToBuf(writer.toString());
+            } else {
+              throw new InternalError(`Account was not decrypted @${treeIndex}`);
+            }
           }
-        } else {
-          console.warn(`[HistoryStorage]: cannot get calldata for tx at index ${treeIndex}`);
+          
+          const aRec = new ComplianceHistoryRecord(value, treeIndex, nullifier, nextNullifier, decryptedMemo as DecryptedMemo, chunks, inputs);
+          complienceRecords.push(aRec);
+        } else if (txDetails && details instanceof DDBatchTxDetails) { // txDetails belongs to direct deposit batch
+          // Here is direct deposit batch transaction
+          // It isn't encrypted so we do not need any extra info
+          let decryptedMemo = await this.getDecryptedMemo(treeIndex, false);
+          if (decryptedMemo) {
+            const aRec = new ComplianceHistoryRecord(value, treeIndex, undefined, undefined, decryptedMemo, [], undefined);
+            complienceRecords.push(aRec);
+          }
+        } else {  // cannot retrieve transaction details
+          throw new InternalError(`Cannot retrieve tx details @ ${treeIndex}`)
         }
       }
     };
@@ -775,7 +743,7 @@ export class HistoryStorage {
     });
 
 
-    // Remove records after the specified idex from the database
+    // Remove records after the specified index from the database
     await this.db.delete(TX_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
     await this.db.delete(DECRYPTED_MEMO_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
     await this.db.delete(DECRYPTED_PENDING_MEMO_TABLE, IDBKeyRange.lowerBound(rollbackIndex));
@@ -837,38 +805,18 @@ export class HistoryStorage {
     if (this.unparsedMemo.size > 0 || this.unparsedPendingMemo.size > 0) {
       console.log(`[HistoryStorage] starting memo synchronizing from the index ${this.syncIndex + 1} (${this.unparsedMemo.size} + ${this.unparsedPendingMemo.size}(pending) unprocessed memos)`);
 
-      const historyPromises: Promise<HistoryRecordIdx[]>[] = [];
+      //const historyPromises: Promise<HistoryRecordIdx[]>[] = [];
       
       // process mined memos
-      const processedIndexes: number[] = [];
-      const unprocessedIndexes: number[] = [];
-      for (const oneMemo of this.unparsedMemo.values()) {
-        const hist = this.convertToHistory(oneMemo, false).then( records => {
-          if (records.length > 0) {
-            processedIndexes.push(oneMemo.index);
-          } else {
-            // collect unprocessed indexes as well
-            // (the reason is most likely RPC failure)
-            unprocessedIndexes.push(oneMemo.index)
-          }
+      const minedHistoryPromise = this.convertToHistory([...this.unparsedMemo.values()], false);
+      const pendingHistoryPromise = this.convertToHistory([...this.unparsedPendingMemo.values()], true);
+      const [minedHistory, pendingHistory] = await Promise.all([minedHistoryPromise, pendingHistoryPromise]);
 
-          return records;
-        });
-        historyPromises.push(hist);
-      }
 
-      // process pending memos
-      const processedPendingIndexes: number[] = [];
-      for (const oneMemo of this.unparsedPendingMemo.values()) {
-        if (this.failedHistory.find(rec => rec.txHash == oneMemo.txHash) === undefined) {
-          const hist = this.convertToHistory(oneMemo, true);
-          historyPromises.push(hist);
-
-          processedPendingIndexes.push(oneMemo.index);
-        }
-      }
-
-      const historyRedords = await Promise.all(historyPromises);
+      const historyRecords = minedHistory.records.concat(pendingHistory.records);
+      const processedIndexes = minedHistory.succIdxs.concat(pendingHistory.succIdxs);
+      const unprocessedIndexes = minedHistory.failIdxs.concat(pendingHistory.failIdxs);
+      const needToResyncIndexes = minedHistory.resyncIdxs.concat(pendingHistory.resyncIdxs);
 
       // delete all pending history records [we'll refresh them immediately]
       for (const [index, record] of this.currentHistory.entries()) {
@@ -878,40 +826,45 @@ export class HistoryStorage {
       }
 
       let newSyncIndex = this.syncIndex;
-      for (const oneSet of historyRedords) {
-        for (const oneRec of oneSet) {
-          if (LOG_HISTORY_SYNC) {
-            console.log(`[HistoryStorage] history record @${oneRec.index} has been created`);
-          }
+      for (const oneRec of historyRecords) {
+        if (LOG_HISTORY_SYNC) {
+          console.log(`[HistoryStorage] history record @${oneRec.index} has been created`);
+        }
 
-          this.currentHistory.set(oneRec.index, oneRec.record);
+        this.currentHistory.set(oneRec.index, oneRec.record);
 
-          if (oneRec.record.state == HistoryRecordState.Mined) {
-            // save history record only for mined transactions
-            this.put(oneRec.index, oneRec.record);
-            
-            newSyncIndex = oneRec.index;
-          }
+        if (oneRec.record.state == HistoryRecordState.Mined) {
+          // save history record only for mined transactions
+          this.put(oneRec.index, oneRec.record);
+          
+          newSyncIndex = oneRec.index;
         }
       }
 
       if (unprocessedIndexes.length > 0) {
-        console.warn(`[HistoryStorage] unprocessed: ${unprocessedIndexes.sort().map((idx) => `@${idx}`).join(', ')}`);
+        console.warn(`[HistoryStorage] unable to sync indexes: ${unprocessedIndexes.sort().map((idx) => `@${idx}`).join(', ')}`);
+      }
+      if (needToResyncIndexes.length > 0) {
+        console.warn(`[HistoryStorage] need to resync later: ${needToResyncIndexes.sort().map((idx) => `@${idx}`).join(', ')}`);
       }
 
-      // we should save unprocessed records to restore them in case of library reload
-      this.db.put(HISTORY_STATE_TABLE, unprocessedIndexes, 'fail_indexes');
+      // we should save unprocessed and incompleted records to restore them in case of library reload
+      this.db.put(HISTORY_STATE_TABLE, [...unprocessedIndexes, ...needToResyncIndexes], 'fail_indexes');
 
       for (const oneIndex of processedIndexes) {
-        this.unparsedMemo.delete(oneIndex);
+        if (!needToResyncIndexes.includes(oneIndex)) {
+          // remove memo from the unparsed list if it shouldn't be resynced
+          this.unparsedMemo.delete(oneIndex);
+        }
       }
 
       this.syncIndex = Math.max(this.syncIndex, newSyncIndex);  // prevent sync index decreasing
       this.db.put(HISTORY_STATE_TABLE, this.syncIndex, 'sync_index');
 
       const timeMs = Date.now() - startTime;
-      const remainsStr = unprocessedIndexes.length > 0 ? ` (${unprocessedIndexes.length} memos remain unprecessed)` : '';
-      console.log(`[HistoryStorage] history has been synced up to index ${this.syncIndex}${remainsStr} in ${timeMs} msec (records: ${[...this.currentHistory.keys()].length})`);
+      const remainStr = unprocessedIndexes.length > 0 ? ` (${unprocessedIndexes.length} memos remain unprocessed)` : '';
+      const resyncStr = needToResyncIndexes.length > 0 ? ` (${needToResyncIndexes.length} memos will be re-synced)` : '';
+      console.log(`[HistoryStorage] history has been synced up to index ${this.syncIndex}${remainStr}${resyncStr} in ${timeMs} msec (records: ${[...this.currentHistory.keys()].length})`);
     } else {
       // No any records (new or pending) => delete all pending history records
       for (const [index, record] of this.currentHistory.entries()) {
@@ -936,193 +889,203 @@ export class HistoryStorage {
     return data;
   }
 
-  private async convertToHistory(memo: DecryptedMemo, pending: boolean): Promise<HistoryRecordIdx[]> {
-    const txHash = memo.txHash;
-    if (txHash) {
-      const txData = await this.getNativeTx(memo.index, txHash);
-      if (txData) {
-        const block = await this.web3.eth.getBlock(txData.blockNumber).catch(() => null);
-        if (block && block.timestamp) {
-          let ts: number = 0;
-          if (typeof block.timestamp === "number" ) {
-              ts = block.timestamp;
-          } else if (typeof block.timestamp === "string" ) {
-              ts = Number(block.timestamp);
-          }
+  private async getTxesDetails(
+    memos: DecryptedMemo[]
+  ): Promise<{
+    details: PoolTxDetails[], // all fetched txes details
+    fetched: number[],        // fetched tx's indexes (in Merkle tree)
+    notFetched: number[],     // failed to fetch tx's indexes
+    needResync: number[]}>    // indexes which are fetched incompletely
+                              // (e.g. DD via fallback with existing subgraph)
+  {
+    const requestedIndexes = memos.map((aMemo) => aMemo.index);
+    let fetchedTxs: PoolTxDetails[] = [];
+    let fetchedIndexes: number[] = [];
+    let fetchedIncompletely: number[] = [];
+    if (this.subgraph) {
+      // try to fetch txes from the sugraph (if available)
+      fetchedTxs = await this.subgraph.getTxesDetails(requestedIndexes, this.state, this.network);
+    }
 
-          // Decode transaction data
-          try {
-            const txSelector = txData.input.slice(2, 10).toLowerCase();
-            if (txSelector == PoolSelector.Transact) {
-              // Here is a regular transaction (deposit/transfer/withdrawal)
-              const tx = ShieldedTx.decode(txData.input);
-              const feeAmount = BigInt('0x' + tx.memo.substr(0, 16))
-              
-              // All data is collected here. Let's analyze it
-              const allRecords: HistoryRecordIdx[] = [];
-              if (tx.txType == TxType.Deposit) {
-                // here is a deposit transaction (approvable method)
-                // source address are recovered from the signature
-                if (tx.extra && tx.extra.length >= 128) {
-                  const fullSig = toCanonicalSignature(tx.extra.substr(0, 128));
-                  const nullifier = '0x' + tx.nullifier.toString(16).padStart(64, '0');
-                  const depositHolderAddr = await this.web3.eth.accounts.recover(nullifier, fullSig);
+    // subgraph-based magic (due to DD batch have no index)
+    fetchedIndexes = fetchedTxs.map((aTx) => aTx.index);
+    const fetchedTxHashes = fetchedTxs.map((aTx) => aTx.details.txHash);
+    const fetchedIndexesByTxHashes = memos
+      .filter((aMemo) => {
+        return aMemo.txHash && fetchedTxHashes.includes(aMemo.txHash) && !fetchedIndexes.includes(aMemo.index);
+      })
+      .map((aMemo) => aMemo.index);
+    fetchedIndexes = removeDuplicates([...fetchedIndexes, ...fetchedIndexesByTxHashes])
 
-                  const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
-                  allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                } else {
-                  //incorrect signature
-                  throw new InternalError(`no signature for approvable deposit`);
-                }
-              } else if (tx.txType == TxType.BridgeDeposit) {
-                // here is a deposit transaction (permittable token)
-                // source address in the memo block (20 bytes, starts from 16 bytes offset)
-                const depositHolderAddr = '0x' + tx.memo.substr(32, 40);  // TODO: Check it!
-                
-                const rec = await HistoryRecord.deposit(depositHolderAddr, tx.tokenAmount, feeAmount, ts, txHash, pending);
+    // get unprocessed memos
+    const unparsedMemos = memos.filter((aMemo) => !fetchedIndexes.includes(aMemo.index));
+
+    // fetch from the RPC node unprocessed txs by subgraph
+    if (this.subgraph && unparsedMemos.length > 0) {
+      console.warn(`[HistoryStorage] Cannot fetch ${unparsedMemos.length} of ${memos.length} indexes from subgraph. Fallbacking to RPC node: ${unparsedMemos.map((aMemo) => aMemo.index).join(', ')}`);
+    }
+    const promises: Promise<PoolTxDetails | null>[] = [];
+    for (let aMemo of unparsedMemos) {
+      if (aMemo.txHash) {
+        promises.push(this.network.getTxDetails(aMemo.index, aMemo.txHash, this.state));
+      }
+    }
+    const resFromRpc = await Promise.all(promises);
+    for (let aTx of resFromRpc) {
+      if (aTx) {
+        fetchedTxs.push(aTx);
+        fetchedIndexes.push(aTx.index);
+        if (aTx.poolTxType == PoolTxType.DirectDepositBatch && this.subgraph !== undefined) {
+          fetchedIncompletely.push(aTx.index);
+        }
+      }
+    }
+
+    const notFetchedIndexes = requestedIndexes.filter((aIdx) => !fetchedIndexes.includes(aIdx));
+    return {
+      details: fetchedTxs,
+      fetched: fetchedIndexes,
+      notFetched: notFetchedIndexes,
+      needResync: fetchedIncompletely,
+    };
+  }
+
+  private async convertToHistory(
+    memos: DecryptedMemo[],
+    pending: boolean
+  ): Promise<{
+    records: HistoryRecordIdx[],
+    succIdxs: number[],     // fetched successfully
+    failIdxs: number[],     // the related txs are not presented in records 
+    resyncIdxs: number[]}>  // the fetched txs which should be updated again for any reason
+  {
+    const result = await this.getTxesDetails(memos);
+    const txesDetails = result.details;
+    const fetched = result.fetched;
+    const notFetched = result.notFetched;
+
+    const allRecords: HistoryRecordIdx[] = [];
+    for (let txDetails of txesDetails) {
+      const memo = memos.find((aMemo) => aMemo.index == txDetails.index || aMemo.txHash == txDetails.details.txHash)
+      if (memo) {
+        if (txDetails.poolTxType == PoolTxType.Regular && txDetails.details instanceof RegularTxDetails) {
+          // regular transaction
+          const details = txDetails.details
+          if (details.txType == RegularTxType.Deposit || details.txType == RegularTxType.BridgeDeposit) {
+            const rec = await HistoryRecord.deposit(
+              details.depositAddr ?? '',
+              details.tokenAmount,
+              details.feeAmount,
+              details.timestamp,
+              details.txHash,
+              pending
+            );
+            allRecords.push(HistoryRecordIdx.create(rec, txDetails.index));
+          } else if (details.txType == RegularTxType.Transfer) {
+            // there are 2 cases: 
+            if (memo.acc) {
+              // 1. we initiated it => outcoming tx(s)
+              const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
+                const destAddr = await this.state.assembleAddress(note.d, note.p_d);
+                return {to: destAddr, amount: BigInt(note.b)};
+              }));
+
+              if (transfers.length == 0) {
+                const rec = await HistoryRecord.aggregateNotes(details.feeAmount, details.timestamp, details.txHash, pending);
                 allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-
-              } else if (tx.txType == TxType.Transfer) {
-                // there are 2 cases: 
-                if (memo.acc) {
-                  // 1. we initiated it => outcoming tx(s)
-                  const transfers = await Promise.all(memo.outNotes.map(async ({note}) => {
-                    const destAddr = await this.state.assembleAddress(note.d, note.p_d);
-                    return {to: destAddr, amount: BigInt(note.b)};
-                  }));
-
-                  if (transfers.length == 0) {
-                    const rec = await HistoryRecord.aggregateNotes(feeAmount, ts, txHash, pending);
-                    allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                  } else {
-                    const rec = await HistoryRecord.transferOut(
-                      transfers,
-                      feeAmount,
-                      ts, txHash,
-                      pending,
-                      async (addr) => this.state.isOwnAddress(addr)
-                    );
-                    allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                  }
-                } else {
-                  // 2. somebody initiated it => incoming tx(s)
-
-                  const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
-                    const destAddr = await this.state.assembleAddress(note.d, note.p_d);
-                    return {to: destAddr, amount: BigInt(note.b)};
-                  }));
-
-                  const rec = await HistoryRecord.transferIn(transfers, BigInt(0), ts, txHash, pending);
-                  allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-                }
-              } else if (tx.txType == TxType.Withdraw) {
-                // withdrawal transaction (destination address in the memoblock)
-                const withdrawDestAddr = '0x' + tx.memo.substr(32, 40);
-
-                const rec = await HistoryRecord.withdraw(withdrawDestAddr, -(tx.tokenAmount + feeAmount), feeAmount, ts, txHash, pending);
-                allRecords.push(HistoryRecordIdx.create(rec, memo.index));
-              }
-
-              // if we found txHash in the blockchain -> remove it from the saved tx array
-              if (pending) {
-                // if tx is in pending state - remove it only on success
-                const txReceipt = await this.web3.eth.getTransactionReceipt(txHash);
-                if (txReceipt && txReceipt.status !== undefined && txReceipt.status == true) {
-                  this.removePendingTxByTxHash(txHash);
-                }
               } else {
-                this.removePendingTxByTxHash(txHash);
+                const rec = await HistoryRecord.transferOut(
+                  transfers,
+                  details.feeAmount,
+                  details.timestamp,
+                  details.txHash,
+                  pending,
+                  async (addr) => this.state.isOwnAddress(addr)
+                );
+                allRecords.push(HistoryRecordIdx.create(rec, memo.index));
               }
-
-              return allRecords;
-
-            } else if (txSelector == PoolSelector.AppendDirectDeposit) {
-              // Direct Deposit tranaction
+            } else {
+              // 2. somebody initiated it => incoming tx(s)
               const transfers = await Promise.all(memo.inNotes.map(async ({note}) => {
                 const destAddr = await this.state.assembleAddress(note.d, note.p_d);
                 return {to: destAddr, amount: BigInt(note.b)};
               }));
 
-              const rec = await HistoryRecord.directDeposit(transfers, BigInt(0), ts, txHash, pending);
-              return [HistoryRecordIdx.create(rec, memo.index)];
-            } else {
-              
-              throw new InternalError(`Cannot decode calldata for tx ${txHash}: incorrect selector ${txSelector}`);
+              const rec = await HistoryRecord.transferIn(transfers, BigInt(0), details.timestamp, details.txHash, pending);
+              allRecords.push(HistoryRecordIdx.create(rec, memo.index));
             }
-          } catch (e) {
-            // there is no workaround for that issue => throw Error
-            throw new InternalError(`Cannot decode calldata for tx ${txHash}: ${e}`);
+          } else if (details.txType == RegularTxType.Withdraw) {
+            const rec = await HistoryRecord.withdraw(
+              details.withdrawAddr ?? '', 
+              -(details.tokenAmount + details.feeAmount),
+              details.feeAmount,
+              details.timestamp,
+              details.txHash,
+              pending
+            );
+            allRecords.push(HistoryRecordIdx.create(rec, memo.index));
+          } else {
+            throw new InternalError(`[HistoryStorage] Unknown transaction type ${details.txType}`)
           }
-        }
 
-        // we shouldn't panic here: will retry in the next time
-        console.warn(`[HistoryStorage] unable to fetch block ${txData.blockNumber} for tx @${memo.index}`);
+          if (!pending || (pending && details.isMined)) {
+            // if tx is in pending state - remove it only on success
+            this.removePendingTxByTxHash(details.txHash);
+          }
+        } else if (txDetails.poolTxType == PoolTxType.DirectDepositBatch && txDetails.details instanceof DDBatchTxDetails) {
+          // transaction is DD batch on the pool
+          // Direct Deposit tranaction
+          const details = txDetails.details
+          details.deposits.forEach(async (aDeposit, idx) => {
+            const tokenMoving = {to: aDeposit.destination, amount: aDeposit.amount };
+            const rec = await HistoryRecord.directDeposit(
+              aDeposit.sender && aDeposit.sender != '' ? aDeposit.sender : aDeposit.fallback,
+              aDeposit.destination,
+              aDeposit.amount,
+              aDeposit.fee,
+              details.timestamp,
+              details.txHash,
+              pending,
+              aDeposit.payment,
+            );
+            allRecords.push(HistoryRecordIdx.create(rec, memo.index + idx));
+          });
+        } else { 
+          throw new InternalError(`Incorrect or unsupported transaction details`);
+        }
       } else {
-        // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
-        const records = this.sentTxs.get(txHash);
-        if (records !== undefined) {
-          console.log(`[HistoryStorage] tx ${txHash} isn't indexed yet, but we have ${records.length} associated history record(s)`);
-          return records.map((oneRecord, index) => HistoryRecordIdx.create(oneRecord, memo.index + index));
-        } else {
-          // we shouldn't panic here: will retry in the next time
-          console.warn(`[HistoryStorage] cannot fetch tx ${txHash} and no local associated records`);
-        }
-      }
-
-      // In some cases (e.g. unable to fetch tx) we should return a valid value
-      // Otherwise top-level Promise.all() will failed
-      return [];
-
-    }
-
-    throw new InternalError(`Cannot find txHash for memo at index ${memo.index}`);
-  }
-
-  private async getNativeTx(index: number, txHash: string | undefined = undefined): Promise<any> {
-    const mask = (-1) << CONSTANTS.OUTLOG;
-    const txIndex = index & mask;
-
-    let calldata = await this.db.get(NATIVE_TX_TABLE, txIndex);
-    if (!calldata) {
-      // calldata for that index isn't presented in the DB => request it
-      if (txHash === undefined) {
-        // it's need to get txHash for that index first
-        const decryptedMemo = await this.getDecryptedMemo(txIndex, false);  // only mined txs
-        if (decryptedMemo && decryptedMemo.txHash) {
-          txHash = decryptedMemo.txHash;
-        } else {
-          console.warn(`[HistoryStorage]: unable to retrieve txHash for tx at index ${txIndex}: no saved decrypted memo`);
-
-          return null;
-        }
-      }
-
-      try {
-        const txData = await this.web3.eth.getTransaction(txHash);
-        if (txData && txData.blockNumber && txData.input) {
-          this.saveNativeTx(index, txData);
-
-          return txData;
-        } else {
-          console.warn(`[HistoryStorage]: cannot get native tx ${txHash} (tx still not mined?)`);
-
-          return null;
-        }
-      } catch (err) {
-        console.warn(`[HistoryStorage]: cannot get native tx ${txHash} (${err.message})`);
-
-        return null;
+        throw new InternalError(`Could not find associated memo for txDetails (index: ${txDetails.index}, txHash: ${txDetails.details.txHash})`);
       }
     }
 
-    return calldata;
+    // working with memos without fetched tx details
+    for (let aUnprocessedIdx of notFetched) {
+      const memo = memos.find((aMemo) => aMemo.index == aUnprocessedIdx);
+      if (memo) {
+        if (memo.txHash) {
+          // Cannot retrieve transaction details (maybe it's not mined yet?)
+          // Look for a transactions, initiated by the user and try to convert it to the HistoryRecord
+          const records = this.sentTxs.get(memo.txHash);
+          if (records !== undefined) {
+            console.log(`[HistoryStorage] tx ${memo.txHash} isn't indexed yet, but we have ${records.length} associated history record(s)`);
+            records.forEach((oneRecord, index) => {
+              allRecords.push(HistoryRecordIdx.create(oneRecord, memo.index + index));
+              if (!fetched.includes(memo.index)) fetched.push(memo.index);
+              const x = notFetched.indexOf(memo.index);
+              if (x >= 0) { notFetched.splice(x, 1); } 
+            });
+          } else {
+            // we shouldn't panic here: will retry the next time
+            console.warn(`[HistoryStorage] cannot fetch tx ${memo.txHash} and no local associated records`);
+          }
+        } else {
+          throw new InternalError(`Cannot find txHash for memo at index ${memo.index}`);
+        }
+      } else {
+        throw new InternalError(`Could not find associated memo for unprocessed index ${aUnprocessedIdx}`);
+      }
+    }
+
+    return {records: allRecords, succIdxs: fetched, failIdxs: notFetched, resyncIdxs: result.needResync};
   }
-
-  private async saveNativeTx(index: number, txData: any): Promise<void> {
-    const mask = (-1) << CONSTANTS.OUTLOG;
-    const txIndex = index & mask;
-
-    await this.db.put(NATIVE_TX_TABLE, txData, txIndex);
-  }
-
 }

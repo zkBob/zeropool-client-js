@@ -1,11 +1,11 @@
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
 import { Chains, Pools, Parameters, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
-import { ethAddrToBuf, toCompactSignature, truncateHexPrefix,
+import { truncateHexPrefix,
           toTwosComplementHex, bufToHex, bigintToArrayLe
         } from './utils';
 import { SyncStat, ZkBobState } from './state';
-import { CALLDATA_BASE_LENGTH, CALLDATA_MEMO_NOTE_LENGTH, CALLDATA_MEMO_TRANSFER_BASE_LENGTH, TxType, estimateCalldataLength, txTypeToString } from './tx';
+import { DirectDeposit, RegularTxType, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
@@ -18,18 +18,15 @@ import { GiftCardProperties, TreeState, ZkBobProvider } from './client-provider'
 import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
 import { PERMIT2_CONTRACT } from './signers/permit2-signer';
-import { DirectDeposit, DirectDepositProcessor, DirectDepositType } from './dd';
+import { DirectDepositProcessor, DirectDepositType } from './dd';
 
-import { isHexPrefixed } from '@ethereumjs/util';
-import { isAddress } from 'web3-utils';
 import { wrap } from 'comlink';
-import { PreparedTransaction } from './networks/network';
+import { PreparedTransaction } from './networks';
 import { Privkey } from 'hdwallet-babyjub';
 import { IDBPDatabase, openDB } from 'idb';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
-const NULL_ADDRESS = '0x0000000000000000000000000000000000000000';
 const PERMIT_DEADLINE_INTERVAL = 1200;   // permit deadline is current time + 20 min
 const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx proof calculation and sending (5 min)
 
@@ -37,6 +34,8 @@ const CONTINUOUS_STATE_UPD_INTERVAL = 200; // updating client's state timer inte
 const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous after that interval (in ms)
 
 const GLOBAL_PARAMS_NAME = '__globalParams';
+
+const PROVIDER_SYNC_TIMEOUT = 60;  // maximum time to sync network backend by blockNumber (in seconds)
 
 // Common database table's name
 const SYNC_PERFORMANCE = 'SYNC_PERFORMANCE';
@@ -294,15 +293,15 @@ export class ZkBobClient extends ZkBobProvider {
           this.account.sk,
           this.account.birthindex,
           network,
+          this.subgraph(),
           networkName,
-          network.getRpcUrl(),
           denominator,
           poolId,
           pool.tokenAddress,
           this.worker
         );
       this.zpStates[newPoolAlias] = state;
-      this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state)
+      this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state, this.subgraph());
 
       try {
         await this.setProverMode(this.account.proverMode);
@@ -420,9 +419,10 @@ export class ZkBobClient extends ZkBobProvider {
     const accId = accountId(giftCardAcc);
     if (!this.auxZpStates[accId]) {
       // create gift-card auxiliary state if needed
+      const network = this.network();
       const networkName = this.networkName();
       const poolId = await this.poolId();
-      const giftCardState = await ZkBobState.createNaked(giftCardAcc.sk, giftCardAcc.birthindex, networkName, poolId, this.worker);
+      const giftCardState = await ZkBobState.createNaked(giftCardAcc.sk, giftCardAcc.birthindex, network, networkName, poolId, this.worker);
 
       // state will be removed after gift card redemption or on logout
       this.auxZpStates[accId] = giftCardState;
@@ -538,7 +538,8 @@ export class ZkBobClient extends ZkBobProvider {
         if (job.state === 'failed') {
           throw new RelayerJobError(Number(jobId), job.failedReason ? job.failedReason : 'unknown reason');
         } else if (job.state === 'sent') {
-          if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'sent' state`);
+          //if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'sent' state`);
+          if (!job.txHash) console.error(`Relayer return job #${jobId} without txHash in 'sent' state`);
           break;
         } else if (job.state === 'reverted')  {
           throw new PoolJobError(Number(jobId), job.txHash ? job.txHash : 'no_txhash', job.failedReason ?? 'unknown reason');
@@ -588,7 +589,9 @@ export class ZkBobClient extends ZkBobProvider {
     const relayer = this.relayer();
     const state = this.zpState();
 
+    let issues = 0;
     const INTERVAL_MS = 1000;
+    const ISSUES_THRESHOLD = 20;
     let job: JobInfo;
     let lastTxHash = '';
     let lastJobState = '';
@@ -624,6 +627,7 @@ export class ZkBobClient extends ZkBobProvider {
             }
           } else {
             console.warn(`JobMonitoring: ${jobDescr} was sent to the pool but has no assigned txHash [relayer issue]`);
+            issues++;
           }
         } else if (job.state === 'reverted')  {
           // [TERMINAL STATE] Transaction was reverted on the Pool and won't resend
@@ -637,6 +641,7 @@ export class ZkBobClient extends ZkBobProvider {
             revertReason = retrievedReason ?? 'transaction was not found\\reverted'
           } else {
             console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
+            issues++;
           }
 
           state.history?.setSentTransactionFailedByPool(jobId, job.txHash ?? '', revertReason);
@@ -649,6 +654,7 @@ export class ZkBobClient extends ZkBobProvider {
             console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
           } else {
             console.warn(`JobMonitoring: ${jobDescr} was mined but has no assigned txHash [relayer issue]`);
+            issues++;
           }
           break;
         }
@@ -656,6 +662,11 @@ export class ZkBobClient extends ZkBobProvider {
         lastJobState = job.state;
         if (job.txHash) lastTxHash = job.txHash;
 
+      }
+
+      if (issues > ISSUES_THRESHOLD) {
+        console.warn(`JobMonitoring: job #${jobId} issues threshold achieved, stop monitoring`);
+        break;
       }
 
       await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
@@ -676,6 +687,7 @@ export class ZkBobClient extends ZkBobProvider {
     signatureCallback: (request: SignatureRequest) => Promise<string>,
     fromAddress: string,
     relayerFee?: RelayerFee,
+    blockNumber?: number, // synchronize internal provider with the block
   ): Promise<string> {
     const pool = this.pool();
     const relayer = this.relayer();
@@ -695,7 +707,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     // Fee estimating
     const usedFee = relayerFee ?? await this.getRelayerFee();
-    const txType = pool.depositScheme == DepositType.Approve ? TxType.Deposit : TxType.BridgeDeposit;
+    const txType = pool.depositScheme == DepositType.Approve ? RegularTxType.Deposit : RegularTxType.BridgeDeposit;
     let estimatedFee = await this.feeEstimateInternal([amountGwei], txType, usedFee, 0n, false, true);
     const feeGwei = estimatedFee.total;
 
@@ -703,7 +715,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     // Creating raw deposit transaction object
     let txData;
-    if (txType == TxType.Deposit) {
+    if (txType == RegularTxType.Deposit) {
       // deposit via approve (deprecated)
       txData = await state.createDeposit({
         amount: (amountGwei + feeGwei).toString(),
@@ -715,8 +727,17 @@ export class ZkBobClient extends ZkBobProvider {
         amount: (amountGwei + feeGwei).toString(),
         fee: feeGwei.toString(),
         deadline: String(deadline),
-        holder: ethAddrToBuf(fromAddress)
+        holder: this.network().addressToBytes(fromAddress)
       });
+    }
+
+    // sync by block number if needed
+    if (blockNumber !== undefined) {
+      const ready = await this.network().waitForBlock(blockNumber, PROVIDER_SYNC_TIMEOUT);
+      if (!ready) {
+        // do not throw error here, pass to validation anyway
+        console.warn(`Unable to sync network backend (sync block ${blockNumber}, current ${await this.network().getBlockNumber()}). Validation may failed!`);
+      }
     }
 
     // Preparing signature request and sending it via callback
@@ -732,18 +753,18 @@ export class ZkBobClient extends ZkBobProvider {
     await depositSigner.checkIsDataValid(dataToSign); // may throw an error in case of the owner isn't prepared for requested deposit scheme
     const signReq = await depositSigner.buildSignatureRequest(dataToSign);
     let signature = await signatureCallback(signReq);
-    signature = toCompactSignature(truncateHexPrefix(signature));
+    signature = truncateHexPrefix(this.network().toCompactSignature(signature));
 
     // Checking signature correct (corresponded with declared address)
-    const claimedAddr = `0x${bufToHex(ethAddrToBuf(fromAddress))}`;
+    const claimedAddr = fromAddress;
     let recoveredAddr;
     try {
       recoveredAddr = await depositSigner.recoverAddress(dataToSign, signature);
     } catch (err) {
       throw new SignatureError(`Cannot recover address from the provided signature. Error: ${err.message}`);
     }
-    if (recoveredAddr != claimedAddr) {
-      throw new SignatureError(`The address recovered from the permit signature ${recoveredAddr} doesn't match the declared one ${claimedAddr}`);
+    if (!this.network().isEqualAddresses(recoveredAddr, claimedAddr)) {
+      throw new SignatureError(`The address recovered from the provided signature ${recoveredAddr} doesn't match the declared one ${claimedAddr}`);
     }
 
     // We should also check deadline here because the user could introduce great delay
@@ -795,7 +816,7 @@ export class ZkBobClient extends ZkBobProvider {
     // for ephemeral address in contrast to depositing from external user's address
     const pool = await this.pool();
     const actualFee = relayerFee ?? await this.getRelayerFee();
-    const txType = pool.depositScheme == DepositType.Approve ? TxType.Deposit : TxType.BridgeDeposit;
+    const txType = pool.depositScheme == DepositType.Approve ? RegularTxType.Deposit : RegularTxType.BridgeDeposit;
     const neededFee = await this.feeEstimateInternal([amountGwei], txType, actualFee, 0n, true, true);
     if(fromAddress.tokenBalance < amountGwei + neededFee.total) {
       throw new TxInsufficientFundsError(amountGwei + neededFee.total, fromAddress.tokenBalance);
@@ -814,8 +835,6 @@ export class ZkBobClient extends ZkBobProvider {
 
     return this.deposit(amountGwei, async (signingRequest) => {
       const pool = this.pool();
-      const state = this.zpState();
-
       const privKey = this.getEphemeralAddressPrivateKey(ephemeralIndex);
 
       const depositSigner = DepositSignerFactory.createSigner(this.network(), pool.depositScheme);
@@ -828,7 +847,8 @@ export class ZkBobClient extends ZkBobProvider {
     type: DirectDepositType,
     fromAddress: string,
     amount: bigint, // in pool resolution
-    sendTxCallback: (tx: PreparedTransaction) => Promise<string>, // txHash
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>, // => txHash
+    blockNumber?: number, // synchronize internal provider with the block
   ): Promise<void> {
     const pool = this.pool();
     const processor = this.ddProcessor();
@@ -843,11 +863,31 @@ export class ZkBobClient extends ZkBobProvider {
     const fee = await processor.getFee();
     let fullAmountNative = await this.shieldedAmountToWei(amount + fee);
 
+    // Sync by block number if needed
+    if (blockNumber !== undefined) {
+      const ready = await this.network().waitForBlock(blockNumber, PROVIDER_SYNC_TIMEOUT);
+      if (!ready) {
+        // do not throw error here, pass to validation
+        console.warn(`Unable to sync network backend (sync block ${blockNumber}, current ${await this.network().getBlockNumber()}). Validation may failed!`);
+      }
+    }
+
+    // Validate the sender's account are ready for direct deposit
     if (type == DirectDepositType.Token) {
-      // For the token-based DD we should check allowance first
-      const curAllowance = await this.network().allowance(pool.tokenAddress, fromAddress, ddQueueAddress);
+      const [curAllowance, curBalance] = await Promise.all([
+        this.network().allowance(pool.tokenAddress, fromAddress, ddQueueAddress),
+        this.network().getTokenBalance(pool.tokenAddress, fromAddress),
+      ]);
       if (curAllowance < fullAmountNative) {
         throw new TxDepositAllowanceTooLow(fullAmountNative, curAllowance, ddQueueAddress);
+      }
+      if (curBalance < fullAmountNative) {
+        throw new TxInsufficientFundsError(fullAmountNative, curBalance);
+      }
+    } else if (type == DirectDepositType.Native) {
+      const curNativeBalance = await this.network().getNativeBalance(fromAddress);
+      if (curNativeBalance < fullAmountNative) {
+        throw new TxInsufficientFundsError(fullAmountNative, curNativeBalance);
       }
     }
     
@@ -878,13 +918,13 @@ export class ZkBobClient extends ZkBobProvider {
     }));
 
     const usedFee = relayerFee ?? await this.getRelayerFee();
-    const txParts = await this.getTransactionParts(TxType.Transfer, transfers, usedFee);
+    const txParts = await this.getTransactionParts(RegularTxType.Transfer, transfers, usedFee);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(TxType.Transfer, usedFee, 0n, false);
+      const available = await this.calcMaxAvailableTransfer(RegularTxType.Transfer, usedFee, 0n, false);
       const amounts = transfers.map((aTx) => aTx.amountGwei);
       const totalAmount = amounts.reduce((acc, cur) => acc + cur, BigInt(0));
-      const feeEst = await this.feeEstimateInternal(amounts, TxType.Transfer, usedFee, 0n, false, true);
+      const feeEst = await this.feeEstimateInternal(amounts, RegularTxType.Transfer, usedFee, 0n, false, true);
       throw new TxInsufficientFundsError(totalAmount + feeEst.total, available);
     }
 
@@ -906,7 +946,7 @@ export class ZkBobClient extends ZkBobProvider {
       const proofTime = (Date.now() - startProofDate) / 1000;
       console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-      const transaction = {memo: oneTxData.memo, proof: txProof, txType: TxType.Transfer};
+      const transaction = {memo: oneTxData.memo, proof: txProof, txType: RegularTxType.Transfer};
       this.assertCalldataLength(transaction, onePart.calldataLength);
 
       const jobId = await relayer.sendTransactions([transaction]);
@@ -955,15 +995,11 @@ export class ZkBobClient extends ZkBobProvider {
     const relayer = this.relayer();
     const state = this.zpState();
 
-    // Validate withdrawal address:
-    //  - it should starts with '0x' prefix
-    //  - it should be 20-byte length
-    //  - if it contains checksum (EIP-55) it should be valid
-    //  - zero addresses are prohibited to withdraw
-    if (!isHexPrefixed(address) || !isAddress(address) || address.toLowerCase() == NULL_ADDRESS) {
+    // Check is withdrawal address and nonzero
+    if (!this.network().validateAddress(address)) {
       throw new TxInvalidArgumentError('Please provide a valid non-zero address');
     }
-    const addressBin = ethAddrToBuf(address);
+    const addressBin = this.network().addressToBytes(address);
 
     const supportedSwapAmount = await this.maxSupportedTokenSwap();
     if (swapAmount > supportedSwapAmount) {
@@ -981,11 +1017,11 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     const usedFee = relayerFee ?? await this.getRelayerFee();
-    const txParts = await this.getTransactionParts(TxType.Withdraw, [{amountGwei, destination: address}], usedFee);
+    const txParts = await this.getTransactionParts(RegularTxType.Withdraw, [{amountGwei, destination: address}], usedFee);
 
     if (txParts.length == 0) {
-      const available = await this.calcMaxAvailableTransfer(TxType.Withdraw, usedFee, swapAmount, false);
-      const feeEst = await this.feeEstimateInternal([amountGwei], TxType.Withdraw, usedFee, swapAmount, false, true);
+      const available = await this.calcMaxAvailableTransfer(RegularTxType.Withdraw, usedFee, swapAmount, false);
+      const feeEst = await this.feeEstimateInternal([amountGwei], RegularTxType.Withdraw, usedFee, swapAmount, false, true);
       throw new TxInsufficientFundsError(amountGwei + feeEst.total, available);
     }
 
@@ -995,14 +1031,14 @@ export class ZkBobClient extends ZkBobProvider {
       const onePart = txParts[index];
       
       let oneTxData: any;
-      let txType: TxType;
+      let txType: RegularTxType;
       if (onePart.outNotes.length == 0) {
         const oneTx: ITransferData = {
           outputs: [],
           fee: onePart.fee.toString(),
         };
         oneTxData = await state.createTransferOptimistic(oneTx, optimisticState);
-        txType = TxType.Transfer;
+        txType = RegularTxType.Transfer;
       } else if (onePart.outNotes.length == 1) {
         const oneTx: IWithdrawData = {
           amount: onePart.outNotes[0].amountGwei.toString(),
@@ -1012,7 +1048,7 @@ export class ZkBobClient extends ZkBobProvider {
           energy_amount: '0',
         };
         oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
-        txType = TxType.Withdraw;
+        txType = RegularTxType.Withdraw;
       } else {
         throw new Error('Invalid transaction configuration');
       }
@@ -1031,7 +1067,7 @@ export class ZkBobClient extends ZkBobProvider {
 
       // Temporary save transaction part in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
-      if (txType == TxType.Transfer) {
+      if (txType == RegularTxType.Transfer) {
         const record = await HistoryRecord.aggregateNotes(onePart.fee, ts, '0', true);
         state.history?.keepQueuedTransactions([record], jobId);
       } else {
@@ -1071,7 +1107,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     const accId = accountId(giftCardAcc);
     const giftCardBalance = await this.giftCardBalanceInternal(giftCardAcc);
-    const minFee = await this.atomicTxFee(TxType.Transfer);
+    const minFee = await this.atomicTxFee(RegularTxType.Transfer);
     const minTxAmount = await this.minTxAmount();
     if (giftCardBalance - minFee < minTxAmount) {
       throw new TxInsufficientFundsError(minTxAmount + minFee, giftCardBalance)
@@ -1097,8 +1133,8 @@ export class ZkBobClient extends ZkBobProvider {
     const proofTime = (Date.now() - startProofDate) / 1000;
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
-    const transaction = {memo: txData.memo, proof: txProof, txType: TxType.Transfer};
-    this.assertCalldataLength(transaction, estimateCalldataLength(TxType.Transfer, 1));
+    const transaction = {memo: txData.memo, proof: txProof, txType: RegularTxType.Transfer};
+    this.assertCalldataLength(transaction, this.network().estimateCalldataLength(RegularTxType.Transfer, 1, 0));
 
     const relayer = this.relayer();
     const jobId = await relayer.sendTransactions([transaction]);
@@ -1117,7 +1153,7 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   private assertCalldataLength(txToRelayer: any, estimatedLen: number) {
-    let factLen = CALLDATA_BASE_LENGTH + txToRelayer.memo.length / 2;
+    let factLen = this.network().calldataBaseLength() + txToRelayer.memo.length / 2;
     if (txToRelayer.depositSignature) {
       factLen += txToRelayer.depositSignature.length / 2;
     }
@@ -1139,14 +1175,14 @@ export class ZkBobClient extends ZkBobProvider {
   // There are two extra states in case of insufficient funds for requested token amount:
   //  1. txCnt contains number of transactions for maximum available transfer
   //  2. txCnt can't be less than 1 (e.g. when balance is less than atomic fee)
-  public async feeEstimate(transfersGwei: bigint[], txType: TxType, withdrawSwap: bigint = 0n, updateState: boolean = true): Promise<FeeAmount> {
+  public async feeEstimate(transfersGwei: bigint[], txType: RegularTxType, withdrawSwap: bigint = 0n, updateState: boolean = true): Promise<FeeAmount> {
     const relayerFee = await this.getRelayerFee();
     return this.feeEstimateInternal(transfersGwei, txType, relayerFee, withdrawSwap, updateState, true);
   }
 
   private async feeEstimateInternal(
     transfersGwei: bigint[],
-    txType: TxType,
+    txType: RegularTxType,
     relayerFee: RelayerFee,
     withdrawSwap: bigint,
     updateState: boolean,
@@ -1157,9 +1193,9 @@ export class ZkBobClient extends ZkBobProvider {
     let calldataTotalLength = 0;
     let insufficientFunds = false;
 
-    if (txType === TxType.Transfer || txType === TxType.Withdraw) {
+    if (txType === RegularTxType.Transfer || txType === RegularTxType.Withdraw) {
       // we set allowPartial flag here to get parts anywhere
-      const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: NULL_ADDRESS} });  // destination address is ignored for estimation purposes
+      const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: '0'} });  // destination address is ignored for estimation purposes
       const parts = await this.getTransactionParts(txType, requests, relayerFee, withdrawSwap, updateState, true);
       const totalBalance = await this.getTotalBalance(false);
 
@@ -1172,22 +1208,22 @@ export class ZkBobClient extends ZkBobProvider {
       if (parts.length > 0) {
         txCnt = parts.length;
         for (let i = 0; i < txCnt; i++) {
-          const curTxType = i < txCnt - 1 ? TxType.Transfer : txType;
+          const curTxType = i < txCnt - 1 ? RegularTxType.Transfer : txType;
           const curFee = roundFee ? (await this.roundFee(parts[i].fee)) : parts[i].fee;
           total += curFee;
-          calldataTotalLength += estimateCalldataLength(curTxType, curTxType == TxType.Transfer ? parts[i].outNotes.length : 0);
+          calldataTotalLength += this.network().estimateCalldataLength(curTxType, curTxType == RegularTxType.Transfer ? parts[i].outNotes.length : 0, 0);
         }
       } else { // if we haven't funds for atomic fee - suppose we can make at least one tx
         txCnt = 1;
         total = await this.atomicTxFee(txType, withdrawSwap);
-        calldataTotalLength = estimateCalldataLength(txType, txType == TxType.Transfer ? transfersGwei.length : 0);
+        calldataTotalLength = this.network().estimateCalldataLength(txType, txType == RegularTxType.Transfer ? transfersGwei.length : 0, 0);
       }
 
       insufficientFunds = (totalSumm < totalRequested || totalSumm + total > totalBalance) ? true : false;
     } else {
       // Deposit and BridgeDeposit cases are independent on the user balance
       // Fee got from the native coins, so any deposit can be make within single tx
-      calldataTotalLength = estimateCalldataLength(txType, 0)
+      calldataTotalLength = this.network().estimateCalldataLength(txType, 0, 0)
       total = await this.singleTxFeeInternal(relayerFee, txType, 0, 0, 0n, roundFee);
     }
 
@@ -1196,8 +1232,8 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Account + notes balance excluding fee needed to transfer or withdraw it
   // TODO: need to optimize for edge cases (account limit calculating)
-  public async calcMaxAvailableTransfer(txType: TxType, relayerFee?: RelayerFee, withdrawSwap: bigint = 0n, updateState: boolean = true): Promise<bigint> {
-    if (txType != TxType.Transfer && txType != TxType.Withdraw) {
+  public async calcMaxAvailableTransfer(txType: RegularTxType, relayerFee?: RelayerFee, withdrawSwap: bigint = 0n, updateState: boolean = true): Promise<bigint> {
+    if (txType != RegularTxType.Transfer && txType != RegularTxType.Withdraw) {
       throw new InternalError(`Attempting to invoke \'calcMaxAvailableTransfer\' for ${txTypeToString(txType)} tx (only transfer\\withdraw are supported)`);
     }
 
@@ -1207,8 +1243,8 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     const usedFee = relayerFee ?? await this.getRelayerFee();
-    const aggregateTxFee = await this.singleTxFeeInternal(usedFee, TxType.Transfer, 0, 0, 0n);
-    const finalTxFee = await this.singleTxFeeInternal(usedFee, txType, txType == TxType.Transfer ? 1 : 0, 0, withdrawSwap);
+    const aggregateTxFee = await this.singleTxFeeInternal(usedFee, RegularTxType.Transfer, 0, 0, 0n);
+    const finalTxFee = await this.singleTxFeeInternal(usedFee, txType, txType == RegularTxType.Transfer ? 1 : 0, 0, withdrawSwap);
 
     const groupedNotesBalances = await this.getGroupedNotes();
     let accountBalance = await state.accountBalance();
@@ -1236,7 +1272,7 @@ export class ZkBobClient extends ZkBobProvider {
   // (otherwise the void array will be returned in case of insufficient funds)
   // This method ALLOWS creating transaction parts less than MIN_TX_AMOUNT (check it before tx creating)
   public async getTransactionParts(
-    txType: TxType,
+    txType: RegularTxType,
     transfers: TransferRequest[],
     relayerFee?: RelayerFee,
     withdrawSwap: bigint = 0n,
@@ -1244,7 +1280,7 @@ export class ZkBobClient extends ZkBobProvider {
     allowPartial: boolean = false,
   ): Promise<Array<TransferConfig>> {
 
-    if (txType != TxType.Transfer && txType != TxType.Withdraw) {
+    if (txType != RegularTxType.Transfer && txType != RegularTxType.Withdraw) {
       throw new InternalError(`Attempting to invoke \'getTransactionParts\' for ${txTypeToString(txType)} tx (only transfer\\withdraw are supported)`);
     }
 
@@ -1294,7 +1330,7 @@ export class ZkBobClient extends ZkBobProvider {
         break;
       }
 
-      const aggregateTxFee = await this.singleTxFeeInternal(usedFee, TxType.Transfer, 0, 0, 0n);
+      const aggregateTxFee = await this.singleTxFeeInternal(usedFee, RegularTxType.Transfer, 0, 0, 0n);
 
       const inNotesBalance = groupedNotesBalances[i];
       if (accountBalance + inNotesBalance < aggregateTxFee) {
@@ -1306,7 +1342,7 @@ export class ZkBobClient extends ZkBobProvider {
       aggregationParts.push({
         inNotesBalance,
         outNotes: [],
-        calldataLength: estimateCalldataLength(TxType.Transfer, 0),
+        calldataLength: this.network().estimateCalldataLength(RegularTxType.Transfer, 0, 0),
         fee: aggregateTxFee,
         accountLimit: BigInt(0)
       });
@@ -1321,7 +1357,7 @@ export class ZkBobClient extends ZkBobProvider {
   // try to prepare transfer configs without extra aggregation transactions
   // (using just account balance and notes collected in these txs)
   private async tryToPrepareTransfers(
-    txType: TxType,
+    txType: RegularTxType,
     balance: bigint,
     relayerFee: RelayerFee,
     groupedNotesBalances: Array<bigint>,
@@ -1333,7 +1369,7 @@ export class ZkBobClient extends ZkBobProvider {
     for (let i = 0; i < transfers.length; i++) {
       const inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
 
-      const numOfNotes = (txType == TxType.Transfer) ? transfers[i].requests.length : 0;
+      const numOfNotes = (txType == RegularTxType.Transfer) ? transfers[i].requests.length : 0;
       const fee = await this.singleTxFeeInternal(relayerFee, txType, numOfNotes, 0, withdrawSwap);
 
       if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee) {
@@ -1344,7 +1380,7 @@ export class ZkBobClient extends ZkBobProvider {
       parts.push({
         inNotesBalance,
         outNotes: transfers[i].requests,
-        calldataLength: estimateCalldataLength(txType, numOfNotes),
+        calldataLength: this.network().estimateCalldataLength(txType, numOfNotes, 0),
         fee, 
         accountLimit: BigInt(0)
       });
@@ -1532,7 +1568,9 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }, CONTINUOUS_STATE_UPD_INTERVAL);
 
-    const hasOwnTxsInOptimisticState = await this.zpState().updateState(
+    let noOwnTxsInOptimisticState = true;
+
+    noOwnTxsInOptimisticState = await this.zpState().updateState(
       this.relayer(),
       async (index) => (await this.getPoolState(index)).root,
       await this.coldStorageConfig(),
@@ -1546,7 +1584,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     this.setState(ClientState.FullMode);
 
-    return hasOwnTxsInOptimisticState;
+    return noOwnTxsInOptimisticState;
   }
 
   // ----------------=========< Ephemeral Addresses Pool >=========-----------------
@@ -1701,7 +1739,7 @@ export class ZkBobClient extends ZkBobProvider {
   protected ddProcessor(): DirectDepositProcessor {
     const proccessor = this.ddProcessors[this.curPool];
     if (!proccessor) {
-        throw new InternalError(`No direct deposit processer initialized for the pool ${this.curPool}`);
+        throw new InternalError(`No direct deposit processor initialized for the pool ${this.curPool}`);
     }
 
     return proccessor;
@@ -1712,7 +1750,13 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   public async directDepositFee(): Promise<bigint> {
-    return this.ddProcessor().getFee();
+    try {
+      return await this.ddProcessor().getFee();
+    } catch {
+      // fallback in case of DD-processor isn't initialized yet (e.g. for clientless mode)
+      const ddQueueAddr = await this.network().getDirectDepositQueueContract(this.pool().poolAddress);
+      return this.network().getDirectDepositFee(ddQueueAddr);
+    }
   }
   
 }

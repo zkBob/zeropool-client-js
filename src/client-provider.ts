@@ -1,15 +1,15 @@
 import { Chains, ProverMode, Pool, Pools } from "./config";
 import { InternalError } from "./errors";
-import { EvmNetwork } from "./networks/evm";
+import { NetworkBackendFactory } from "./networks";
 import { NetworkType } from "./network-type";
-import { NetworkBackend } from "./networks/network";
+import { NetworkBackend } from "./networks";
 import { ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/prover";
 import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
-import { estimateCalldataLength, TxType } from "./tx";
-import { DirectDepositProcessor } from "./dd";
+import { RegularTxType } from "./tx";
+import { ZkBobSubgraph } from "./subgraph";
 
 const bs58 = require('bs58')
 
@@ -90,6 +90,7 @@ export class ZkBobProvider {
     private relayers:         { [name: string]: ZkBobRelayer } = {};
     private provers:          { [name: string]: ZkBobDelegatedProver } = {};
     private proverModes:      { [name: string]: ProverMode } = {};
+    private subgraphs:        { [name: string]: ZkBobSubgraph } = {};
     private poolDenominators: { [name: string]: bigint } = {};
     private tokenDecimals:    { [name: string]: number } = {};
     private poolIds:          { [name: string]: number } = {};
@@ -109,8 +110,7 @@ export class ZkBobProvider {
             if (chain.rpcUrls.length == 0) {
                 throw new InternalError(`Chain with id ${chainId} being initialized without RPC URL`);
             }
-            // TODO: implement multi-RPC NetworkBackend 
-            const backend = new EvmNetwork(chain.rpcUrls[0], false);    // initialize backend in the disabled state
+            const backend = NetworkBackendFactory.createBackend(Number(chainId), chain.rpcUrls, false);    // initialize backend in the disabled state
             let networkName = NetworkType.networkName(Number(chainId));
             if (!networkName) {
                 console.warn(`The chain with id ${chainId} currently isn't fully supported. Unsuspectable issues may occured`);
@@ -140,6 +140,16 @@ export class ZkBobProvider {
             }
 
             this.proverModes[alias] = ProverMode.Local;
+
+            // create subraph if presented
+            if (pool.ddSubgraph) {
+                try {
+                    const subgraph = new ZkBobSubgraph(pool.ddSubgraph);
+                    this.subgraphs[alias] = subgraph;
+                } catch(err) {
+                    console.warn(`The subgraph ${pool.ddSubgraph} cannot be created: ${err.message}`);
+                }
+            }
         }
 
         if (!this.pools[currentPool]) {
@@ -230,6 +240,10 @@ export class ZkBobProvider {
 
     protected prover(): ZkBobDelegatedProver | undefined {
         return this.provers[this.curPool];
+    }
+
+    protected subgraph(): ZkBobSubgraph | undefined {
+        return this.subgraphs[this.curPool];
     }
 
     // Pool contract using denominator to calculate
@@ -383,39 +397,39 @@ export class ZkBobProvider {
         return cachedFee.fee;
     }
 
-    protected async executionTxFee(txType: TxType, relayerFee?: RelayerFee): Promise<bigint> {
+    protected async executionTxFee(txType: RegularTxType, relayerFee?: RelayerFee): Promise<bigint> {
         const fee = relayerFee ?? await this.getRelayerFee();
         switch (txType) {
-            case TxType.Deposit: return fee.fee.deposit;
-            case TxType.Transfer: return fee.fee.transfer;
-            case TxType.Withdraw: return fee.fee.withdrawal;
-            case TxType.BridgeDeposit: return fee.fee.permittableDeposit;
+            case RegularTxType.Deposit: return fee.fee.deposit;
+            case RegularTxType.Transfer: return fee.fee.transfer;
+            case RegularTxType.Withdraw: return fee.fee.withdrawal;
+            case RegularTxType.BridgeDeposit: return fee.fee.permittableDeposit;
             default: throw new InternalError(`Unknown TxType: ${txType}`);
         }
     }
 
     // Min transaction fee in pool resolution (for regular transaction without any payload overhead)
     // To estimate fee for the concrete tx use account-based method (feeEstimate from client.ts)
-    public async atomicTxFee(txType: TxType, withdrawSwap: bigint = 0n): Promise<bigint> {
+    public async atomicTxFee(txType: RegularTxType, withdrawSwap: bigint = 0n): Promise<bigint> {
         const relayerFee = await this.getRelayerFee();
         
-        return this.singleTxFeeInternal(relayerFee, txType, txType == TxType.Transfer ? 1 : 0, 0, withdrawSwap, true);
+        return this.singleTxFeeInternal(relayerFee, txType, txType == RegularTxType.Transfer ? 1 : 0, 0, withdrawSwap, true);
     }
 
     // dynamic fee calculation routine
     protected async singleTxFeeInternal(
         relayerFee: RelayerFee,
-        txType: TxType,
+        txType: RegularTxType,
         notesCnt: number,
         extraDataLen: number = 0,
         withdrawSwapAmount: bigint = 0n,
         roundFee?: boolean,
     ): Promise<bigint> {
-        const calldataBytesCnt = estimateCalldataLength(txType, notesCnt, extraDataLen);
+        const calldataBytesCnt = this.network().estimateCalldataLength(txType, notesCnt, extraDataLen);
         const baseFee = await this.executionTxFee(txType, relayerFee);
 
         let totalFee = baseFee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
-        if (txType == TxType.Withdraw && withdrawSwapAmount > 0n) {
+        if (txType == RegularTxType.Withdraw && withdrawSwapAmount > 0n) {
             // swapping tokens during withdrawal may require additional fee
             totalFee += relayerFee.nativeConvertFee;
         }
@@ -447,7 +461,7 @@ export class ZkBobProvider {
     }
 
     public async minTxAmount(): Promise<bigint> {
-        return this.pool().minTxAmount ?? MIN_TX_AMOUNT;
+        return BigInt(this.pool().minTxAmount ?? MIN_TX_AMOUNT);
     }
 
     // The deposit and withdraw amount is limited by few factors:
@@ -697,7 +711,8 @@ export class ZkBobProvider {
         writer.writeNumber(GIFT_CARD_CODE_VER, 1);
         writer.writeHex(bufToHex(giftCard.sk));
         writer.writeNumber(giftCard.birthIndex, 6);
-        writer.writeHex(pool.poolAddress.slice(-8));
+        const poolAddrHex = bufToHex(this.network().addressToBytes(pool.poolAddress));
+        writer.writeHex(poolAddrHex.slice(-8));
         writer.writeNumber(pool.chainId, 4);
         writer.writeBigInt(giftCard.balance, 8);
 
@@ -727,7 +742,8 @@ export class ZkBobProvider {
         
         let poolAlias: string | undefined = undefined;
         for (const [alias, pool] of Object.entries(this.pools)) {
-            if (pool.chainId == chainId && pool.poolAddress.slice(-8).toLowerCase() == poolAddrSlice.toLowerCase()) {
+            const poolAddrHex = bufToHex(this.network().addressToBytes(pool.poolAddress));
+            if (pool.chainId == chainId && poolAddrHex.slice(-8).toLowerCase() == poolAddrSlice.toLowerCase()) {
                 poolAlias = alias;
                 break;
             }

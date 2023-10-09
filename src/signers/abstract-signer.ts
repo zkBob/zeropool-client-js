@@ -1,7 +1,5 @@
-import { NetworkBackend } from "../networks/network";
+import { NetworkBackend } from "../networks";
 import { InternalError, TxDepositDeadlineExpiredError, TxInsufficientFundsError } from "..";
-import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
-        personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
 import { addHexPrefix, hexToBuf } from "../utils";
 
 
@@ -63,24 +61,15 @@ export abstract class DepositSigner {
     
     public async signRequest(privateKey: string, request: SignatureRequest): Promise<string> {
         if (privateKey) {
-            let keyBuf = Buffer.from(hexToBuf(privateKey));
             let signature;
             try {
                 switch (request.type) {
                 case SignatureType.TypedDataV4:
-                        // typedSig is canonical signature (65 bytes long, LSByte: 1b or 1c)
-                        signature = signTypedData({
-                            privateKey: keyBuf,
-                            data: request.data,
-                            version: SignTypedDataVersion.V4
-                        });
+                        signature = this.network.signTypedData(request.data, privateKey);
                         break;
 
                 case SignatureType.PersonalSign:
-                    signature = personalSign({
-                        privateKey: keyBuf,
-                        data: request.data,
-                    });
+                    signature = this.network.sign(request.data, privateKey);
                     break;
 
                 default:
@@ -90,9 +79,6 @@ export abstract class DepositSigner {
             } catch (err) {
                 throw new InternalError(`Cannot sign typed data: ${err}`);
             }
-
-            // cleanup intermediate sensitive data
-            keyBuf.fill(0);
 
             return signature;
         } else {
@@ -106,18 +92,11 @@ export abstract class DepositSigner {
         try {
             switch (request.type) {
             case SignatureType.TypedDataV4:
-                    signerAddress = recoverTypedSignature({
-                        data: request.data,
-                        signature: addHexPrefix(signature),
-                        version: SignTypedDataVersion.V4
-                    });
-                    break;
+                signerAddress = this.network.recoverSignerTypedData(request.data, signature);
+                break;
 
             case SignatureType.PersonalSign:
-                signerAddress = recoverPersonalSignature({
-                    data: request.data,
-                    signature: addHexPrefix(signature)
-                });
+                signerAddress = this.network.recoverSigner(request.data, signature);
                 break;
 
             default:
@@ -128,7 +107,7 @@ export abstract class DepositSigner {
             throw new InternalError(`Cannot sign typed data: ${err}`);
         }
 
-        return addHexPrefix(signerAddress);
+        return signerAddress;
     }
 
 }

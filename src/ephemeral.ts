@@ -1,16 +1,11 @@
-import Web3 from 'web3';
-import { Contract } from 'web3-eth-contract'
-import { TransactionConfig } from 'web3-core';
 import { hash } from 'tweetnacl';
-import { addHexPrefix, bufToHex, concatenateBuffers, hexToBuf } from './utils';
+import { bufToHex, concatenateBuffers, hexToBuf } from './utils';
 import { entropyToMnemonic, mnemonicToSeedSync } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { HDKey } from '@scure/bip32';
 import { InternalError } from './errors';
 import { NetworkType } from './network-type';
-import { tokenABI } from './networks/evm-abi';
-
-const util = require('ethereumjs-util');
+import { NetworkBackend } from './networks';
 
 const GAS_PRICE_MULTIPLIER = 1.1;
 
@@ -41,10 +36,11 @@ interface TransfersInfo {
 export class EphemeralPool {
     private tokenAddress: string;
     private hdwallet: HDKey;
-    private web3: Web3;
-    private token: Contract;
-    private rpcUrl: string;
+    private network: NetworkBackend;
     private poolDenominator: bigint; // we represent all amounts in that library as in pool
+
+    // addresses by index [to avoid extra generations]
+    private addresses = new Map<number, string>();
 
     // save last scanned address to decrease scan time
     private startScanIndex = 0;
@@ -69,33 +65,30 @@ export class EphemeralPool {
     constructor(
         sk: Uint8Array,
         tokenAddress: string,
-        network: NetworkType,
-        rpcUrl: string,
+        networkType: NetworkType,
+        network: NetworkBackend,
         poolDenominator: bigint
     ) {
         this.tokenAddress = tokenAddress;
         this.poolDenominator = poolDenominator;
-        this.rpcUrl = rpcUrl;
-        this.web3 = new Web3(this.rpcUrl);
+        this.network = network;
 
         let buf = concatenateBuffers(hexToBuf(this.skPrefix), sk);
         let entropy = hash(buf).slice(0, 16);
         let mnemonic = entropyToMnemonic(entropy, wordlist);
         let seed = mnemonicToSeedSync(mnemonic);
-        let ephemeralWalletPath = `${NetworkType.chainPath(network)}/0'/0`;
+        let ephemeralWalletPath = `${NetworkType.chainPath(networkType)}/0'/0`;
         this.hdwallet = HDKey.fromMasterSeed(seed).derive(ephemeralWalletPath);
-
-        this.token = new this.web3.eth.Contract(tokenABI, tokenAddress) as unknown as Contract;
     }
   
     static async init(
         sk: Uint8Array,
         tokenAddress: string,
-        network: NetworkType,
-        rpcUrl: string,
+        networkType: NetworkType,
+        network: NetworkBackend,
         poolDenominator: bigint
     ): Promise<EphemeralPool> {
-        const storage = new EphemeralPool(sk, tokenAddress, network, rpcUrl, poolDenominator);
+        const storage = new EphemeralPool(sk, tokenAddress, networkType, network, poolDenominator);
 
         // Start address info preloading
         let startTime = Date.now();
@@ -108,15 +101,19 @@ export class EphemeralPool {
 
     // Get native address at the specified index without additional info
     public getAddress(index: number): string {
-        let key = this.hdwallet.deriveChild(index)
-        const publicKey = key.publicKey;
-        key.wipePrivateData();
-        if (publicKey) {
-            const fullPublicKey = util.importPublic(Buffer.from(publicKey));
-            return addHexPrefix(util.pubToAddress(fullPublicKey).toString('hex'));
+        let address = this.addresses.get(index);
+        if (address === undefined) {
+            const key = this.hdwallet.deriveChild(index)
+            if (key.privateKey == null) {
+                throw new InternalError(`Cannot generate private key for ephemeral address at index ${index}`);
+            }
+            address = this.network.addressFromPrivateKey(key.privateKey);
+            key.wipePrivateData();
+
+            this.addresses.set(index, address);
         }
 
-        throw new InternalError(`Cannot generate public key for ephemeral address at index ${index}`);
+        return address;
     }
 
     // Get address with asssociated info [may take some time]
@@ -202,126 +199,74 @@ export class EphemeralPool {
     // Get number of incoming token transfers
     public async getEphemeralAddressInTxCount(index: number): Promise<number> {
         const address = this.getAddress(index);
-        const curBlock = await this.web3.eth.getBlockNumber();
+        //const curBlock = await this.web3.eth.getBlockNumber();
         let info = this.cachedInTransfersInfo.get(index);
         if (info === undefined) {
             info = {index, blockNumber: -1, txCount: 0 };
         }
 
-        let txCnt = await this.getIncomingTokenTxCount(address, curBlock, info.blockNumber + 1);
+        return info.txCount;
+
+        /*let txCnt = await this.getIncomingTokenTxCount(address, curBlock, info.blockNumber + 1);
 
         info.blockNumber = curBlock;
         info.txCount += txCnt;
 
         this.cachedInTransfersInfo.set(index, info);
 
-        return info.txCount;
+        return info.txCount;*/
     }
 
     // Get number of outcoming token transfers
     public async getEphemeralAddressOutTxCount(index: number): Promise<number> {
         const address = this.getAddress(index);
-        const curBlock = await this.web3.eth.getBlockNumber();
+        //const curBlock = await this.web3.eth.getBlockNumber();
         let info = this.cachedOutTransfersInfo.get(index);
         if (info === undefined) {
             info = {index, blockNumber: -1, txCount: 0 };
         }
 
-        let txCnt = await this.getOutcomingTokenTxCount(address, curBlock, info.blockNumber + 1);
+        return info.txCount;
+
+        /*let txCnt = await this.getOutcomingTokenTxCount(address, curBlock, info.blockNumber + 1);
 
         info.blockNumber = curBlock;
         info.txCount += txCnt;
 
         this.cachedOutTransfersInfo.set(index, info);
 
-        return info.txCount;
+        return info.txCount;*/
     }
 
     public async allowance(index: number, spender: string): Promise<bigint> {
         const address = this.getAddress(index);
-        const result = await this.token.methods.allowance(address, spender).call();;
-
-        return BigInt(result);
+        return await this.network.allowance(this.tokenAddress, address, spender);
     }
 
     public async approve(index: number, spender: string, amount: bigint): Promise<string> {
         const address = await this.getAddress(index);
-        const encodedTx = await this.token.methods.approve(spender, BigInt(amount)).encodeABI();
-        let txObject: TransactionConfig = {
-            from: address,
-            to: this.tokenAddress,
-            data: encodedTx,
-        };
-
-        const gas = await this.web3.eth.estimateGas(txObject);
-        const gasPrice = Number(await this.web3.eth.getGasPrice());
-        const nonce = await this.web3.eth.getTransactionCount(address);
-        txObject.gas = gas;
-        txObject.gasPrice = `0x${BigInt(Math.ceil(gasPrice * GAS_PRICE_MULTIPLIER)).toString(16)}`;
-        txObject.nonce = nonce;
-
         const privKey = this.getEphemeralAddressPrivateKey(index);
-        const signedTx = await this.web3.eth.accounts.signTransaction(txObject, privKey);
-        const receipt = await this.web3.eth.sendSignedTransaction(signedTx.rawTransaction ?? '');
-
-        return receipt.transactionHash;
+        
+        return this.network.approveTokens(this.tokenAddress, privKey, address, spender, amount, GAS_PRICE_MULTIPLIER);
     }
 
     // ------------------=========< Private Routines >=========--------------------
     // | Retrieving address info                                                  |
     // ----------------------------------------------------------------------------
 
-    // Binary search for the contract creation block
-    // Used to decrease token transfer count retrieving time
-    // WARNING: we cannot use this method because
-    // the real RPC nodes cannot return getCode for old blocks
-    private async findContractCreationBlock(tokenAddress: string): Promise<number> {
-        let fromBlock = 0;
-        let toBlock = Number(await this.web3.eth.getBlockNumber());
-    
-        let contractCode = await this.web3.eth.getCode(tokenAddress, toBlock);
-        if (contractCode == "0x") {
-            throw new Error(`Contract ${tokenAddress} does not exist!`);
-        }
-    
-        while (fromBlock <= toBlock) {
-            let middleBlock = Math.floor((fromBlock + toBlock) / 2);
-
-            try {
-                contractCode = await this.web3.eth.getCode(tokenAddress, middleBlock);
-            } catch (err) {
-                // Here is a case when node doesn't sync whole blockchain
-                // so we can't retrieve selected block state
-                // In that case let's suppose the contract isn't created yet
-                contractCode = '0x';
-            }
-            
-            if (contractCode != '0x') {
-                toBlock = middleBlock;
-            } else if (contractCode == '0x') {
-                fromBlock = middleBlock;
-            }
-    
-            if (toBlock == fromBlock + 1) {
-                return toBlock;
-            }
-        }
-
-        return fromBlock;
-    
-    }
-
     // get and update address details
     private async updateAddressInfo(existing: EphemeralAddress): Promise<EphemeralAddress> {
         let promises = [
             this.getTokenBalance(existing.address),
-            this.getNativeBalance(existing.address),
-            this.getPermitNonce(existing.address).catch(async () => {
-                // fallback for tokens without permit support (e.g. WETH)
-                const blockNumber = await this.web3.eth.getBlockNumber();
-                return this.getOutcomingTokenTxCount(existing.address, blockNumber);
+            this.network.getNativeBalance(existing.address),
+            this.network.isSupportNonce(this.tokenAddress).then((isSupport) => {
+                if (isSupport) {
+                    return this.network.getTokenNonce(this.tokenAddress, existing.address).catch(() => 0);
+                } else {
+                    return 0;
+                }
             }),
-            this.web3.eth.getTransactionCount(existing.address),
+            this.network.getNativeNonce(existing.address),
         ];
         const [tokenBalance, nativeBalance, permitNonce, nativeNonce] = await Promise.all(promises);
 
@@ -332,28 +277,14 @@ export class EphemeralPool {
         
         return existing;
     }
-
-    // in pool dimension
-    private async getNativeBalance(address: string): Promise<bigint> {
-        const result = await this.web3.eth.getBalance(address);
-        
-        return BigInt(result);
-    }
     
     // in pool dimension
     private async getTokenBalance(address: string): Promise<bigint> {
-        const result = await this.token.methods.balanceOf(address).call();
+        const result = await this.network.getTokenBalance(this.tokenAddress, address);
         
         return this.poolDenominator > 0 ?
                 BigInt(result) / this.poolDenominator :
                 BigInt(result) * (-this.poolDenominator);
-    }
-
-    // number of outgoing transfers via permit
-    private async getPermitNonce(address: string): Promise<number> {
-        const result = await this.token.methods.nonces(address).call();
-        
-        return Number(result);
     }
 
     // Find first unused account
@@ -372,7 +303,7 @@ export class EphemeralPool {
     }
 
     // Number of incoming token transfers to the account
-    private async getIncomingTokenTxCount(address: string, toBlock: number, fromBlock: number = 0): Promise<number> {
+    /*private async getIncomingTokenTxCount(address: string, toBlock: number, fromBlock: number = 0): Promise<number> {
         if (toBlock >= fromBlock) {
             const events = await this.token.getPastEvents('Transfer', {
                 filter: { to: address },
@@ -399,7 +330,7 @@ export class EphemeralPool {
         }
 
         return 0;
-    }
+    }*/
 
     // address nonused criteria
     private isAddressNonused(address: EphemeralAddress): boolean {
