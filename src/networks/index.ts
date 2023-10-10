@@ -2,6 +2,7 @@ import { ZkBobState } from "../state";
 import { EvmNetwork, InternalError, TxType } from "..";
 import { DirectDeposit, PoolTxDetails } from "../tx";
 import { TronNetwork } from "./tron";
+import { CommittedForcedExit, ForcedExit, ForcedExitRequest } from "@/emergency";
 
 export interface PreparedTransaction {
     to: string;
@@ -33,6 +34,12 @@ export interface NetworkBackend {
     getDenominator(poolAddress: string): Promise<bigint>;
     poolState(poolAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}>;
     poolLimits(poolAddress: string, address: string | undefined): Promise<any>;
+    isSupportForcedExit(poolAddress: string): Promise<boolean>;
+    nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint>;
+    committedForcedExits(poolAddress: string, nullifier: bigint): Promise<bigint>;
+    createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction>;
+    createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction>;
+    createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction>;
     getTokenSellerContract(poolAddress: string): Promise<string>;
 
     // Direct Deposits

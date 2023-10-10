@@ -9,6 +9,7 @@ import { hexToBytes } from 'web3-utils';
 import { PoolSelector } from '../evm';
 import { MultiRpcManager, RpcManagerDelegate } from '../rpcman';
 import { ZkBobState } from '../../state';
+import { CommittedForcedExit, ForcedExitRequest } from '../../emergency';
 
 const TronWeb = require('tronweb')
 const bs58 = require('bs58')
@@ -32,6 +33,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     private tokenDecimals = new Map<string, number>();  // tokenAddress -> decimals
     private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolAddress -> ddQueueAddress
+    private supportsForcedExit = new Map<string, boolean>();    // poolContractAddress -> isSupportsNonceMethod
     private supportsNonces = new Map<string, boolean>();        // tokenAddress -> isSupportsNonceMethod
 
 
@@ -269,6 +271,136 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
         const pool = await this.getPoolContract(poolAddress);
         return await this.contractCallRetry(pool, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
+    }
+
+    public async isSupportForcedExit(poolAddress: string): Promise<boolean> {
+        let isSupport = this.supportsForcedExit.get(poolAddress);
+        if (isSupport === undefined) {
+            const contract = await this.commonRpcRetry(() => {
+                return this.activeTronweb().trx.getContract(poolAddress);
+            }, 'Unable to retrieve smart contract object', RETRY_COUNT);
+            const methods = contract.abi.entrys;
+            if (Array.isArray(methods)) {
+                isSupport = methods.find((val) => val.name == 'committedForcedExits') !== undefined;
+                this.supportsForcedExit.set(poolAddress, isSupport);
+            } else {
+                isSupport = false;
+            }
+        }
+
+        return isSupport;
+    }
+
+    public async nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint> {
+        const pool = await this.getPoolContract(poolAddress);
+        const res = await this.contractCallRetry(pool, 'nullifiers', [nullifier.toString()]);
+
+        return BigInt(res);
+    }
+
+    public async committedForcedExits(poolAddress: string, nullifier: bigint): Promise<bigint> {
+        const pool = await this.getPoolContract(poolAddress);
+        const res = await this.contractCallRetry(pool, 'committedForcedExits', [nullifier.toString()]);
+
+        return BigInt(res);
+    }
+
+    public async createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction> {
+        const selector = 'commitForcedExit(address,address,uint256,uint256,uint256,uint256,uint256[8])';
+        const parameters = [
+            {type: 'address', value: forcedExit.operator},
+            {type: 'address', value: forcedExit.to},
+            {type: 'uint256', value: forcedExit.amount.toString()},
+            {type: 'uint256', value: forcedExit.index},
+            {type: 'uint256', value: forcedExit.nullifier.toString()},
+            {type: 'uint256', value: forcedExit.out_commit.toString()},
+            {type: 'uint256[8]', value: [forcedExit.tx_proof.a[0],
+                                        forcedExit.tx_proof.a[1],
+                                        forcedExit.tx_proof.b[0][0],
+                                        forcedExit.tx_proof.b[0][1],
+                                        forcedExit.tx_proof.b[1][0],
+                                        forcedExit.tx_proof.b[1][1],
+                                        forcedExit.tx_proof.c[0],
+                                        forcedExit.tx_proof.c[1],
+                                    ]},
+        ];
+        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(poolAddress, selector, { feeLimit: 100_000_000 }, parameters);
+        const contract = tx?.transaction?.raw_data?.contract;
+        let txData: any | undefined;
+        if (Array.isArray(contract) && contract.length > 0) {
+            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
+        }
+
+        if (typeof txData !== 'string' && txData.length < 8) {
+            throw new InternalError('Unable to extract tx (commitForcedExit) calldata');
+        }
+
+        return {
+            to: poolAddress,
+            amount: 0n,
+            data: txData.slice(8),  // skip selector from the calldata
+            selector,
+        };
+    }
+
+    public async createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
+        const selector = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
+        const parameters = [
+            {type: 'uint256', value: forcedExit.nullifier.toString()},
+            {type: 'address', value: forcedExit.operator},
+            {type: 'address', value: forcedExit.to},
+            {type: 'uint256', value: forcedExit.amount.toString()},
+            {type: 'uint256', value: forcedExit.exitStart},
+            {type: 'uint256', value: forcedExit.exitEnd},
+            {type: 'bool',    value: 1},
+        ];
+        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(poolAddress, selector, { feeLimit: 100_000_000 }, parameters);
+        const contract = tx?.transaction?.raw_data?.contract;
+        let txData: any | undefined;
+        if (Array.isArray(contract) && contract.length > 0) {
+            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
+        }
+
+        if (typeof txData !== 'string' && txData.length < 8) {
+            throw new InternalError('Unable to extract tx (executeForcedExit) calldata');
+        }
+
+        return {
+            to: poolAddress,
+            amount: 0n,
+            data: txData.slice(8),  // skip selector from the calldata
+            selector,
+        };
+    }
+
+    public async createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
+        const selector = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
+        const parameters = [
+            {type: 'uint256', value: forcedExit.nullifier.toString()},
+            {type: 'address', value: forcedExit.operator},
+            {type: 'address', value: forcedExit.to},
+            {type: 'uint256', value: forcedExit.amount.toString()},
+            {type: 'uint256', value: forcedExit.exitStart},
+            {type: 'uint256', value: forcedExit.exitEnd},
+            {type: 'bool',    value: 0},
+        ];
+        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(poolAddress, selector, { feeLimit: 100_000_000 }, parameters);
+        const contract = tx?.transaction?.raw_data?.contract;
+        let txData: any | undefined;
+        if (Array.isArray(contract) && contract.length > 0) {
+            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
+        }
+
+        if (typeof txData !== 'string' && txData.length < 8) {
+            throw new InternalError('Unable to extract tx (executeForcedExit) calldata');
+        }
+
+        return {
+            to: poolAddress,
+            amount: 0n,
+            data: txData.slice(8),  // skip selector from the calldata
+            selector,
+        };
     }
 
     public async getTokenSellerContract(poolAddress: string): Promise<string> {

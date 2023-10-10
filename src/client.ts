@@ -1,10 +1,10 @@
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx, Account } from 'libzkbob-rs-wasm-web';
 import { Chains, Pools, SnarkConfigParams, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
 import { truncateHexPrefix,
           toTwosComplementHex, bufToHex, bigintToArrayLe
         } from './utils';
-import { SyncStat, ZkBobState } from './state';
+import { SyncStat, ZkBobState, ZERO_OPTIMISTIC_STATE } from './state';
 import { DirectDeposit, RegularTxType, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
@@ -19,6 +19,7 @@ import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
 import { PERMIT2_CONTRACT } from './signers/permit2-signer';
 import { DirectDepositProcessor, DirectDepositType } from './dd';
+import { ForcedExitProcessor, ForcedExitState, ForcedExit, CommittedForcedExit } from './emergency';
 
 import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks';
@@ -97,6 +98,9 @@ export class ZkBobClient extends ZkBobProvider {
   private auxZpStates: { [id: string]: ZkBobState } = {};
   // Direct deposit processors are used to create DD and fetch DD pending txs
   private ddProcessors: { [poolAlias: string]: DirectDepositProcessor } = {};
+  // Forced exit processors are used to withdraw funds emergency from the pool
+  // and deactivate the account
+  private feProcessors: { [poolAlias: string]: ForcedExitProcessor } = {};
   // The single worker for the all pools
   // Currently we assume parameters are the same for the all pools
   private worker: any;
@@ -300,6 +304,7 @@ export class ZkBobClient extends ZkBobProvider {
         );
       this.zpStates[newPoolAlias] = state;
       this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state, this.subgraph());
+      this.feProcessor[newPoolAlias] = new ForcedExitProcessor(pool, network, state, this.subgraph())
 
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {
@@ -916,7 +921,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     let jobsIds: string[] = [];
-    let optimisticState = this.zeroOptimisticState();
+    let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       const outputs = onePart.outNotes.map((aNote) => { return {to: aNote.destination, amount: `${aNote.amountGwei}`} });
@@ -963,17 +968,6 @@ export class ZkBobClient extends ZkBobProvider {
     return jobsIds;
   }
 
-  private zeroOptimisticState(): StateUpdate {
-    const optimisticState: StateUpdate = {
-      newLeafs: [],
-      newCommitments: [],
-      newAccounts: [],
-      newNotes: [],
-    }
-
-    return optimisticState;
-  }
-
   // Withdraw shielded funds to the specified native chain address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // relayerFee - fee from the relayer (request one if undefined)
@@ -1013,7 +1007,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     let jobsIds: string[] = [];
-    let optimisticState = this.zeroOptimisticState();
+    let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       
@@ -1113,7 +1107,7 @@ export class ZkBobClient extends ZkBobProvider {
       fee: actualFee.toString(),
     };
     const giftCardState = this.auxZpStates[accId];
-    const txData = await giftCardState.createTransferOptimistic(oneTx, this.zeroOptimisticState());
+    const txData = await giftCardState.createTransferOptimistic(oneTx, ZERO_OPTIMISTIC_STATE);
 
     const startProofDate = Date.now();
     const txProof: Proof = await this.proveTx(txData.public, txData.secret, giftCardAcc.proverMode);
@@ -1717,7 +1711,7 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   // ------------------=========< Direct Deposits >=========------------------
-  // | Calculating sync time                                                 |
+  // | Direct deposit srvice routines                                        |
   // -------------------------------------------------------------------------
 
   protected ddProcessor(): DirectDepositProcessor {
@@ -1747,40 +1741,57 @@ export class ZkBobClient extends ZkBobProvider {
   // | Emergency withdrawing funds (direct contract interaction)             |
   // -------------------------------------------------------------------------
 
+  protected feProcessor(): ForcedExitProcessor {
+    const proccessor = this.feProcessor[this.curPool];
+    if (!proccessor) {
+        throw new InternalError(`No forced exit processor initialized for the pool ${this.curPool}`);
+    }
+
+    return proccessor;
+  }
+
   public async isForcedExitSupported(): Promise<boolean> {
-    // TODO: check pool contract associated methods availability
-    return false;
+    return await this.feProcessor().isForcedExitSupported();
   }
 
-  public async isForcedExitCompleted(): Promise<boolean> {
-    // TODO: check committedForcedExits[_nullifier] value
-    // pattern: poolIndex | 0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead0000000000000000
-    return false;
+  public async forcedExitState(): Promise<ForcedExitState> {
+    await this.updateState().catch((err) => { // try to sync state (we must have the actual last nullifier)
+      console.warn(`Unable to sync state (${err.message}). The last nullifier may be invalid`);
+      // TODO: sync with the pool contract directly
+    });
+
+    return this.feProcessor().forcedExitState();
   }
 
-  public async isForcedExitCommited(): Promise<boolean> {
-    // TODO: check committedForcedExits[_nullifier]
-    return false;
+  public async requestForcedExit(
+    executerAddress: string, // who will send emergency exit execute transaction
+    toAddress: string,     // which address should receive funds
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>  // callback to send transaction 
+  ): Promise<CommittedForcedExit> {
+    await this.updateState().catch((err) => { // try to sync state (we must have the actual last nullifier)
+      console.warn(`Unable to sync state (${err.message}). The last nullifier may be invalid`);
+      // TODO: sync with the pool contract directly
+    });
+
+    return this.feProcessor().requestForcedExit(
+      executerAddress,
+      toAddress,
+      sendTxCallback,
+      (pub: any, sec: any) => this.proveTx(pub, sec)
+    );
   }
 
-  public async requestForcedExit(): Promise<number> {
-    // TODO
-    throw new InternalError('unimplemented');
-  }
-
-  public async activeForcedExit(): Promise<any | undefined> {
-    // TODO: create ne interface to describe forced exit entity
+  public async activeForcedExit(): Promise<CommittedForcedExit | undefined> {
+    // TODO: create an interface to describe forced exit entity
     // scan through the events to fill this object
     throw new InternalError('unimplemented');
   }
 
-  public async executeForcedExit(): Promise<number> {
-    // TODO
-    throw new InternalError('unimplemented');
+  public async executeForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
+    return this.feProcessor().executeForcedExit(sendTxCallback);
   }
 
-  public async cancelForcedExit(): Promise<number> {
-    // TODO
-    throw new InternalError('unimplemented');
+  public async cancelForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
+    return this.feProcessor().cancelForcedExit(sendTxCallback);
   }
 }

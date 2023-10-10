@@ -15,6 +15,7 @@ import { isAddress } from 'web3-utils';
 import { Transaction, TransactionReceipt } from 'web3-core';
 import { RpcManagerDelegate, MultiRpcManager } from '../rpcman';
 import { ZkBobState } from '../../state';
+import { CommittedForcedExit, ForcedExit, ForcedExitRequest } from '../../emergency';
 
 const RETRY_COUNT = 10;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -34,6 +35,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     // Local cache
     private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
+    private supportsForcedExit = new Map<string, boolean>();    // poolContractAddress -> isSupportsNonceMethod
     private supportsNonces = new Map<string, boolean>();        // tokenAddress -> isSupportsNonceMethod
 
     // ------------------------=========< Lifecycle >=========------------------------
@@ -247,6 +249,102 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
         return await this.contractCallRetry(this.poolContract(), poolAddress, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
+    }
+
+    public async isSupportForcedExit(poolAddress: string): Promise<boolean> {
+        let isSupport = this.supportsForcedExit.get(poolAddress);
+        if (isSupport === undefined) {
+            try {
+                const poolContract = this.poolContract();
+                poolContract.options.address = poolAddress;
+                await poolContract.methods['committedForcedExits']('0').call()
+                isSupport = true;
+            } catch (err) {
+                console.warn(`The pool seems doesn't support emergency exit`);
+                isSupport = false;
+            }
+
+            this.supportsForcedExit.set(poolAddress, isSupport);
+        };
+
+        return isSupport;
+    }
+
+    public async nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint> {
+        const res = await this.contractCallRetry(this.poolContract(), poolAddress, 'nullifiers', [nullifier]);
+        
+        return BigInt(res);
+    }
+
+    public async committedForcedExits(poolAddress: string, nullifier: bigint): Promise<bigint> {
+        const res = await this.contractCallRetry(this.poolContract(), poolAddress, 'committedForcedExits', [nullifier.toString()]);
+
+        return BigInt(res);
+    }
+
+    public async createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction> {
+        const method = 'commitForcedExit(address,address,uint256,uint256,uint256,uint256,uint256[8])';
+        const encodedTx = await this.directDepositContract().methods[method](
+            forcedExit.operator,
+            forcedExit.to,
+            forcedExit.amount.toString(),
+            forcedExit.index,
+            forcedExit.nullifier.toString(),
+            forcedExit.out_commit.toString(),
+            [forcedExit.tx_proof.a[0],
+             forcedExit.tx_proof.a[1],
+             forcedExit.tx_proof.b[0][0],
+             forcedExit.tx_proof.b[0][1],
+             forcedExit.tx_proof.b[1][0],
+             forcedExit.tx_proof.b[1][1],
+             forcedExit.tx_proof.c[0],
+             forcedExit.tx_proof.c[1],
+            ]
+        );
+
+        return {
+            to: poolAddress,
+            amount: 0n,
+            data: encodedTx,
+        };
+    }
+
+    public async createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
+        const method = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
+        const encodedTx = await this.directDepositContract().methods[method](
+            forcedExit.nullifier.toString(),
+            forcedExit.operator,
+            forcedExit.to,
+            forcedExit.amount.toString(),
+            forcedExit.exitStart,
+            forcedExit.exitEnd,
+            1
+        );
+
+        return {
+            to: poolAddress,
+            amount: 0n,
+            data: encodedTx,
+        };
+    }
+
+    public async createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
+        const method = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
+        const encodedTx = await this.directDepositContract().methods[method](
+            forcedExit.nullifier.toString(),
+            forcedExit.operator,
+            forcedExit.to,
+            forcedExit.amount.toString(),
+            forcedExit.exitStart,
+            forcedExit.exitEnd,
+            0
+        );
+
+        return {
+            to: poolAddress,
+            amount: 0n,
+            data: encodedTx,
+        };
     }
 
     public async getTokenSellerContract(poolAddress: string): Promise<string> {

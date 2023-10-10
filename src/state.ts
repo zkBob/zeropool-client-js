@@ -26,6 +26,13 @@ const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via 
 const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
 const MIN_TX_COUNT_FOR_STAT = 100;
 
+export const ZERO_OPTIMISTIC_STATE: StateUpdate = {
+  newLeafs: [],
+  newCommitments: [],
+  newAccounts: [],
+  newNotes: [],
+}
+
 
 export interface BatchResult {
   txCount: number;
