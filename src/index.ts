@@ -19,6 +19,6 @@ export { deriveSpendingKeyZkBob } from './utils'
 export { IAddressComponents } from 'libzkbob-rs-wasm-web';
 export { SignatureType } from './signers/abstract-signer'
 export { DirectDepositType } from './dd'
-export { ForcedExitState } from './emergency'
+export { ForcedExitState, CommittedForcedExit } from './emergency'
 
 export * from './errors'
