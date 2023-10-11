@@ -314,15 +314,10 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             {type: 'uint256', value: forcedExit.index},
             {type: 'uint256', value: forcedExit.nullifier.toString()},
             {type: 'uint256', value: forcedExit.out_commit.toString()},
-            {type: 'uint256[8]', value: [forcedExit.tx_proof.a[0],
-                                        forcedExit.tx_proof.a[1],
-                                        forcedExit.tx_proof.b[0][0],
-                                        forcedExit.tx_proof.b[0][1],
-                                        forcedExit.tx_proof.b[1][0],
-                                        forcedExit.tx_proof.b[1][1],
-                                        forcedExit.tx_proof.c[0],
-                                        forcedExit.tx_proof.c[1],
-                                    ]},
+            {type: 'uint256[8]', value: [forcedExit.tx_proof.a,
+                                         forcedExit.tx_proof.b,
+                                         forcedExit.tx_proof.c,
+                                        ].flat(2)},
         ];
         const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(poolAddress, selector, { feeLimit: 100_000_000 }, parameters);
         const contract = tx?.transaction?.raw_data?.contract;
@@ -352,7 +347,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             {type: 'uint256', value: forcedExit.amount.toString()},
             {type: 'uint256', value: forcedExit.exitStart},
             {type: 'uint256', value: forcedExit.exitEnd},
-            {type: 'bool',    value: 1},
+            {type: 'bool',    value: 0},
         ];
         const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(poolAddress, selector, { feeLimit: 100_000_000 }, parameters);
         const contract = tx?.transaction?.raw_data?.contract;
@@ -382,7 +377,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             {type: 'uint256', value: forcedExit.amount.toString()},
             {type: 'uint256', value: forcedExit.exitStart},
             {type: 'uint256', value: forcedExit.exitEnd},
-            {type: 'bool',    value: 0},
+            {type: 'bool',    value: 1},
         ];
         const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(poolAddress, selector, { feeLimit: 100_000_000 }, parameters);
         const contract = tx?.transaction?.raw_data?.contract;

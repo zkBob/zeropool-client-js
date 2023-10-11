@@ -284,23 +284,18 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public async createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction> {
         const method = 'commitForcedExit(address,address,uint256,uint256,uint256,uint256,uint256[8])';
-        const encodedTx = await this.directDepositContract().methods[method](
+        const encodedTx = await this.poolContract().methods[method](
             forcedExit.operator,
             forcedExit.to,
             forcedExit.amount.toString(),
             forcedExit.index,
             forcedExit.nullifier.toString(),
             forcedExit.out_commit.toString(),
-            [forcedExit.tx_proof.a[0],
-             forcedExit.tx_proof.a[1],
-             forcedExit.tx_proof.b[0][0],
-             forcedExit.tx_proof.b[0][1],
-             forcedExit.tx_proof.b[1][0],
-             forcedExit.tx_proof.b[1][1],
-             forcedExit.tx_proof.c[0],
-             forcedExit.tx_proof.c[1],
-            ]
-        );
+            [forcedExit.tx_proof.a,,
+             forcedExit.tx_proof.b,
+             forcedExit.tx_proof.c
+            ].flat(2),
+        ).encodeABI();
 
         return {
             to: poolAddress,
@@ -311,15 +306,15 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public async createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
         const method = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
-        const encodedTx = await this.directDepositContract().methods[method](
+        const encodedTx = await this.poolContract().methods[method](
             forcedExit.nullifier.toString(),
             forcedExit.operator,
             forcedExit.to,
             forcedExit.amount.toString(),
             forcedExit.exitStart,
             forcedExit.exitEnd,
-            1
-        );
+            0
+        ).encodeABI();
 
         return {
             to: poolAddress,
@@ -330,15 +325,15 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public async createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
         const method = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
-        const encodedTx = await this.directDepositContract().methods[method](
+        const encodedTx = await this.poolContract().methods[method](
             forcedExit.nullifier.toString(),
             forcedExit.operator,
             forcedExit.to,
             forcedExit.amount.toString(),
             forcedExit.exitStart,
             forcedExit.exitEnd,
-            0
-        );
+            1
+        ).encodeABI();
 
         return {
             to: poolAddress,

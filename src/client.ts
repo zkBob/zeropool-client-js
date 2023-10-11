@@ -1425,6 +1425,7 @@ export class ZkBobClient extends ZkBobProvider {
     if (!txValid) {
       throw new TxProofError();
     }
+
     return txProof;
   }
 
@@ -1782,9 +1783,7 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   public async activeForcedExit(): Promise<CommittedForcedExit | undefined> {
-    // TODO: create an interface to describe forced exit entity
-    // scan through the events to fill this object
-    throw new InternalError('unimplemented');
+    return this.feProcessor().getActiveForcedExit();
   }
 
   public async executeForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
