@@ -4,6 +4,8 @@ import { NetworkBackend, PreparedTransaction } from "./networks";
 import { ZkBobState, ZERO_OPTIMISTIC_STATE } from "./state";
 import { ZkBobSubgraph } from "./subgraph";
 import { InternalError } from "./errors";
+import { keccak256 } from "web3-utils";
+import { addHexPrefix, bufToHex } from "./utils";
 
 export enum ForcedExitState {
     NotStarted = 0,
@@ -101,7 +103,9 @@ export class ForcedExitProcessor {
         const txNotesSum: bigint = notes.slice(0, 3).reduce((acc, cur) => acc + BigInt(cur[1].b), 0n);
         const requestedAmount = accountBalance + txNotesSum;
 
-        // create withdraw tx and calculate a proof
+        console.log(`Latest nullifier: ${await this.getCurrentNullifier()}`);
+
+        // create regular withdraw tx
         const oneTx: IWithdrawData = {
             amount: requestedAmount.toString(),
             fee: '0',
@@ -110,6 +114,14 @@ export class ForcedExitProcessor {
             energy_amount: '0',
         };
         const oneTxData = await this.state.createWithdrawalOptimistic(oneTx, ZERO_OPTIMISTIC_STATE);
+
+        // customize memo field in the public part (pool contract know nothing about real memo)
+        const customMemo = addHexPrefix(bufToHex(oneTx.to));
+        const customMemoHash = BigInt(keccak256(customMemo));
+        const R = BigInt('21888242871839275222246405745257275088548364400416034343698204186575808495617');
+        oneTxData.public.memo = (customMemoHash % R).toString(10);
+
+        // calculate transaction proof
         const txProof = await proofTxCallback(oneTxData.public, oneTxData.secret);
 
         // create an internal object to request
@@ -125,7 +137,7 @@ export class ForcedExitProcessor {
 
         // getting raw transaction
         const commitTransaction = await this.network.createCommitForcedExitTx(this.poolAddress, request);
-        // ...and bring it back to the application to send it
+        // ...and bringing it back to the application to send it
         const txHash = await sendTxCallback(commitTransaction);
 
         // Assume tx was sent, try to figure out the result and retrieve a commited forced exit
