@@ -5,7 +5,7 @@ import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
           Note,
       } from 'libzkbob-rs-wasm-web';
 import { HistoryStorage } from './history'
-import { bufToHex, isRangesIntersected } from './utils';
+import { bufToHex, forceDecimal, isRangesIntersected } from './utils';
 import { hash } from 'tweetnacl';
 import { EphemeralPool } from './ephemeral';
 import { NetworkType } from './network-type';
@@ -13,6 +13,8 @@ import { ColdStorageConfig } from './coldstorage';
 import { InternalError } from './errors';
 import { ZkBobRelayer } from './services/relayer';
 import { CONSTANTS } from './constants';
+import { NetworkBackend } from './networks';
+import { ZkBobSubgraph } from './subgraph';
 
 const LOG_STATE_HOTSYNC = false;
 
@@ -22,15 +24,35 @@ const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to 
 const CORRUPT_STATE_ROLLBACK_ATTEMPTS = 2; // number of state restore attempts (via rollback)
 const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via wipe)
 const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
-const MIN_TX_COUNT_FOR_STAT = 10;
+const MIN_TX_COUNT_FOR_STAT = 100;
 
 
 export interface BatchResult {
   txCount: number;
   maxMinedIndex: number;
   maxPendingIndex: number;
+  hasOwnOptimisticTxs: boolean;
   state: Map<number, StateUpdate>;  // key: first tx index, 
                                     // value: StateUpdate object (notes, accounts, leafs and comminments)
+}
+
+interface RawTxsBatch {
+  fromIndex: number;
+  count: number
+  minedTxs: IndexedTx[];
+  pendingTxs: IndexedTx[];
+  txHashes: Record<number, string>;
+  maxMinedIndex: number;
+  maxPendingIndex: number;
+}
+
+export interface StateSyncInfo {
+  txCount: number;  // total (cold + hot)
+  hotSyncCount: number; // hot sync only
+  processedTxCount: number;
+  startTimestamp: number;
+  startDbTimestamp?: number;
+  endTimestamp?: number;
 }
 
 
@@ -45,10 +67,11 @@ export interface SyncStat {
 
   totalTime: number; // msec
   timePerTx: number;  // msec
+  writeStateTime: number; // writing database time during the hot sync (ms)
 }
 
-export interface PartialSyncResult {
-  txCount: number;  // total txs count (relayer + CDN)
+interface ColdSyncResult {
+  txCount: number;  // txs count
   decryptedLeafs: number; // deposit/withdrawal = 1 leaf,
                           // transfer = 1 + notes_cnt leafs
   firstIndex: number; // first index of the synced range
@@ -60,6 +83,7 @@ export interface PartialSyncResult {
 export class ZkBobState {
   public stateId: string; // should depends on pool and sk
   private sk: Uint8Array;
+  private network: NetworkBackend;
   private birthIndex?: number;
   public history?: HistoryStorage; // should work synchronically with the state
   private ephemeralAddrPool?: EphemeralPool; // depends on sk so we placed it here
@@ -76,13 +100,18 @@ export class ZkBobState {
   // need to decrease time in isOwnAddress() function 
   private shieldedAddressCache = new Map<string, Promise<boolean>>();
 
+  // Sync info
+  private lastSyncInfo?: StateSyncInfo;
+
+
   // Create regular state with the provided spending key
   // and other parameters
   public static async create(
     sk: Uint8Array,
     birthIndex: number | undefined,
+    network: NetworkBackend,
+    subgraph: ZkBobSubgraph | undefined,
     networkName: string,
-    rpcUrl: string,
     denominator: bigint,
     poolId: number,
     tokenAddress: string,
@@ -90,6 +119,7 @@ export class ZkBobState {
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
     zpState.sk = new Uint8Array(sk);
+    zpState.network = network;
     zpState.birthIndex = birthIndex;
     
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
@@ -98,10 +128,9 @@ export class ZkBobState {
     await worker.createAccount(zpState.stateId, zpState.sk, poolId, networkName);
     zpState.worker = worker;
     
-    zpState.history = await HistoryStorage.init(zpState.stateId, rpcUrl, zpState);
-
-    let network = networkName as NetworkType;
-    zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, network, rpcUrl, denominator);
+    zpState.history = await HistoryStorage.init(zpState.stateId, network, zpState, subgraph);
+    
+    zpState.ephemeralAddrPool = await EphemeralPool.init(zpState.sk, tokenAddress, networkName as NetworkType, network, denominator);
 
     return zpState;
   }
@@ -111,12 +140,14 @@ export class ZkBobState {
   public static async createNaked(
     sk: Uint8Array,
     birthIndex: number | undefined,
+    network: NetworkBackend,
     networkName: string,
     poolId: number,
     worker: any,
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();
     zpState.sk = new Uint8Array(sk);
+    zpState.network = network;
     zpState.birthIndex = birthIndex;
 
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
@@ -126,6 +157,15 @@ export class ZkBobState {
     zpState.worker = worker;
 
     return zpState;
+  }
+
+  // returns undefined if state sync not in progress
+  public curSyncInfo(): StateSyncInfo | undefined {
+    if (this.updateStatePromise && this.lastSyncInfo) {
+      return this.lastSyncInfo
+    }
+
+    return undefined;
   }
 
   public ephemeralPool(): EphemeralPool {
@@ -228,7 +268,7 @@ export class ZkBobState {
   }
 
   public async assembleAddress(d: string, p_d: string): Promise<string> {
-    return this.worker.assembleAddress(this.stateId, d, p_d);
+    return this.worker.assembleAddress(this.stateId, forceDecimal(d), forceDecimal(p_d));
   }
 
   // Converts zk-addresss from the old prefixless format to the new chain-specific one
@@ -296,13 +336,14 @@ export class ZkBobState {
     coldConfig?: ColdStorageConfig,
     coldBaseAddr?: string,
   ): Promise<boolean> {
+    this.lastSyncInfo = {txCount: 0, hotSyncCount: 0, processedTxCount: 0, startTimestamp: Date.now()}
     let startIndex = Number(await this.getNextIndex());
 
     const stateInfo = await relayer.info();
     const nextIndex = Number(stateInfo.deltaIndex);
     const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
-    let readyToTransact = true;
+    let isReadyToTransact = true;
 
     if (optimisticIndex > startIndex) {
       // Use partial tree loading if possible
@@ -322,8 +363,30 @@ export class ZkBobState {
         }
       }
 
-      // Try to using the cold storage
-      const coldResult = await this.loadColdStorageTxs(getPoolRoot, coldConfig, coldBaseAddr, startIndex);
+      // Getting start sync operation timestamp
+      const startSyncTime = Date.now();
+
+      // now we got actual txs count to sync => update info
+      this.lastSyncInfo.txCount = (optimisticIndex - startIndex) /  OUTPLUSONE;
+
+      // Try to using the cold storage if possible
+      const coldResultPromise = this.startColdSync(getPoolRoot, coldConfig, coldBaseAddr, startIndex);
+
+      // Start the hot sync simultaneously with the cold sync
+      const assumedNextIndex = this.nextIndexAfterColdSync(coldConfig, startIndex);
+      this.lastSyncInfo.hotSyncCount = (optimisticIndex - assumedNextIndex) /  OUTPLUSONE;
+      let hotSyncPromise = this.startHotSync(relayer, assumedNextIndex, optimisticIndex);
+
+      // Waiting while cold sync finished (local state becomes updated)
+      const coldResult = await coldResultPromise;
+
+      // Check is predicted next index after the cold sync equals actual one
+      if (coldResult.nextIndex != assumedNextIndex) {
+        // ... restarting the hot sync with the appropriate index otherwise 
+        console.error(`🧊[ColdSync] next index not as assumed after sync (next index = ${coldResult.nextIndex}, assumed ${assumedNextIndex}) => starting hot sync again`);
+        this.lastSyncInfo.hotSyncCount = (optimisticIndex - coldResult.nextIndex) /  OUTPLUSONE;
+        hotSyncPromise = this.startHotSync(relayer, coldResult.nextIndex, optimisticIndex);
+      }
 
       const curStat: SyncStat = {
         txCount: (optimisticIndex - startIndex) / OUTPLUSONE,
@@ -332,121 +395,35 @@ export class ZkBobState {
         fullSync: startIndex == 0 ? true : false,
         totalTime: coldResult.totalTime,
         timePerTx: 0,
+        writeStateTime: 0,
       };
 
-      // change hot sync position
-      startIndex = coldResult.nextIndex;
-      console.log(`🔥[HotSync] fetching transactions between ${startIndex} and ${optimisticIndex}...`);
-      const startTime = Date.now();
-
-      const batches: Promise<BatchResult>[] = [];
-      for (let i = startIndex; i <= optimisticIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
-        const oneBatch = relayer.fetchTransactionsOptimistic(BigInt(i), BATCH_SIZE).then( async txs => {
-          console.log(`🔥[HotSync] got ${txs.length} transactions from index ${i}`);
-
-          const batchState = new Map<number, StateUpdate>();
-          
-          const txHashes: Record<number, string> = {};
-          const indexedTxs: IndexedTx[] = [];
-
-          const txHashesPending: Record<number, string> = {};
-          const indexedTxsPending: IndexedTx[] = [];
-
-          let maxMinedIndex = -1;
-          let maxPendingIndex = -1;
-
-          for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-            const tx = txs[txIdx];
-            const memo_idx = i + txIdx * OUTPLUSONE; // Get the first leaf index in the tree
-            
-            // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
-            const memo = tx.slice(129); // Skip mined flag, txHash and commitment
-            const commitment = tx.slice(65, 129)
-
-            const indexedTx: IndexedTx = {
-              index: memo_idx,
-              memo: memo,
-              commitment: commitment,
-            }
-
-            // 3. Get txHash
-            const txHash = tx.slice(1, 65);
-
-            // 4. Get mined flag
-            if (tx.slice(0, 1) === '1') {
-              indexedTxs.push(indexedTx);
-              txHashes[memo_idx] = '0x' + txHash;
-              maxMinedIndex = Math.max(maxMinedIndex, memo_idx);
-            } else {
-              indexedTxsPending.push(indexedTx);
-              txHashesPending[memo_idx] = '0x' + txHash;
-              maxPendingIndex = Math.max(maxPendingIndex, memo_idx);
-            }
-          }
-
-          if (indexedTxs.length > 0) {
-            const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, indexedTxs);
-            const decryptedMemos = parseResult.decryptedMemos;
-            batchState.set(i, parseResult.stateUpdate);
-            if (LOG_STATE_HOTSYNC) {
-              this.logStateSync(i, i + txs.length * OUTPLUSONE, decryptedMemos);
-            }
-            for (let decryptedMemoIndex = 0; decryptedMemoIndex < decryptedMemos.length; ++decryptedMemoIndex) {
-              // save memos corresponding to the our account to restore history
-              const myMemo = decryptedMemos[decryptedMemoIndex];
-              myMemo.txHash = txHashes[myMemo.index];
-              this.history?.saveDecryptedMemo(myMemo, false);
-            }
-          }
-
-          if (indexedTxsPending.length > 0) {
-            const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, indexedTxsPending);
-            const decryptedPendingMemos = parseResult.decryptedMemos;
-            for (let idx = 0; idx < decryptedPendingMemos.length; ++idx) {
-              // save memos corresponding to the our account to restore history
-              const myMemo = decryptedPendingMemos[idx];
-              myMemo.txHash = txHashesPending[myMemo.index];
-              this.history?.saveDecryptedMemo(myMemo, true);
-
-              if (myMemo.acc != undefined) {
-                // There is a pending transaction initiated by ourselfs
-                // So we cannot create new transactions in that case
-                readyToTransact = false;
-              }
-            }
-          }
-
-          return {txCount: txs.length, maxMinedIndex, maxPendingIndex, state: batchState} ;
-        });
-        batches.push(oneBatch);
-      };
-
+      // Waiting while batches for hot sync are ready
       const totalState = new Map<number, StateUpdate>();
-      const initRes: BatchResult = {txCount: 0, maxMinedIndex: -1, maxPendingIndex: -1, state: totalState};
-      const totalRes = (await Promise.all(batches)).reduce((acc, cur) => {
+      const initRes: BatchResult = {txCount: 0, maxMinedIndex: -1, maxPendingIndex: -1, hasOwnOptimisticTxs: false, state: totalState};
+      const totalRes = (await hotSyncPromise).reduce((acc, cur) => {
         return {
           txCount: acc.txCount + cur.txCount,
           maxMinedIndex: Math.max(acc.maxMinedIndex, cur.maxMinedIndex),
           maxPendingIndex: Math.max(acc.maxPendingIndex, cur.maxPendingIndex),
+          hasOwnOptimisticTxs: acc.hasOwnOptimisticTxs || cur.hasOwnOptimisticTxs,
           state: new Map([...Array.from(acc.state.entries()), ...Array.from(cur.state.entries())]),
         }
       }, initRes);
 
+      const startSavingTime = Date.now();
+      this.lastSyncInfo.startDbTimestamp = startSavingTime;
+      console.log(`🔥[HotSync] all batches were processed. Saving...`);
+      // Merging state updates into the single StateUpdate object
       const idxs = [...totalRes.state.keys()].sort((i1, i2) => i1 - i2);
+      const hotStateUpdate: StateUpdate = {newAccounts: [], newLeafs: [], newCommitments: [], newNotes: []};
       for (const idx of idxs) {
         const oneStateUpdate = totalRes.state.get(idx);
         if (oneStateUpdate !== undefined) {
-          try {
-            await this.worker.updateState(this.stateId, oneStateUpdate, siblings);
-          } catch (err) {
-            const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
-            console.warn(`🔥[HotSync] cannot update state from index ${idx}${siblingsDescr}`);
-            if (siblings != undefined) {
-              // if we try to update state with siblings and got an error - do not use partial sync again
-              this.birthIndex = undefined;
-            }
-            throw new InternalError(`Unable to synchronize pool state`);
-          }
+          hotStateUpdate.newAccounts = [...hotStateUpdate.newAccounts, ...oneStateUpdate.newAccounts];
+          hotStateUpdate.newLeafs = [...hotStateUpdate.newLeafs, ...oneStateUpdate.newLeafs];
+          hotStateUpdate.newCommitments = [...hotStateUpdate.newCommitments, ...oneStateUpdate.newCommitments];
+          hotStateUpdate.newNotes = [...hotStateUpdate.newNotes, ...oneStateUpdate.newNotes];
 
           curStat.decryptedLeafs += oneStateUpdate.newLeafs.length;
         } else {
@@ -454,29 +431,44 @@ export class ZkBobState {
         }
       }
 
+      // Saving parsed transaction from the hot sync in the local Merkle tree
+      try {
+        await this.worker.updateState(this.stateId, hotStateUpdate, siblings);
+      } catch (err) {
+        const siblingsDescr = siblings !== undefined ? ` (+ ${siblings.length} siblings)` : '';
+        console.warn(`🔥[HotSync] cannot update state from index ${idxs[0]}${siblingsDescr}`);
+        if (siblings != undefined) {
+          // if we try to update state with siblings and got an error - do not use partial sync again
+          this.birthIndex = undefined;
+        }
+        throw new InternalError(`Unable to synchronize pool state`);
+      }
+      const savingTime = Date.now() - startSavingTime;
+      console.log(`🔥[HotSync] Saved local state in ${savingTime} ms (${(savingTime / totalRes.txCount).toFixed(4)} ms/tx)`);
+
       // remove unneeded pending records
       this.history?.setLastMinedTxIndex(totalRes.maxMinedIndex);
       this.history?.setLastPendingTxIndex(totalRes.maxPendingIndex);
 
 
-      const hotSyncTime = Date.now() - startTime;
-      const hotSyncTimePerTx = hotSyncTime / totalRes.txCount;
+      const fullSyncTime = Date.now() - startSyncTime;
+      const fullSyncTimePerTx = fullSyncTime / (coldResult.txCount + totalRes.txCount);
 
       curStat.txCount = totalRes.txCount + coldResult.txCount;
       curStat.cdnTxCnt = coldResult.txCount;
-      curStat.totalTime = hotSyncTime + coldResult.totalTime;
-      curStat.timePerTx = curStat.totalTime / curStat.txCount;
+      curStat.totalTime = fullSyncTime;
+      curStat.timePerTx = fullSyncTimePerTx;
+      curStat.writeStateTime = savingTime;
 
       // save relevant stats only
       if (curStat.txCount >= MIN_TX_COUNT_FOR_STAT) {
         this.syncStats.push(curStat);
       }
 
+      isReadyToTransact = !totalRes.hasOwnOptimisticTxs;
 
-      console.log(`🔥[HotSync] finished in ${hotSyncTime / 1000} sec | ${totalRes.txCount} tx, avg speed ${hotSyncTimePerTx.toFixed(1)} ms/tx`);
-      if (coldResult.txCount > 0) {
-        console.log(`🧊🔥[TotalSync] finished in ${curStat.totalTime / 1000} sec | ${curStat.txCount} tx, avg speed ${curStat.timePerTx.toFixed(1)} ms/tx`);
-      }
+      const syncType = coldResult.txCount > 0 ? '🧊🔥[TotalSync]' : '🔥[HotSync]'
+      console.log(`${syncType} finished in ${curStat.totalTime / 1000} sec | ${curStat.txCount} tx, avg speed ${curStat.timePerTx.toFixed(2)} ms/tx`);
     } else {
       this.history?.setLastMinedTxIndex(nextIndex - OUTPLUSONE);
       this.history?.setLastPendingTxIndex(-1);
@@ -520,7 +512,133 @@ export class ZkBobState {
       }
     }
 
-    return readyToTransact;
+    // set finish sync timestamp
+    this.lastSyncInfo.endTimestamp = Date.now();
+
+    return isReadyToTransact;
+  }
+
+  // Returns prepared data to include in the local Merkle tree
+  // 1. Fetch all needed tx batches
+  // 2. Parse batches
+  private async startHotSync(relayer: ZkBobRelayer, fromIndex: number, toIndex: number): Promise<BatchResult[]> {
+    let hotSyncPromises: Promise<BatchResult>[] = [];
+    for (let i = fromIndex; i <= toIndex; i = i + BATCH_SIZE * OUTPLUSONE) {
+      hotSyncPromises.push(this.fetchBatch(relayer, i, BATCH_SIZE).then(async (aBatch) => {
+        // batch fetched, let's parse it!
+        const res = await this.parseBatch(aBatch);
+        if (this.lastSyncInfo) this.lastSyncInfo.processedTxCount += aBatch.count;
+        return res;
+      }));
+    }
+
+    return Promise.all(hotSyncPromises);
+  }
+
+  // Get the transactions from the relayer starting from the specified index
+  private async fetchBatch(relayer: ZkBobRelayer, fromIndex: number, count: number): Promise<RawTxsBatch> {
+    return relayer.fetchTransactionsOptimistic(BigInt(fromIndex), count).then( async txs => {      
+      const txHashes: Record<number, string> = {};
+      const indexedTxs: IndexedTx[] = [];
+      const indexedTxsPending: IndexedTx[] = [];
+
+      let maxMinedIndex = -1;
+      let maxPendingIndex = -1;
+
+      for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
+        const tx = txs[txIdx];
+        const memo_idx = fromIndex + txIdx * OUTPLUSONE; // Get the first leaf index in the tree
+        
+        // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
+        const memo = tx.slice(129); // Skip mined flag, txHash and commitment
+        const commitment = tx.slice(65, 129)
+
+        const indexedTx: IndexedTx = {
+          index: memo_idx,
+          memo: memo,
+          commitment: commitment,
+        }
+
+        // 3. Get txHash
+        const txHash = tx.slice(1, 65);
+        txHashes[memo_idx] = this.network.txHashFromHexString(txHash);
+
+        // 4. Get mined flag
+        if (tx.slice(0, 1) === '1') {
+          indexedTxs.push(indexedTx);
+          maxMinedIndex = Math.max(maxMinedIndex, memo_idx);
+        } else {
+          indexedTxsPending.push(indexedTx);
+          maxPendingIndex = Math.max(maxPendingIndex, memo_idx);
+        }
+      }
+
+      console.log(`🔥[HotSync] got batch of ${txs.length} transactions from index ${fromIndex}`);
+
+      return {
+        fromIndex: fromIndex,
+        count: txs.length,
+        minedTxs: indexedTxs,
+        pendingTxs: indexedTxsPending,
+        maxMinedIndex,
+        maxPendingIndex,
+        txHashes,
+      }
+    })
+    .catch((err) => {
+      console.log(`🔥[HotSync] cannot get txs batch from index ${fromIndex}: ${err.message}`)
+      throw new InternalError(`Cannot fetch txs from the relayer: ${err.message}`);
+    });
+  }
+
+  // The heaviest work: parse txs batch
+  // and returns batch result
+  private async parseBatch(batch: RawTxsBatch): Promise<BatchResult> {
+    let hasOwnOptimisticTxs = false;
+
+    const batchState = new Map<number, StateUpdate>();
+
+    // process mined transactions 
+    if (batch.minedTxs.length > 0) {
+      const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, batch.minedTxs);
+      const decryptedMemos = parseResult.decryptedMemos;
+      batchState.set(batch.fromIndex, parseResult.stateUpdate);
+      //if (LOG_STATE_HOTSYNC) {
+      //  this.logStateSync(i, i + txs.length * OUTPLUSONE, decryptedMemos);
+      //}
+      for (let decryptedMemoIndex = 0; decryptedMemoIndex < decryptedMemos.length; ++decryptedMemoIndex) {
+        // save memos corresponding to the our account to restore history
+        const myMemo = decryptedMemos[decryptedMemoIndex];
+        myMemo.txHash = batch.txHashes[myMemo.index];
+        this.history?.saveDecryptedMemo(myMemo, false);
+      }
+    }
+
+    // process pending transactions from the optimisstic state
+    if (batch.pendingTxs.length > 0) {
+      const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, batch.pendingTxs);
+      const decryptedPendingMemos = parseResult.decryptedMemos;
+      for (let idx = 0; idx < decryptedPendingMemos.length; ++idx) {
+        // save memos corresponding to the our account to restore history
+        const myMemo = decryptedPendingMemos[idx];
+        myMemo.txHash = batch.txHashes[myMemo.index];
+        this.history?.saveDecryptedMemo(myMemo, true);
+
+        if (myMemo.acc != undefined) {
+          // There is a pending transaction initiated by ourselfs
+          // So we cannot create new transactions in that case
+          hasOwnOptimisticTxs = true;
+        }
+      }
+    }
+
+    return {
+      txCount: batch.count,
+      maxMinedIndex: batch.maxMinedIndex,
+      maxPendingIndex: batch.maxPendingIndex,
+      hasOwnOptimisticTxs,
+      state: batchState,
+    };
   }
 
   // Just fetch and process the new state without local state updating
@@ -617,25 +735,10 @@ export class ZkBobState {
     return false;
   }
 
-  private async loadColdStorageTxs(
-    getPoolRoot: (index: bigint) => Promise<bigint>,
-    coldConfig?: ColdStorageConfig,
-    coldStorageBaseAddr?: string,
-    fromIndex?: number,
-    toIndex?: number
-  ): Promise<PartialSyncResult> {
-    const startRange = fromIndex ?? 0;  // inclusively
-    const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
-
-    const syncResult: PartialSyncResult = {
-      txCount: 0,
-      decryptedLeafs: 0,
-      firstIndex: startRange,
-      nextIndex: startRange,
-      totalTime: 0,
-    };
-
+  private isColdSyncAvailable(coldConfig?: ColdStorageConfig, fromIndex?: number, toIndex?: number): boolean {
     if (coldConfig) {
+      const startRange = fromIndex ?? 0;
+      const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);
       const actualRangeStart = Math.max(startRange, Number(coldConfig.index_from));
       const actualRangeEnd = Math.min(endRange, Number(coldConfig.next_index));
 
@@ -645,69 +748,103 @@ export class ZkBobState {
           isRangesIntersected(startRange, endRange, Number(coldConfig.index_from), Number(coldConfig.next_index)) &&
           ((actualRangeEnd - actualRangeStart) / OUTPLUSONE) >= COLD_STORAGE_USAGE_THRESHOLD
       ) {
-        const startTime = Date.now();
+        return true;
+      }
+    }
 
-        // try get txs from the cold storage
-        try {
-          if (coldConfig && coldStorageBaseAddr) { 
-            console.log(`🧊[ColdSync] loading txs up to index ${coldConfig.next_index}...`);
-            const promises = coldConfig.bulks
-              .filter(aBulk => {
-                return isRangesIntersected(actualRangeStart, actualRangeEnd, Number(aBulk.index_from), Number(aBulk.next_index))
-              })
-              .map(async (bulkInfo) => {
-                let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
-                if (response.ok) {
-                  let aBulk = await response.arrayBuffer();
-                  if (aBulk.byteLength == bulkInfo.bytes) {
-                    console.log(`🧊[ColdSync] got bulk ${bulkInfo.filename} with ${bulkInfo.tx_count} txs (${bulkInfo.bytes} bytes)`);
+    return false;
+  }
 
-                    return new Uint8Array(aBulk);
-                  }
+  private nextIndexAfterColdSync(coldConfig?: ColdStorageConfig, fromIndex?: number, toIndex?: number): number {
+    if (this.isColdSyncAvailable(coldConfig, fromIndex, toIndex)) {
+      return Math.min(toIndex ?? (2 ** CONSTANTS.HEIGHT), Number(coldConfig?.next_index));
+    }
 
-                  //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: got ${aBulk.byteLength} bytes, expected ${bulkInfo.bytes} bytes`);
-                  //return new Uint8Array();
-                  throw new InternalError(`Cold storage corrupted (invalid file size: ${aBulk.byteLength})`)
-                } else {
-                  //console.warn(`🧊[ColdSync] cannot load bulk ${bulkInfo.filename}: response code ${response.status} (${response.statusText})`);
-                  //return new Uint8Array();
-                  throw new InternalError(`Couldn't load cold storage (invalid response code: ${response.status})`)
+    return fromIndex ?? 0;
+  }
+
+  private async startColdSync(
+    getPoolRoot: (index: bigint) => Promise<bigint>,
+    coldConfig?: ColdStorageConfig,
+    coldStorageBaseAddr?: string,
+    fromIndex?: number,
+    toIndex?: number
+  ): Promise<ColdSyncResult> {
+    const startRange = fromIndex ?? 0;  // inclusively
+    const endRange = toIndex ?? (2 ** CONSTANTS.HEIGHT);  // exclusively
+
+    const syncResult: ColdSyncResult = {
+      txCount: 0,
+      decryptedLeafs: 0,
+      firstIndex: startRange,
+      nextIndex: startRange,
+      totalTime: 0,
+    };
+
+    if (this.isColdSyncAvailable(coldConfig, fromIndex, toIndex)) {
+      const actualRangeStart = Math.max(startRange, Number(coldConfig?.index_from));
+      const actualRangeEnd = Math.min(endRange, Number(coldConfig?.next_index));
+
+      const startTime = Date.now();
+
+      // try get txs from the cold storage
+      try {
+        if (coldConfig && coldStorageBaseAddr) { 
+          console.log(`🧊[ColdSync] loading txs up to index ${coldConfig.next_index}...`);
+          const promises = coldConfig.bulks
+            .filter(aBulk => {
+              return isRangesIntersected(actualRangeStart, actualRangeEnd, Number(aBulk.index_from), Number(aBulk.next_index))
+            })
+            .map(async (bulkInfo) => {
+              let response = await fetch(`${coldStorageBaseAddr}/${bulkInfo.filename}`);
+              if (response.ok) {
+                let aBulk = await response.arrayBuffer();
+                if (aBulk.byteLength == bulkInfo.bytes) {
+                  console.log(`🧊[ColdSync] got bulk ${bulkInfo.filename} with ${bulkInfo.tx_count} txs (${bulkInfo.bytes} bytes)`);
+
+                  return new Uint8Array(aBulk);
                 }
-              });
-            
-            let bulksData = (await Promise.all(promises)).filter(data => data.length > 0);
-            
 
-            let result: ParseTxsColdStorageResult = await this.updateStateColdStorage(bulksData, BigInt(actualRangeStart), BigInt(actualRangeEnd));
-            result.decryptedMemos.forEach((aMemo) => {
-              this.history?.saveDecryptedMemo(aMemo, false);
+                throw new InternalError(`Cold storage corrupted (invalid file size: ${aBulk.byteLength})`)
+              } else {
+                throw new InternalError(`Couldn't load cold storage (invalid response code: ${response.status})`)
+              }
             });
+          
+          let bulksData = (await Promise.all(promises)).filter(data => data.length > 0);
+          
 
+          let result: ParseTxsColdStorageResult = await this.updateStateColdStorage(bulksData, BigInt(actualRangeStart), BigInt(actualRangeEnd));
+          result.decryptedMemos.forEach((aMemo) => {
+            this.history?.saveDecryptedMemo(aMemo, false);
+          });
 
-            syncResult.txCount = result.txCnt;
-            syncResult.decryptedLeafs = result.decryptedLeafsCnt;
-            syncResult.firstIndex = actualRangeStart;
-            syncResult.nextIndex = actualRangeEnd;
-            syncResult.totalTime = Date.now() - startTime;
-            
-            const isStateCorrect = await this.verifyState(getPoolRoot);
-            if (!isStateCorrect) {
-              console.warn(`🧊[ColdSync] Merkle tree root at index ${await this.getNextIndex()} mistmatch! Wiping the state...`);
-              await this.clean();  // rollback to 0
-              this.skipColdStorage = true;  // prevent cold storage usage
+          if (this.lastSyncInfo) this.lastSyncInfo.processedTxCount += result.txCnt;
 
-              syncResult.txCount = 0;
-              syncResult.decryptedLeafs = 0;
-              syncResult.firstIndex = 0;
-              syncResult.nextIndex = 0;
-            } else {
-              console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
-              console.log(`🧊[ColdSync] Merkle root after tree update: ${await this.getRoot()} @ ${await this.getNextIndex()}`);
-            }
+          syncResult.txCount = result.txCnt;
+          syncResult.decryptedLeafs = result.decryptedLeafsCnt;
+          syncResult.firstIndex = actualRangeStart;
+          syncResult.nextIndex = actualRangeEnd;
+          syncResult.totalTime = Date.now() - startTime;
+          
+          const isStateCorrect = await this.verifyState(getPoolRoot);
+          if (!isStateCorrect) {
+            console.warn(`🧊[ColdSync] Merkle tree root at index ${await this.getNextIndex()} mistmatch! Wiping the state...`);
+            await this.clean();  // rollback to 0
+            if (this.lastSyncInfo) this.lastSyncInfo.processedTxCount = 0;
+            this.skipColdStorage = true;  // prevent cold storage usage
+
+            syncResult.txCount = 0;
+            syncResult.decryptedLeafs = 0;
+            syncResult.firstIndex = 0;
+            syncResult.nextIndex = 0;
+          } else {
+            console.log(`🧊[ColdSync] ${syncResult.txCount} txs have been loaded in ${syncResult.totalTime / 1000} secs (${syncResult.totalTime / syncResult.txCount} ms/tx)`);
+            console.log(`🧊[ColdSync] Merkle root after tree update: ${await this.getRoot()} @ ${await this.getNextIndex()}`);
           }
-        } catch (err) {
-          console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
         }
+      } catch (err) {
+        console.warn(`🧊[ColdSync] cannot sync with cold storage: ${err}`);
       }
     }
 
