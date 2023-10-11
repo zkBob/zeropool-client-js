@@ -276,7 +276,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         return BigInt(res);
     }
 
-    public async committedForcedExits(poolAddress: string, nullifier: bigint): Promise<bigint> {
+    public async committedForcedExitHash(poolAddress: string, nullifier: bigint): Promise<bigint> {
         const res = await this.contractCallRetry(this.poolContract(), poolAddress, 'committedForcedExits', [nullifier.toString()]);
 
         return BigInt(res);
@@ -302,6 +302,59 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
             amount: 0n,
             data: encodedTx,
         };
+    }
+
+    public async committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined> {
+        const pool = this.poolContract();
+        pool.options.address = poolAddress;
+
+        const commitEventAbi = poolContractABI.find((val) => val.name == 'CommitForcedExit');
+        const executeEventAbi = poolContractABI.find((val) => val.name == 'ForcedExit');
+        const cancelEventAbi = poolContractABI.find((val) => val.name == 'CancelForcedExit');
+
+        if (!commitEventAbi || ! executeEventAbi || !cancelEventAbi) {
+            throw new InternalError('Could not find ABI items for forced exit events');
+        }
+
+        const commitSignature = this.activeWeb3().eth.abi.encodeEventSignature(commitEventAbi);
+        const executeSignature = this.activeWeb3().eth.abi.encodeEventSignature(executeEventAbi);
+        const cancelSignature = this.activeWeb3().eth.abi.encodeEventSignature(cancelEventAbi);
+
+        const associatedEvents = await this.activeWeb3().eth.getPastLogs({
+            address: poolAddress,
+            topics: [
+                [commitSignature, executeSignature, cancelSignature],
+                addHexPrefix(nullifier.toString(16)),
+            ],
+            fromBlock: 0,
+            toBlock: 'latest'
+        });
+
+        let result: CommittedForcedExit | undefined;
+        associatedEvents
+            .sort((e1, e2) => e1.blockNumber - e2.blockNumber)
+            .forEach((e) => {
+                switch (e.topics[0]) {
+                    case commitSignature:
+                        const decoded = this.activeWeb3().eth.abi.decodeLog(commitEventAbi.inputs ?? [], e.data, e.topics.slice(1))
+                        result = {
+                            nullifier: BigInt(decoded.nullifier),
+                            operator: decoded.operator,
+                            to: decoded.to,
+                            amount: BigInt(decoded.amount),
+                            exitStart: Number(decoded.exitStart),
+                            exitEnd: Number(decoded.exitEnd)
+                        };
+                        break;
+
+                    case executeSignature:
+                    case cancelSignature:
+                        result = undefined;
+                        break;
+                }
+            })
+
+        return result;
     }
 
     public async createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {

@@ -36,8 +36,9 @@ export interface NetworkBackend {
     poolLimits(poolAddress: string, address: string | undefined): Promise<any>;
     isSupportForcedExit(poolAddress: string): Promise<boolean>;
     nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint>;
-    committedForcedExits(poolAddress: string, nullifier: bigint): Promise<bigint>;
+    committedForcedExitHash(poolAddress: string, nullifier: bigint): Promise<bigint>;
     createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction>;
+    committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined>;
     createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction>;
     createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction>;
     getTokenSellerContract(poolAddress: string): Promise<string>;

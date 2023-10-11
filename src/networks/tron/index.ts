@@ -298,7 +298,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return BigInt(res);
     }
 
-    public async committedForcedExits(poolAddress: string, nullifier: bigint): Promise<bigint> {
+    public async committedForcedExitHash(poolAddress: string, nullifier: bigint): Promise<bigint> {
         const pool = await this.getPoolContract(poolAddress);
         const res = await this.contractCallRetry(pool, 'committedForcedExits', [nullifier.toString()]);
 
@@ -336,6 +336,10 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             data: txData.slice(8),  // skip selector from the calldata
             selector,
         };
+    }
+
+    public async committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined> {
+        throw new InternalError('unimplemented');
     }
 
     public async createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {

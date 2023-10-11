@@ -60,7 +60,7 @@ export class ForcedExitProcessor {
         const nullifier = await this.getCurrentNullifier();
         const nullifierValue = await this.network.nullifierValue(this.poolAddress, BigInt(nullifier));
         if (nullifierValue == 0n) {
-          const commitedForcedExit = await this.network.committedForcedExits(this.poolAddress, BigInt(nullifier));
+          const commitedForcedExit = await this.network.committedForcedExitHash(this.poolAddress, BigInt(nullifier));
           if (commitedForcedExit != 0n) {
             // TODO: check is forced exit canceled
             return ForcedExitState.Commited;
@@ -83,9 +83,7 @@ export class ForcedExitProcessor {
     public async getActiveForcedExit(): Promise<CommittedForcedExit | undefined> {
       const  curState = await this.forcedExitState();
       if (curState == ForcedExitState.Commited) {
-        // TODO: scan through the events to fill this object
-
-        throw new InternalError('unimplemented')
+        return this.network.committedForcedExit(this.poolAddress, BigInt(await this.getCurrentNullifier()))
       }
 
       return undefined;
