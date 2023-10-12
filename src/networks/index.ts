@@ -11,6 +11,12 @@ export interface PreparedTransaction {
     selector?: string;
 }
 
+export enum L1TxState {
+    NotFound,
+    Pending,
+    MinedSuccess,
+    MinedFailed,
+}
 
 export interface NetworkBackend {
     // Backend Maintenance
@@ -73,6 +79,7 @@ export interface NetworkBackend {
     getTxDetails(index: number, poolTxHash: string, state: ZkBobState): Promise<PoolTxDetails | null>;
     calldataBaseLength(): number;
     estimateCalldataLength(txType: TxType, notesCnt: number, extraDataLen: number): number;
+    getTransactionState(txHash: string): Promise<L1TxState>;
 
     // syncing with external providers
     getBlockNumber(): Promise<number>;

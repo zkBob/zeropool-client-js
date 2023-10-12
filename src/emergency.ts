@@ -1,200 +1,271 @@
 import { Account, IWithdrawData, SnarkProof } from "libzkbob-rs-wasm-web";
 import { Pool } from "./config";
-import { NetworkBackend, PreparedTransaction } from "./networks";
+import { L1TxState, NetworkBackend, PreparedTransaction } from "./networks";
 import { ZkBobState, ZERO_OPTIMISTIC_STATE } from "./state";
 import { ZkBobSubgraph } from "./subgraph";
 import { InternalError } from "./errors";
 import { keccak256 } from "web3-utils";
 import { addHexPrefix, bufToHex } from "./utils";
 
+const WAIT_TX_TIMEOUT = 60;
+
 export enum ForcedExitState {
-    NotStarted = 0,
-    Commited,
-    Completed,
-    Canceled,
-  }
+  NotStarted = 0,
+  CommittedWaitingSlot,
+  CommittedReady,
+  Completed,
+  Canceled,
+  Outdated,
+}
 
 export interface ForcedExit {
-    nullifier: bigint;
-    operator: string;
-    to: string;
-    amount: bigint;
+  nullifier: bigint;
+  operator: string;
+  to: string;
+  amount: bigint;
 }
 
 export interface ForcedExitRequest extends ForcedExit {
-    index: number;
-    out_commit: bigint;
-    tx_proof: SnarkProof;
+  index: number;
+  out_commit: bigint;
+  tx_proof: SnarkProof;
 }
 
 export interface CommittedForcedExit extends ForcedExit {
-    exitStart: number;
-    exitEnd: number;
+  exitStart: number;
+  exitEnd: number;
+  txHash: string;
+}
+
+export interface FinalizedForcedExit extends ForcedExit {
+  cancelled: boolean; // false for forced exit, true for forced exit cancellation
+  txHash: string;
 }
 
 
 export class ForcedExitProcessor {
-    protected network: NetworkBackend;
-    protected subgraph?: ZkBobSubgraph;
-    protected state: ZkBobState;
+  protected network: NetworkBackend;
+  protected subgraph?: ZkBobSubgraph;
+  protected state: ZkBobState;
 
-    protected tokenAddress: string;
-    protected poolAddress: string;
+  protected tokenAddress: string;
+  protected poolAddress: string;
 
-    
-    constructor(pool: Pool, network: NetworkBackend, state: ZkBobState, subgraph?: ZkBobSubgraph) {
-        this.network = network;
-        this.subgraph = subgraph;
-        this.state = state;
-        this.tokenAddress = pool.tokenAddress;
-        this.poolAddress = pool.poolAddress;
-    }
+  
+  constructor(pool: Pool, network: NetworkBackend, state: ZkBobState, subgraph?: ZkBobSubgraph) {
+      this.network = network;
+      this.subgraph = subgraph;
+      this.state = state;
+      this.tokenAddress = pool.tokenAddress;
+      this.poolAddress = pool.poolAddress;
+  }
 
-    public async isForcedExitSupported(): Promise<boolean> {
-        return this.network.isSupportForcedExit(this.poolAddress);
-    }
+  public async isForcedExitSupported(): Promise<boolean> {
+      return this.network.isSupportForcedExit(this.poolAddress);
+  }
 
-    // state MUST be synced before at the top level
-    public async forcedExitState(): Promise<ForcedExitState> {
-        
-        const nullifier = await this.getCurrentNullifier();
-        const nullifierValue = await this.network.nullifierValue(this.poolAddress, BigInt(nullifier));
-        if (nullifierValue == 0n) {
-          const commitedForcedExit = await this.network.committedForcedExitHash(this.poolAddress, BigInt(nullifier));
-          if (commitedForcedExit != 0n) {
-            // TODO: check is forced exit canceled
-            return ForcedExitState.Commited;
+  // state MUST be synced before at the top level
+  public async forcedExitState(): Promise<ForcedExitState> {
+      
+      const nullifier = await this.getCurrentNullifier();
+      const nullifierValue = await this.network.nullifierValue(this.poolAddress, BigInt(nullifier));
+      if (nullifierValue == 0n) {
+        // the account is alive yet: check is forced exit procedure started
+        const commitedForcedExit = await this.network.committedForcedExitHash(this.poolAddress, BigInt(nullifier));
+        if (commitedForcedExit != 0n) {
+          // the forced exit record exist on the pool for the current nullifier
+          // check is it just committed or already cancelled
+          const committed = await this.getActiveForcedExit();
+          if (committed) {
+            const curTs = Date.now() / 1000;
+            if (curTs < committed.exitStart) {
+              return ForcedExitState.CommittedWaitingSlot;
+            } else if (curTs > committed.exitEnd) {
+              return ForcedExitState.Outdated;
+            }
+            return ForcedExitState.CommittedReady;
+          } else {
+            return ForcedExitState.Canceled;
           }
-    
-          return ForcedExitState.NotStarted;
-        } else {
-          // nullifier value doesn't equal zero: analyze it
-          const deadSignature = BigInt('0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead0000000000000000');
-          const deadSignMask  = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000');
-    
-          if ((nullifierValue & deadSignMask) == deadSignature) {
-            return ForcedExitState.Completed;
-          }
-    
-          throw new InternalError('The nullifier is not last for that account');
         }
-    }
 
-    public async getActiveForcedExit(): Promise<CommittedForcedExit | undefined> {
-      const  curState = await this.forcedExitState();
-      if (curState == ForcedExitState.Commited) {
-        return this.network.committedForcedExit(this.poolAddress, BigInt(await this.getCurrentNullifier()))
+        return ForcedExitState.NotStarted;
+      } else {
+        // nullifier value doesn't equal zero: analyze it
+        const deadSignature = BigInt('0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead0000000000000000');
+        const deadSignMask  = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000');
+  
+        if ((nullifierValue & deadSignMask) == deadSignature) {
+          return ForcedExitState.Completed;
+        }
+  
+        throw new InternalError('The nullifier is not last for that account');
+      }
+  }
+
+  public async getActiveForcedExit(): Promise<CommittedForcedExit | undefined> {
+    return this.network.committedForcedExit(this.poolAddress, BigInt(await this.getCurrentNullifier()))
+  }
+
+  public async requestForcedExit(
+      executerAddress: string, // who will send emergency exit execute transaction
+      toAddress: string,     // which address should receive funds
+      sendTxCallback: (tx: PreparedTransaction) => Promise<string>,  // callback to send transaction 
+      proofTxCallback: (pub: any, sec: any) => Promise<any>,
+    ): Promise<CommittedForcedExit> {
+      // getting available amount to emergency withdraw
+      const accountBalance = await this.state.accountBalance();
+      const notes = await this.state.usableNotes();
+      const txNotesSum: bigint = notes.slice(0, 3).reduce((acc, cur) => acc + BigInt(cur[1].b), 0n);
+      const requestedAmount = accountBalance + txNotesSum;
+
+      console.log(`Latest nullifier: ${await this.getCurrentNullifier()}`);
+
+      // create regular withdraw tx
+      const oneTx: IWithdrawData = {
+          amount: requestedAmount.toString(),
+          fee: '0',
+          to: this.network.addressToBytes(toAddress),
+          native_amount: '0',
+          energy_amount: '0',
+      };
+      const oneTxData = await this.state.createWithdrawalOptimistic(oneTx, ZERO_OPTIMISTIC_STATE);
+
+      // customize memo field in the public part (pool contract know nothing about real memo)
+      const customMemo = addHexPrefix(bufToHex(oneTx.to));
+      const customMemoHash = BigInt(keccak256(customMemo));
+      const R = BigInt('21888242871839275222246405745257275088548364400416034343698204186575808495617');
+      oneTxData.public.memo = (customMemoHash % R).toString(10);
+
+      // calculate transaction proof
+      const txProof = await proofTxCallback(oneTxData.public, oneTxData.secret);
+
+      // create an internal object to request
+      const request: ForcedExitRequest = {
+          nullifier: oneTxData.public.nullifier,
+          operator: executerAddress,
+          to: toAddress,
+          amount: requestedAmount,
+          index: oneTxData.parsed_delta.index,
+          out_commit: oneTxData.public.out_commit,
+          tx_proof: txProof.proof,
       }
 
-      return undefined;
-    }
+      // getting raw transaction
+      const commitTransaction = await this.network.createCommitForcedExitTx(this.poolAddress, request);
+      // ...and bringing it back to the application to send it
+      const txHash = await sendTxCallback(commitTransaction);
 
-    public async requestForcedExit(
-        executerAddress: string, // who will send emergency exit execute transaction
-        toAddress: string,     // which address should receive funds
-        sendTxCallback: (tx: PreparedTransaction) => Promise<string>,  // callback to send transaction 
-        proofTxCallback: (pub: any, sec: any) => Promise<any>,
-      ): Promise<CommittedForcedExit> {
-        // getting available amount to emergency withdraw
-        const accountBalance = await this.state.accountBalance();
-        const notes = await this.state.usableNotes();
-        const txNotesSum: bigint = notes.slice(0, 3).reduce((acc, cur) => acc + BigInt(cur[1].b), 0n);
-        const requestedAmount = accountBalance + txNotesSum;
+      // Assume tx was sent, try to figure out the result and retrieve a commited forced exit
+      const waitingTimeout = Date.now() + WAIT_TX_TIMEOUT * 1000;
+      do {
+        const status = await this.network.getTransactionState(txHash);
+        switch (status) {
+          case L1TxState.MinedSuccess:
+            const committed = await this.getActiveForcedExit();
+            if (committed) {
+              return committed;
+            }
+          case L1TxState.MinedFailed:
+            const errReason = await this.network.getTxRevertReason(txHash);
+            throw new InternalError(`Forced exit transaction was reverted with message: ${errReason ?? '<UNKNOWN>'}`);
 
-        console.log(`Latest nullifier: ${await this.getCurrentNullifier()}`);
-
-        // create regular withdraw tx
-        const oneTx: IWithdrawData = {
-            amount: requestedAmount.toString(),
-            fee: '0',
-            to: this.network.addressToBytes(toAddress),
-            native_amount: '0',
-            energy_amount: '0',
-        };
-        const oneTxData = await this.state.createWithdrawalOptimistic(oneTx, ZERO_OPTIMISTIC_STATE);
-
-        // customize memo field in the public part (pool contract know nothing about real memo)
-        const customMemo = addHexPrefix(bufToHex(oneTx.to));
-        const customMemoHash = BigInt(keccak256(customMemo));
-        const R = BigInt('21888242871839275222246405745257275088548364400416034343698204186575808495617');
-        oneTxData.public.memo = (customMemoHash % R).toString(10);
-
-        // calculate transaction proof
-        const txProof = await proofTxCallback(oneTxData.public, oneTxData.secret);
-
-        // create an internal object to request
-        const request: ForcedExitRequest = {
-            nullifier: oneTxData.public.nullifier,
-            operator: executerAddress,
-            to: toAddress,
-            amount: requestedAmount,
-            index: oneTxData.parsed_delta.index,
-            out_commit: oneTxData.public.out_commit,
-            tx_proof: txProof.proof,
+          default: break;
         }
+      } while (Date.now() < waitingTimeout);
 
+      throw new InternalError('Unable to find forced exit commit transaction on the pool contract');
+  }
+
+  public async executeForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
+    const state = await this.forcedExitState();
+    if (state == ForcedExitState.CommittedReady) {
+      const committed = await this.getActiveForcedExit();
+      if (committed) {
         // getting raw transaction
-        const commitTransaction = await this.network.createCommitForcedExitTx(this.poolAddress, request);
-        // ...and bringing it back to the application to send it
-        const txHash = await sendTxCallback(commitTransaction);
+        const executeTransaction = await this.network.createExecuteForcedExitTx(this.poolAddress, committed);
+        // ...and bring it back to the application to send it
+        const txHash = await sendTxCallback(executeTransaction);
 
         // Assume tx was sent, try to figure out the result and retrieve a commited forced exit
-        // TODO
-        const result: CommittedForcedExit = {
-            nullifier: request.nullifier,
-            operator: request.operator,
-            to: request.to,
-            amount: request.amount,
-            exitStart: 0,
-            exitEnd: 0,
-        }
+        const waitingTimeout = Date.now() + WAIT_TX_TIMEOUT * 1000;
+        do {
+          const status = await this.network.getTransactionState(txHash);
+          switch (status) {
+            case L1TxState.MinedSuccess:
+              return true;
+            case L1TxState.MinedFailed:
+              const errReason = await this.network.getTxRevertReason(txHash);
+              throw new InternalError(`Forced exit transaction was reverted with message: ${errReason ?? '<UNKNOWN>'}`);
 
-        return result; 
-    }
-
-    public async executeForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
-        // TODO: get an actual committed forced exit object
-        const committed: CommittedForcedExit = {
-            nullifier: 0n,
-            operator: '0x0000000000000000000000000000000000000000',
-            to: '0x0000000000000000000000000000000000000000',
-            amount: 0n,
-            exitStart: 0,
-            exitEnd: 0,
-        }
-
-        // getting raw transaction
-        const commitTransaction = await this.network.createExecuteForcedExitTx(this.poolAddress, committed);
-        // ...and bring it back to the application to send it
-        const txHash = await sendTxCallback(commitTransaction);
-
-        throw new InternalError('unimplemented')
-    }
-
-    public async cancelForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
-        throw new InternalError('unimplemented')
-    }
-
-
-    // TODO: implement getting the last account in the wasm lib
-    private async getCurrentNullifier(): Promise<string> {
-        
-        const rawState = await this.state.rawState();
-    
-        let maxAccIdx = -1;
-        let lastAccount: Account | undefined;
-        for (const [index, tx] of rawState.txs) {
-          if (tx['Account'] !== undefined && index > maxAccIdx) {
-            maxAccIdx = index;
-            lastAccount = tx['Account'];
+            default: break;
           }
-        }
-    
-        if (maxAccIdx == -1 || lastAccount === undefined) {
-          // TODO: get zero account in that case
-          throw new InternalError(`The account has no own transactions`);
-        }
-    
-        return this.state.calcNullifier(maxAccIdx, lastAccount);
+        } while (Date.now() < waitingTimeout);
+
+        throw new InternalError('Unable to find forced exit execute transaction on the pool contract');
       }
+
+      throw new InternalError('Cannot find active forced exit to execute (need to commit first)')
+    } else {
+      throw new InternalError('Invallid forced exit state to execute forced exit');
+    }
+  }
+
+  public async cancelForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
+    const state = await this.forcedExitState();
+    if (state == ForcedExitState.Outdated) {
+      const committed = await this.getActiveForcedExit();
+      if (committed) {
+        // getting raw transaction
+        const cancelTransaction = await this.network.createCancelForcedExitTx(this.poolAddress, committed);
+        // ...and bring it back to the application to send it
+        const txHash = await sendTxCallback(cancelTransaction);
+
+        // Assume tx was sent, try to figure out the result and retrieve a commited forced exit
+        const waitingTimeout = Date.now() + WAIT_TX_TIMEOUT * 1000;
+        do {
+          const status = await this.network.getTransactionState(txHash);
+          switch (status) {
+            case L1TxState.MinedSuccess:
+              return true;
+            case L1TxState.MinedFailed:
+              const errReason = await this.network.getTxRevertReason(txHash);
+              throw new InternalError(`Forced exit cancel transaction was reverted with message: ${errReason ?? '<UNKNOWN>'}`);
+
+            default: break;
+          }
+        } while (Date.now() < waitingTimeout);
+
+        throw new InternalError('Unable to find forced exit cancel transaction on the pool contract');
+      }
+
+      throw new InternalError('Cannot find active forced exit to execute (need to commit first)')
+    } else {
+      throw new InternalError('Invallid forced exit state to cancel forced exit');
+    }
+  }
+
+
+  // TODO: implement getting the last account in the wasm lib
+  private async getCurrentNullifier(): Promise<string> {
+      
+    const rawState = await this.state.rawState();
+
+    let maxAccIdx = -1;
+    let lastAccount: Account | undefined;
+    for (const [index, tx] of rawState.txs) {
+      if (tx['Account'] !== undefined && index > maxAccIdx) {
+        maxAccIdx = index;
+        lastAccount = tx['Account'];
+      }
+    }
+
+    if (maxAccIdx == -1 || lastAccount === undefined) {
+      // TODO: get zero account in that case
+      throw new InternalError(`The account has no own transactions`);
+    }
+
+    return this.state.calcNullifier(maxAccIdx, lastAccount);
+  }
+    
 }

@@ -1,7 +1,7 @@
 import Web3 from 'web3';
 import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
-import { NetworkBackend, PreparedTransaction} from '..';
+import { NetworkBackend, PreparedTransaction, L1TxState} from '..';
 import { InternalError } from '../../errors';
 import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
@@ -16,6 +16,8 @@ import { Transaction, TransactionReceipt } from 'web3-core';
 import { RpcManagerDelegate, MultiRpcManager } from '../rpcman';
 import { ZkBobState } from '../../state';
 import { CommittedForcedExit, ForcedExit, ForcedExitRequest } from '../../emergency';
+import { stat } from 'fs/promises';
+import { TxBaseFields } from 'libzkbob-rs-wasm-web';
 
 const RETRY_COUNT = 10;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -343,7 +345,8 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                             to: decoded.to,
                             amount: BigInt(decoded.amount),
                             exitStart: Number(decoded.exitStart),
-                            exitEnd: Number(decoded.exitEnd)
+                            exitEnd: Number(decoded.exitEnd),
+                            txHash: e.transactionHash,
                         };
                         break;
 
@@ -793,6 +796,31 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public estimateCalldataLength(txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
         return estimateEvmCalldataLength(txType, notesCnt, extraDataLen)
+    }
+
+    public async getTransactionState(txHash: string): Promise<L1TxState> {
+        try {
+            const [tx, receipt] = await Promise.all([
+                this.activeWeb3().eth.getTransaction(txHash),
+                this.activeWeb3().eth.getTransactionReceipt(txHash),
+            ]);
+
+            if (receipt) {
+                if (receipt.status == true) {
+                    return L1TxState.MinedSuccess;
+                } else {
+                    return L1TxState.MinedFailed;
+                }
+            }
+
+            if (tx) {
+                return L1TxState.Pending;
+            }
+        } catch(err) {
+            console.warn(`[EvmNetwork] error on checking tx ${txHash}: ${err.message}`);
+        }
+
+        return L1TxState.NotFound;
     }
 
     // ----------------------=========< Syncing >=========----------------------

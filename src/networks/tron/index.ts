@@ -1,4 +1,4 @@
-import { NetworkBackend, PreparedTransaction } from '..';
+import { L1TxState, NetworkBackend, PreparedTransaction } from '..';
 import { InternalError, TxType } from '../../index';
 import { DDBatchTxDetails, DirectDeposit, DirectDepositState, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from '../../tx';
 import tokenAbi from './abi/usdt-abi.json';
@@ -753,6 +753,16 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
 
     public estimateCalldataLength(txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
         return estimateEvmCalldataLength(txType, notesCnt, extraDataLen)
+    }
+
+    public async getTransactionState(txHash: string): Promise<L1TxState> {
+        try {
+            // TODO: implement
+        } catch(err) {
+            console.warn(`[EvmNetwork] error on checking tx ${txHash}: ${err.message}`);
+        }
+
+        return L1TxState.NotFound;
     }
 
 
