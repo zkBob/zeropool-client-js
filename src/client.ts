@@ -19,7 +19,7 @@ import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
 import { PERMIT2_CONTRACT } from './signers/permit2-signer';
 import { DirectDepositProcessor, DirectDepositType } from './dd';
-import { ForcedExitProcessor, ForcedExitState, ForcedExit, CommittedForcedExit } from './emergency';
+import { ForcedExitProcessor, ForcedExitState, ForcedExit, CommittedForcedExit, FinalizedForcedExit } from './emergency';
 
 import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks';
@@ -1751,17 +1751,26 @@ export class ZkBobClient extends ZkBobProvider {
     return proccessor;
   }
 
+  protected async updateStateWithFallback(): Promise<boolean> {
+    return this.updateState().catch((err) => { // try to sync state (we must have the actual last nullifier)
+      console.warn(`Unable to sync state (${err.message}). The last nullifier may be invalid`);
+      // TODO: sync with the pool contract directly
+      return false;
+    });
+  }
+
   public async isForcedExitSupported(): Promise<boolean> {
     return await this.feProcessor().isForcedExitSupported();
   }
 
   public async forcedExitState(): Promise<ForcedExitState> {
-    await this.updateState().catch((err) => { // try to sync state (we must have the actual last nullifier)
-      console.warn(`Unable to sync state (${err.message}). The last nullifier may be invalid`);
-      // TODO: sync with the pool contract directly
-    });
-
+    await this.updateStateWithFallback();
     return this.feProcessor().forcedExitState();
+  }
+
+  public async activeForcedExit(): Promise<CommittedForcedExit | undefined> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().getActiveForcedExit();
   }
 
   public async requestForcedExit(
@@ -1769,11 +1778,7 @@ export class ZkBobClient extends ZkBobProvider {
     toAddress: string,     // which address should receive funds
     sendTxCallback: (tx: PreparedTransaction) => Promise<string>  // callback to send transaction 
   ): Promise<CommittedForcedExit> {
-    await this.updateState().catch((err) => { // try to sync state (we must have the actual last nullifier)
-      console.warn(`Unable to sync state (${err.message}). The last nullifier may be invalid`);
-      // TODO: sync with the pool contract directly
-    });
-
+    await this.updateStateWithFallback();
     return this.feProcessor().requestForcedExit(
       executerAddress,
       toAddress,
@@ -1782,15 +1787,13 @@ export class ZkBobClient extends ZkBobProvider {
     );
   }
 
-  public async activeForcedExit(): Promise<CommittedForcedExit | undefined> {
-    return this.feProcessor().getActiveForcedExit();
-  }
-
-  public async executeForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
+  public async executeForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<FinalizedForcedExit> {
+    await this.updateStateWithFallback();
     return this.feProcessor().executeForcedExit(sendTxCallback);
   }
 
-  public async cancelForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
+  public async cancelForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<FinalizedForcedExit> {
+    await this.updateStateWithFallback();
     return this.feProcessor().cancelForcedExit(sendTxCallback);
   }
 }

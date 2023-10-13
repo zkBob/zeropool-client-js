@@ -33,8 +33,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     private tokenDecimals = new Map<string, number>();  // tokenAddress -> decimals
     private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolAddress -> ddQueueAddress
-    private supportsForcedExit = new Map<string, boolean>();    // poolContractAddress -> isSupportsNonceMethod
-    private supportsNonces = new Map<string, boolean>();        // tokenAddress -> isSupportsNonceMethod
+    private supportedMethods = new Map<string, boolean>(); // contractAddress+method => isSupport
 
 
     // ------------------------=========< Lifecycle >=========------------------------
@@ -127,6 +126,25 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             RETRY_COUNT,
         );
     }
+
+    private async isMethodSupportedByContract(contractAddress: string, methodName: string): Promise<boolean> {
+        const mapKey = contractAddress + methodName;
+        let isSupport = this.supportedMethods.get(mapKey);
+        if (isSupport === undefined) {
+            const contract = await this.commonRpcRetry(() => {
+                return this.tronWeb.trx.getContract(contractAddress);
+            }, 'Unable to retrieve smart contract object', RETRY_COUNT);
+            const methods = contract.abi.entrys;
+            if (Array.isArray(methods)) {
+                isSupport = methods.find((val) => val.name == methodName) !== undefined;
+                this.supportedMethods.set(mapKey, isSupport);
+            } else {
+                isSupport = false;
+            }
+        }
+
+        return isSupport;
+    }
     
     // -----------------=========< Token-Related Routiness >=========-----------------
     // | Getting balance, allowance, nonce etc                                       |
@@ -207,21 +225,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public async isSupportNonce(tokenAddress: string): Promise<boolean> {
-        let isSupport = this.supportsNonces.get(tokenAddress);
-        if (isSupport === undefined) {
-            const contract = await this.commonRpcRetry(() => {
-                return this.activeTronweb().trx.getContract(tokenAddress);
-            }, 'Unable to retrieve smart contract object', RETRY_COUNT);
-            const methods = contract.abi.entrys;
-            if (Array.isArray(methods)) {
-                isSupport = methods.find((val) => val.name == 'nonces') !== undefined;
-                this.supportsNonces.set(tokenAddress, isSupport);
-            } else {
-                isSupport = false;
-            }
-        }
-
-        return isSupport;
+        return this.isMethodSupportedByContract(tokenAddress, 'nonces');
     }
 
 
@@ -274,21 +278,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public async isSupportForcedExit(poolAddress: string): Promise<boolean> {
-        let isSupport = this.supportsForcedExit.get(poolAddress);
-        if (isSupport === undefined) {
-            const contract = await this.commonRpcRetry(() => {
-                return this.activeTronweb().trx.getContract(poolAddress);
-            }, 'Unable to retrieve smart contract object', RETRY_COUNT);
-            const methods = contract.abi.entrys;
-            if (Array.isArray(methods)) {
-                isSupport = methods.find((val) => val.name == 'committedForcedExits') !== undefined;
-                this.supportsForcedExit.set(poolAddress, isSupport);
-            } else {
-                isSupport = false;
-            }
-        }
-
-        return isSupport;
+        return this.isMethodSupportedByContract(poolAddress, 'committedForcedExits');
     }
 
     public async nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint> {

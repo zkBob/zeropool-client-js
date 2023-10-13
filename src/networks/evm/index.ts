@@ -37,8 +37,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     // Local cache
     private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
-    private supportsForcedExit = new Map<string, boolean>();    // poolContractAddress -> isSupportsNonceMethod
-    private supportsNonces = new Map<string, boolean>();        // tokenAddress -> isSupportsNonceMethod
+    private supportedMethods = new Map<string, boolean>();      // (contractAddress + methodName) => isSupported
 
     // ------------------------=========< Lifecycle >=========------------------------
     // | Init, enabling and disabling backend                                        |
@@ -118,6 +117,30 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         );
     }
 
+    private async isMethodSupportedByContract(
+        contract: Contract,
+        address: string,
+        methodName: string,
+        testParams: any[] = [],
+    ): Promise<boolean> {
+        const mapKey = address + methodName;
+        let isSupport = this.supportedMethods.get(mapKey);
+        if (isSupport === undefined) {
+            try {
+                contract.options.address = address;
+                await contract.methods[methodName](...testParams).call()
+                isSupport = true;
+            } catch (err) {
+                console.warn(`The token seems doesn't support \'${methodName}\' method`);
+                isSupport = false;
+            }
+
+            this.supportedMethods.set(mapKey, isSupport);
+        };
+
+        return isSupport
+    }
+
     // -----------------=========< Token-Related Routiness >=========-----------------
     // | Getting balance, allowance, nonce etc                                       |
     // -------------------------------------------------------------------------------
@@ -195,22 +218,8 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async isSupportNonce(tokenAddress: string): Promise<boolean> {
-        let isSupport = this.supportsNonces.get(tokenAddress);
-        if (isSupport === undefined) {
-            try {
-                const tokenContract = this.tokenContract();
-                tokenContract.options.address = tokenAddress;
-                await tokenContract.methods['nonces'](ZERO_ADDRESS).call()
-                isSupport = true;
-            } catch (err) {
-                console.warn(`The token seems doesn't support nonces method`);
-                isSupport = false;
-            }
-
-            this.supportsNonces.set(tokenAddress, isSupport);
-        };
-
-        return isSupport
+        const tokenContract = this.tokenContract();
+        return this.isMethodSupportedByContract(tokenContract, tokenAddress, 'nonces', [ZERO_ADDRESS]);
     }
 
 
@@ -254,22 +263,8 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async isSupportForcedExit(poolAddress: string): Promise<boolean> {
-        let isSupport = this.supportsForcedExit.get(poolAddress);
-        if (isSupport === undefined) {
-            try {
-                const poolContract = this.poolContract();
-                poolContract.options.address = poolAddress;
-                await poolContract.methods['committedForcedExits']('0').call()
-                isSupport = true;
-            } catch (err) {
-                console.warn(`The pool seems doesn't support emergency exit`);
-                isSupport = false;
-            }
-
-            this.supportsForcedExit.set(poolAddress, isSupport);
-        };
-
-        return isSupport;
+        const poolContract = this.poolContract();
+        return this.isMethodSupportedByContract(poolContract, poolAddress, 'committedForcedExits', ['0']);
     }
 
     public async nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint> {

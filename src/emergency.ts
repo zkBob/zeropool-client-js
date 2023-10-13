@@ -38,7 +38,7 @@ export interface CommittedForcedExit extends ForcedExit {
 }
 
 export interface FinalizedForcedExit extends ForcedExit {
-  cancelled: boolean; // false for forced exit, true for forced exit cancellation
+  cancelled: boolean; // false for successful forced exit, true for canceled one
   txHash: string;
 }
 
@@ -66,7 +66,6 @@ export class ForcedExitProcessor {
 
   // state MUST be synced before at the top level
   public async forcedExitState(): Promise<ForcedExitState> {
-      
       const nullifier = await this.getCurrentNullifier();
       const nullifierValue = await this.network.nullifierValue(this.poolAddress, BigInt(nullifier));
       if (nullifierValue == 0n) {
@@ -177,74 +176,69 @@ export class ForcedExitProcessor {
       throw new InternalError('Unable to find forced exit commit transaction on the pool contract');
   }
 
-  public async executeForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
+  public async executeForcedExit(
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>
+  ): Promise<FinalizedForcedExit> {
     const state = await this.forcedExitState();
     if (state == ForcedExitState.CommittedReady) {
-      const committed = await this.getActiveForcedExit();
-      if (committed) {
-        // getting raw transaction
-        const executeTransaction = await this.network.createExecuteForcedExitTx(this.poolAddress, committed);
-        // ...and bring it back to the application to send it
-        const txHash = await sendTxCallback(executeTransaction);
-
-        // Assume tx was sent, try to figure out the result and retrieve a commited forced exit
-        const waitingTimeout = Date.now() + WAIT_TX_TIMEOUT * 1000;
-        do {
-          const status = await this.network.getTransactionState(txHash);
-          switch (status) {
-            case L1TxState.MinedSuccess:
-              return true;
-            case L1TxState.MinedFailed:
-              const errReason = await this.network.getTxRevertReason(txHash);
-              throw new InternalError(`Forced exit transaction was reverted with message: ${errReason ?? '<UNKNOWN>'}`);
-
-            default: break;
-          }
-        } while (Date.now() < waitingTimeout);
-
-        throw new InternalError('Unable to find forced exit execute transaction on the pool contract');
-      }
-
-      throw new InternalError('Cannot find active forced exit to execute (need to commit first)')
+      return this.executeActiveForcedExit(false, sendTxCallback);
     } else {
       throw new InternalError('Invallid forced exit state to execute forced exit');
     }
   }
 
-  public async cancelForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<boolean> {
+  public async cancelForcedExit(
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>
+  ): Promise<FinalizedForcedExit> {
     const state = await this.forcedExitState();
     if (state == ForcedExitState.Outdated) {
-      const committed = await this.getActiveForcedExit();
-      if (committed) {
-        // getting raw transaction
-        const cancelTransaction = await this.network.createCancelForcedExitTx(this.poolAddress, committed);
-        // ...and bring it back to the application to send it
-        const txHash = await sendTxCallback(cancelTransaction);
-
-        // Assume tx was sent, try to figure out the result and retrieve a commited forced exit
-        const waitingTimeout = Date.now() + WAIT_TX_TIMEOUT * 1000;
-        do {
-          const status = await this.network.getTransactionState(txHash);
-          switch (status) {
-            case L1TxState.MinedSuccess:
-              return true;
-            case L1TxState.MinedFailed:
-              const errReason = await this.network.getTxRevertReason(txHash);
-              throw new InternalError(`Forced exit cancel transaction was reverted with message: ${errReason ?? '<UNKNOWN>'}`);
-
-            default: break;
-          }
-        } while (Date.now() < waitingTimeout);
-
-        throw new InternalError('Unable to find forced exit cancel transaction on the pool contract');
-      }
-
-      throw new InternalError('Cannot find active forced exit to execute (need to commit first)')
+      return this.executeActiveForcedExit(true, sendTxCallback);
     } else {
       throw new InternalError('Invallid forced exit state to cancel forced exit');
     }
   }
 
+  private async executeActiveForcedExit(
+    cancel: boolean,
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>
+  ): Promise<FinalizedForcedExit> {
+    const committed = await this.getActiveForcedExit();
+    if (committed) {
+      // getting raw transaction
+      const transaction = cancel ? 
+        await this.network.createCancelForcedExitTx(this.poolAddress, committed) :
+        await this.network.createExecuteForcedExitTx(this.poolAddress, committed);
+      // ...and bring it back to the application to send it
+      const txHash = await sendTxCallback(transaction);
+
+      // Assume tx was sent, try to figure out the result and retrieve a commited forced exit
+      const waitingTimeout = Date.now() + WAIT_TX_TIMEOUT * 1000;
+      do {
+        const status = await this.network.getTransactionState(txHash);
+        switch (status) {
+          case L1TxState.MinedSuccess:
+            return {
+              nullifier: committed.nullifier,
+              operator: committed.operator,
+              to: committed.to,
+              amount: committed.amount,
+              cancelled: cancel,
+              txHash: txHash,
+            };
+
+          case L1TxState.MinedFailed:
+            const errReason = await this.network.getTxRevertReason(txHash);
+            throw new InternalError(`Forced exit ${cancel ? 'cancel' : 'execute'} transaction was reverted with message: ${errReason ?? '<UNKNOWN>'}`);
+
+          default: break;
+        }
+      } while (Date.now() < waitingTimeout);
+
+      throw new InternalError(`Unable to find forced exit ${cancel ? 'cancel' : 'execute'} transaction on the pool contract`);
+    }
+
+    throw new InternalError(`Cannot find active forced exit to ${cancel ? 'cancel' : 'execute'} (need to commit first)`)
+  }
 
   // TODO: implement getting the last account in the wasm lib
   private async getCurrentNullifier(): Promise<string> {
