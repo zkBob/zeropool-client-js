@@ -896,4 +896,8 @@ export class ZkBobState {
   public async decryptNote(symkey: Uint8Array, encrypted: Uint8Array): Promise<Note> {
     return this.worker.decryptNote(symkey, encrypted);
   }
+
+  public async accountNullifier(): Promise<string> {
+    return this.worker.accountNullifier(this.stateId);
+  }
 }

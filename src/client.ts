@@ -1759,10 +1759,18 @@ export class ZkBobClient extends ZkBobProvider {
     });
   }
 
+  // This routine available regardless forced exit support
+  public async isAccountDead(): Promise<boolean> {
+    await this.updateStateWithFallback();
+    return await this.feProcessor().isAccountDead();
+  }
+
+  // Checking is FE available for the current pool
   public async isForcedExitSupported(): Promise<boolean> {
     return await this.feProcessor().isForcedExitSupported();
   }
 
+  // The following forced exit related routines should called only if forced exit supported
   public async forcedExitState(): Promise<ForcedExitState> {
     await this.updateStateWithFallback();
     return this.feProcessor().forcedExitState();
@@ -1771,6 +1779,11 @@ export class ZkBobClient extends ZkBobProvider {
   public async activeForcedExit(): Promise<CommittedForcedExit | undefined> {
     await this.updateStateWithFallback();
     return this.feProcessor().getActiveForcedExit();
+  }
+
+  public async availableFundsToForcedExit(): Promise<bigint> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().availableFundsToForcedExit();
   }
 
   public async requestForcedExit(

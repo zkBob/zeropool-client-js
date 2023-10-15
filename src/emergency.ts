@@ -8,6 +8,8 @@ import { keccak256 } from "web3-utils";
 import { addHexPrefix, bufToHex } from "./utils";
 
 const WAIT_TX_TIMEOUT = 60;
+const DEAD_SIGNATURE = BigInt('0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead0000000000000000');
+const DEAD_SIG_MASK  = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000');
 
 export enum ForcedExitState {
   NotStarted = 0,
@@ -53,57 +55,70 @@ export class ForcedExitProcessor {
 
   
   constructor(pool: Pool, network: NetworkBackend, state: ZkBobState, subgraph?: ZkBobSubgraph) {
-      this.network = network;
-      this.subgraph = subgraph;
-      this.state = state;
-      this.tokenAddress = pool.tokenAddress;
-      this.poolAddress = pool.poolAddress;
+    this.network = network;
+    this.subgraph = subgraph;
+    this.state = state;
+    this.tokenAddress = pool.tokenAddress;
+    this.poolAddress = pool.poolAddress;
   }
 
   public async isForcedExitSupported(): Promise<boolean> {
-      return this.network.isSupportForcedExit(this.poolAddress);
+    return this.network.isSupportForcedExit(this.poolAddress);
+  }
+
+  // state MUST be synced before at the top level
+  public async isAccountDead(): Promise<boolean> {
+    const nullifier = await this.getCurrentNullifier();
+    const nullifierValue = await this.network.nullifierValue(this.poolAddress, BigInt(nullifier));
+
+    return (nullifierValue & DEAD_SIG_MASK) == DEAD_SIGNATURE
   }
 
   // state MUST be synced before at the top level
   public async forcedExitState(): Promise<ForcedExitState> {
-      const nullifier = await this.getCurrentNullifier();
-      const nullifierValue = await this.network.nullifierValue(this.poolAddress, BigInt(nullifier));
-      if (nullifierValue == 0n) {
-        // the account is alive yet: check is forced exit procedure started
-        const commitedForcedExit = await this.network.committedForcedExitHash(this.poolAddress, BigInt(nullifier));
-        if (commitedForcedExit != 0n) {
-          // the forced exit record exist on the pool for the current nullifier
-          // check is it just committed or already cancelled
-          const committed = await this.getActiveForcedExit();
-          if (committed) {
-            const curTs = Date.now() / 1000;
-            if (curTs < committed.exitStart) {
-              return ForcedExitState.CommittedWaitingSlot;
-            } else if (curTs > committed.exitEnd) {
-              return ForcedExitState.Outdated;
-            }
-            return ForcedExitState.CommittedReady;
-          } else {
-            return ForcedExitState.Canceled;
+    const nullifier = await this.getCurrentNullifier();
+    const nullifierValue = await this.network.nullifierValue(this.poolAddress, BigInt(nullifier));
+    if (nullifierValue == 0n) {
+    // the account is alive yet: check is forced exit procedure started
+    const commitedForcedExit = await this.network.committedForcedExitHash(this.poolAddress, BigInt(nullifier));
+    if (commitedForcedExit != 0n) {
+        // the forced exit record exist on the pool for the current nullifier
+        // check is it just committed or already cancelled
+        const committed = await this.getActiveForcedExit();
+        if (committed) {
+          const curTs = Date.now() / 1000;
+          if (curTs < committed.exitStart) {
+            return ForcedExitState.CommittedWaitingSlot;
+          } else if (curTs > committed.exitEnd) {
+            return ForcedExitState.Outdated;
           }
+          return ForcedExitState.CommittedReady;
+        } else {
+          return ForcedExitState.Canceled;
         }
+    }
 
-        return ForcedExitState.NotStarted;
-      } else {
-        // nullifier value doesn't equal zero: analyze it
-        const deadSignature = BigInt('0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead0000000000000000');
-        const deadSignMask  = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000');
-  
-        if ((nullifierValue & deadSignMask) == deadSignature) {
-          return ForcedExitState.Completed;
-        }
-  
-        throw new InternalError('The nullifier is not last for that account');
-      }
+    return ForcedExitState.NotStarted;
+    } else {
+    // nullifier value doesn't equal zero: analyze ii
+    if ((nullifierValue & DEAD_SIG_MASK) == DEAD_SIGNATURE) {
+        return ForcedExitState.Completed;
+    }
+
+    throw new InternalError('The nullifier is not last for that account');
+    }
   }
 
   public async getActiveForcedExit(): Promise<CommittedForcedExit | undefined> {
     return this.network.committedForcedExit(this.poolAddress, BigInt(await this.getCurrentNullifier()))
+  }
+
+  public async availableFundsToForcedExit(): Promise<bigint> {
+    const accountBalance = await this.state.accountBalance();
+    const notes = await this.state.usableNotes();
+    const txNotesSum: bigint = notes.slice(0, 3).reduce((acc, cur) => acc + BigInt(cur[1].b), 0n);
+    
+    return accountBalance + txNotesSum;
   }
 
   public async requestForcedExit(
@@ -113,10 +128,7 @@ export class ForcedExitProcessor {
       proofTxCallback: (pub: any, sec: any) => Promise<any>,
     ): Promise<CommittedForcedExit> {
       // getting available amount to emergency withdraw
-      const accountBalance = await this.state.accountBalance();
-      const notes = await this.state.usableNotes();
-      const txNotesSum: bigint = notes.slice(0, 3).reduce((acc, cur) => acc + BigInt(cur[1].b), 0n);
-      const requestedAmount = accountBalance + txNotesSum;
+      const requestedAmount = await this.availableFundsToForcedExit();;
 
       console.log(`Latest nullifier: ${await this.getCurrentNullifier()}`);
 
@@ -240,26 +252,8 @@ export class ForcedExitProcessor {
     throw new InternalError(`Cannot find active forced exit to ${cancel ? 'cancel' : 'execute'} (need to commit first)`)
   }
 
-  // TODO: implement getting the last account in the wasm lib
   private async getCurrentNullifier(): Promise<string> {
-      
-    const rawState = await this.state.rawState();
-
-    let maxAccIdx = -1;
-    let lastAccount: Account | undefined;
-    for (const [index, tx] of rawState.txs) {
-      if (tx['Account'] !== undefined && index > maxAccIdx) {
-        maxAccIdx = index;
-        lastAccount = tx['Account'];
-      }
-    }
-
-    if (maxAccIdx == -1 || lastAccount === undefined) {
-      // TODO: get zero account in that case
-      throw new InternalError(`The account has no own transactions`);
-    }
-
-    return this.state.calcNullifier(maxAccIdx, lastAccount);
+    return this.state.accountNullifier();
   }
     
 }

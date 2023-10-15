@@ -288,7 +288,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
             forcedExit.index,
             forcedExit.nullifier.toString(),
             forcedExit.out_commit.toString(),
-            [forcedExit.tx_proof.a,,
+            [forcedExit.tx_proof.a,
              forcedExit.tx_proof.b,
              forcedExit.tx_proof.c
             ].flat(2),
@@ -321,7 +321,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
             address: poolAddress,
             topics: [
                 [commitSignature, executeSignature, cancelSignature],
-                addHexPrefix(nullifier.toString(16)),
+                addHexPrefix(nullifier.toString(16).padStart(64, '0')),
             ],
             fromBlock: 0,
             toBlock: 'latest'
