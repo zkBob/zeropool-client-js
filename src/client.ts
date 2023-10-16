@@ -1781,6 +1781,13 @@ export class ZkBobClient extends ZkBobProvider {
     return this.feProcessor().getActiveForcedExit();
   }
 
+  // Returns only executed (not cancelled) exits
+  // (because cancelled events cannot be located efficiently due to nullifier updates)
+  public async executedForcedExit(): Promise<FinalizedForcedExit | undefined> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().getExecutedForcedExit();
+  }
+
   public async availableFundsToForcedExit(): Promise<bigint> {
     await this.updateStateWithFallback();
     return this.feProcessor().availableFundsToForcedExit();

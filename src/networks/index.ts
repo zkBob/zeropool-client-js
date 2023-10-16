@@ -2,7 +2,7 @@ import { ZkBobState } from "../state";
 import { EvmNetwork, InternalError, TxType } from "..";
 import { DirectDeposit, PoolTxDetails } from "../tx";
 import { TronNetwork } from "./tron";
-import { CommittedForcedExit, ForcedExit, ForcedExitRequest } from "@/emergency";
+import { CommittedForcedExit, FinalizedForcedExit, ForcedExit, ForcedExitRequest } from "@/emergency";
 
 export interface PreparedTransaction {
     to: string;
@@ -45,6 +45,7 @@ export interface NetworkBackend {
     committedForcedExitHash(poolAddress: string, nullifier: bigint): Promise<bigint>;
     createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction>;
     committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined>;
+    executedForcedExit(poolAddress: string, nullifier: bigint): Promise<FinalizedForcedExit | undefined>;
     createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction>;
     createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction>;
     getTokenSellerContract(poolAddress: string): Promise<string>;

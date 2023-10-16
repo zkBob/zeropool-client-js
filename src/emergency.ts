@@ -117,6 +117,14 @@ export class ForcedExitProcessor {
     return undefined;
   }
 
+  public async getExecutedForcedExit(): Promise<FinalizedForcedExit | undefined> {
+    if (await this.isAccountDead()) {
+      return this.network.executedForcedExit(this.poolAddress, BigInt(await this.getCurrentNullifier()))
+    }
+
+    return undefined;
+  }
+
   public async availableFundsToForcedExit(): Promise<bigint> {
     const accountBalance = await this.state.accountBalance();
     const notes = await this.state.usableNotes();

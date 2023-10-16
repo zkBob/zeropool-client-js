@@ -9,7 +9,7 @@ import { hexToBytes } from 'web3-utils';
 import { PoolSelector } from '../evm';
 import { MultiRpcManager, RpcManagerDelegate } from '../rpcman';
 import { ZkBobState } from '../../state';
-import { CommittedForcedExit, ForcedExitRequest } from '../../emergency';
+import { CommittedForcedExit, FinalizedForcedExit, ForcedExitRequest } from '../../emergency';
 
 const TronWeb = require('tronweb')
 const bs58 = require('bs58')
@@ -329,6 +329,10 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public async committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined> {
+        throw new InternalError('unimplemented');
+    }
+
+    public async executedForcedExit(poolAddress: string, nullifier: bigint): Promise<FinalizedForcedExit | undefined> {
         throw new InternalError('unimplemented');
     }
 

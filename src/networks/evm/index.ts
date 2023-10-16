@@ -15,7 +15,7 @@ import { isAddress } from 'web3-utils';
 import { Transaction, TransactionReceipt } from 'web3-core';
 import { RpcManagerDelegate, MultiRpcManager } from '../rpcman';
 import { ZkBobState } from '../../state';
-import { CommittedForcedExit, ForcedExit, ForcedExitRequest } from '../../emergency';
+import { CommittedForcedExit, FinalizedForcedExit, ForcedExit, ForcedExitRequest } from '../../emergency';
 import { stat } from 'fs/promises';
 import { TxBaseFields } from 'libzkbob-rs-wasm-web';
 
@@ -350,6 +350,44 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
             })
 
         return result;
+    }
+
+    public async executedForcedExit(poolAddress: string, nullifier: bigint): Promise<FinalizedForcedExit | undefined> {
+        const pool = this.poolContract();
+        pool.options.address = poolAddress;
+
+        const executeEventAbi = poolContractABI.find((val) => val.name == 'ForcedExit');
+
+        if (!executeEventAbi) {
+            throw new InternalError('Could not find ABI items for forced exit event');
+        }
+
+        const executeSignature = this.activeWeb3().eth.abi.encodeEventSignature(executeEventAbi);
+
+        const associatedEvents = await this.activeWeb3().eth.getPastLogs({
+            address: poolAddress,
+            topics: [
+                [executeSignature],
+                null,
+                addHexPrefix(nullifier.toString(16).padStart(64, '0')),
+            ],
+            fromBlock: 0,
+            toBlock: 'latest'
+        });
+
+        if (associatedEvents.length > 0) {
+            const decoded = this.activeWeb3().eth.abi.decodeLog(executeEventAbi.inputs ?? [], associatedEvents[0].data, associatedEvents[0].topics.slice(1))
+            return {
+                nullifier: BigInt(decoded.nullifier),
+                operator: decoded.operator,
+                to: decoded.to,
+                amount: BigInt(decoded.amount),
+                cancelled: false,
+                txHash: associatedEvents[0].transactionHash,
+            };
+        }
+
+        return undefined;
     }
 
     public async createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
