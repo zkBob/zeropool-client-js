@@ -61,3 +61,14 @@ query PoolTxesByIndexes($index_in: [BigInt!], $first: Int = 100) {
     }
   }
 }
+
+query PoolTxesFromIndex($index_gte: BigInt!, $first: Int = 1000) {
+  poolTxes(where: {index_gte: $index_gte}, first: $first, orderBy: index) {
+    index
+    zk {
+      out_commit
+    }
+    tx
+    message
+  }
+}

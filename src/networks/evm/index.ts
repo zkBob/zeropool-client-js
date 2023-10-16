@@ -15,9 +15,7 @@ import { isAddress } from 'web3-utils';
 import { Transaction, TransactionReceipt } from 'web3-core';
 import { RpcManagerDelegate, MultiRpcManager } from '../rpcman';
 import { ZkBobState } from '../../state';
-import { CommittedForcedExit, FinalizedForcedExit, ForcedExit, ForcedExitRequest } from '../../emergency';
-import { stat } from 'fs/promises';
-import { TxBaseFields } from 'libzkbob-rs-wasm-web';
+import { CommittedForcedExit, FinalizedForcedExit, ForcedExitRequest } from '../../emergency';
 
 const RETRY_COUNT = 10;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -379,7 +377,6 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
             const decoded = this.activeWeb3().eth.abi.decodeLog(executeEventAbi.inputs ?? [], associatedEvents[0].data, associatedEvents[0].topics.slice(1))
             return {
                 nullifier: BigInt(decoded.nullifier),
-                operator: decoded.operator,
                 to: decoded.to,
                 amount: BigInt(decoded.amount),
                 cancelled: false,

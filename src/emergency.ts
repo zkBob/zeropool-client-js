@@ -20,20 +20,21 @@ export enum ForcedExitState {
   Outdated,
 }
 
-export interface ForcedExit {
+interface ForcedExit {
   nullifier: bigint;
-  operator: string;
   to: string;
   amount: bigint;
 }
 
 export interface ForcedExitRequest extends ForcedExit {
+  operator: string;
   index: number;
   out_commit: bigint;
   tx_proof: SnarkProof;
 }
 
 export interface CommittedForcedExit extends ForcedExit {
+  operator: string;
   exitStart: number;
   exitEnd: number;
   txHash: string;
@@ -243,7 +244,6 @@ export class ForcedExitProcessor {
           case L1TxState.MinedSuccess:
             return {
               nullifier: committed.nullifier,
-              operator: committed.operator,
               to: committed.to,
               amount: committed.amount,
               cancelled: cancel,

@@ -4,14 +4,15 @@ import { hostedServiceDefaultURL } from "./resolvers";
 import { ZkBobState } from "../state";
 import { InternalError } from "../errors";
 import { DDBatchTxDetails, DirectDeposit, DirectDepositState,
-         PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType
+         PoolTxDetails, PoolTxMinimal, PoolTxType, RegularTxDetails, RegularTxType
         } from "../tx";
 import { decodeEvmCalldata } from '../networks/evm/calldata';
 import { DepositSignerFactory } from '../signers/signer-factory';
 import { NetworkBackend } from '../networks';
 import { DepositType } from '../config';
 import { DepositData } from '../signers/abstract-signer';
-import { toTwosComplementHex, truncateHexPrefix } from '../utils';
+import { addHexPrefix, toTwosComplementHex, truncateHexPrefix } from '../utils';
+import { CONSTANTS } from '../constants';
 
 const SUBGRAPH_REQUESTS_PER_SECOND = 10;
 const SUBGRAPH_MAX_ITEMS_IN_RESPONSE = 100;
@@ -126,7 +127,7 @@ export class ZkBobSubgraph {
         }
     }
 
-    // NetworkBackendd needed only for approve-deposit sender address recovering
+    // NetworkBackend needed only for approve-deposit sender address recovering
     public async getTxesDetails(indexes: number[], state: ZkBobState, network: NetworkBackend): Promise<PoolTxDetails[]> {
         const chunksPromises: Promise<any[]>[] = [];
         for (let i = 0; i < indexes.length; i += SUBGRAPH_MAX_ITEMS_IN_RESPONSE) {
@@ -225,6 +226,39 @@ export class ZkBobSubgraph {
 
                 return { poolTxType: PoolTxType.DirectDepositBatch, details: txDetails, index: Number(tx.index) - SUBGRAPH_ID_INDEX_DELTA };
             }
+        }));
+    }
+
+    public async getTxesMinimal(fromIndex: number, count: number): Promise<PoolTxMinimal[]> {
+        const chunksPromises: Promise<any[]>[] = [];
+        const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
+        for (let i = fromIndex; i < fromIndex + count * OUTPLUSONE; i += (SUBGRAPH_MAX_ITEMS_IN_RESPONSE * OUTPLUSONE)) {
+            chunksPromises.push(this.throttle.add(() => {
+                return this.sdk.PoolTxesFromIndex({ 'index_gte': i, 'first': SUBGRAPH_MAX_ITEMS_IN_RESPONSE }, {
+                    subgraphEndpoint: this.subgraphEndpoint(),
+                })
+                .then((data) => data.poolTxes)
+                .catch((err) => {
+                    console.warn(`[Subgraph]: Cannot fetch txes from index ${i} (${err.message})`);
+                    return [];
+                });
+            }));
+        }
+
+        const txs: any[] = [];
+        const chunksReady = await Promise.all(chunksPromises);
+        chunksReady.forEach((aChunk) => {
+            txs.push(...aChunk);
+        })
+
+        return Promise.all(txs.map(async (tx) => {
+            return {
+                index: Number(tx.index),
+                commitment: BigInt(tx.zk.out_commit).toString(16).padStart(64, '0'),  // should be without hex prefix
+                txHash: tx.tx,  // blockchain transaction hash
+                memo: truncateHexPrefix(tx.message),   // starting from items_num, without hex prefix
+                isMined: true,  // subgraph index only mined transactions
+              }
         }));
     }
 }

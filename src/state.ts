@@ -92,6 +92,7 @@ export class ZkBobState {
   public stateId: string; // should depends on pool and sk
   private sk: Uint8Array;
   private network: NetworkBackend;
+  private subgraph?: ZkBobSubgraph;
   private birthIndex?: number;
   public history?: HistoryStorage; // should work synchronically with the state
   private ephemeralAddrPool?: EphemeralPool; // depends on sk so we placed it here
@@ -128,6 +129,7 @@ export class ZkBobState {
     const zpState = new ZkBobState();
     zpState.sk = new Uint8Array(sk);
     zpState.network = network;
+    zpState.subgraph = subgraph;
     zpState.birthIndex = birthIndex;
     
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
@@ -554,58 +556,54 @@ export class ZkBobState {
 
   // Get the transactions from the relayer starting from the specified index
   private async fetchBatch(relayer: ZkBobRelayer, fromIndex: number, count: number): Promise<RawTxsBatch> {
-    return relayer.fetchTransactionsOptimistic(BigInt(fromIndex), count).then( async txs => {      
-      const txHashes: Record<number, string> = {};
-      const indexedTxs: IndexedTx[] = [];
-      const indexedTxsPending: IndexedTx[] = [];
-
-      let maxMinedIndex = -1;
-      let maxPendingIndex = -1;
-
-      for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-        const tx = txs[txIdx];
-        const memo_idx = fromIndex + txIdx * OUTPLUSONE; // Get the first leaf index in the tree
-        
-        // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
-        const memo = tx.slice(129); // Skip mined flag, txHash and commitment
-        const commitment = tx.slice(65, 129)
-
-        const indexedTx: IndexedTx = {
-          index: memo_idx,
-          memo: memo,
-          commitment: commitment,
-        }
-
-        // 3. Get txHash
-        const txHash = tx.slice(1, 65);
-        txHashes[memo_idx] = this.network.txHashFromHexString(txHash);
-
-        // 4. Get mined flag
-        if (tx.slice(0, 1) === '1') {
-          indexedTxs.push(indexedTx);
-          maxMinedIndex = Math.max(maxMinedIndex, memo_idx);
+    return relayer.fetchTransactionsOptimistic(this.network, fromIndex, count)
+      .catch((err) => {
+        if (this.subgraph) {
+          console.warn(`Unable to load transactions from the relayer (${err.message}), fallbacking to subgraph`);
+          return this.subgraph.getTxesMinimal(fromIndex, count);
         } else {
-          indexedTxsPending.push(indexedTx);
-          maxPendingIndex = Math.max(maxPendingIndex, memo_idx);
+          console.log(`🔥[HotSync] cannot get txs batch from index ${fromIndex}: ${err.message}`)
+          throw new InternalError(`Cannot fetch txs from the relayer: ${err.message}`);
         }
-      }
+      })
+      .then( async txs => {      
+        const txHashes: Record<number, string> = {};
+        const indexedTxs: IndexedTx[] = [];
+        const indexedTxsPending: IndexedTx[] = [];
 
-      console.log(`🔥[HotSync] got batch of ${txs.length} transactions from index ${fromIndex}`);
+        let maxMinedIndex = -1;
+        let maxPendingIndex = -1;
 
-      return {
-        fromIndex: fromIndex,
-        count: txs.length,
-        minedTxs: indexedTxs,
-        pendingTxs: indexedTxsPending,
-        maxMinedIndex,
-        maxPendingIndex,
-        txHashes,
-      }
+        for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
+          const tx = txs[txIdx];
+          txHashes[tx.index] = tx.txHash;
+          const indexedTx: IndexedTx = {
+            index: tx.index,
+            memo: tx.memo,
+            commitment: tx.commitment,
+          }
+
+          if (tx.isMined) {
+            indexedTxs.push(indexedTx);
+            maxMinedIndex = Math.max(maxMinedIndex, tx.index);
+          } else {
+            indexedTxsPending.push(indexedTx);
+            maxPendingIndex = Math.max(maxPendingIndex, tx.index);
+          }
+        }
+
+        console.log(`🔥[HotSync] got batch of ${txs.length} transactions from index ${fromIndex}`);
+
+        return {
+          fromIndex: fromIndex,
+          count: txs.length,
+          minedTxs: indexedTxs,
+          pendingTxs: indexedTxsPending,
+          maxMinedIndex,
+          maxPendingIndex,
+          txHashes,
+        }
     })
-    .catch((err) => {
-      console.log(`🔥[HotSync] cannot get txs batch from index ${fromIndex}: ${err.message}`)
-      throw new InternalError(`Cannot fetch txs from the relayer: ${err.message}`);
-    });
   }
 
   // The heaviest work: parse txs batch
@@ -662,38 +660,28 @@ export class ZkBobState {
   // Return StateUpdate object
   // This method used for multi-tx
   public async getNewState(relayer: ZkBobRelayer, accBirthIndex: number): Promise<StateUpdate> {
-    const startIndex = await this.getNextIndex();
+    const startIndex = Number(await this.getNextIndex());
 
     const stateInfo = await relayer.info();
-    const optimisticIndex = BigInt(stateInfo.optimisticDeltaIndex);
+    const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
     if (optimisticIndex > startIndex) {
       const startTime = Date.now();
       
       console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
 
-      const numOfTx = Number((optimisticIndex - startIndex) / BigInt(OUTPLUSONE));
-      const stateUpdate = relayer.fetchTransactionsOptimistic(startIndex, numOfTx).then( async txs => {
+      const numOfTx = (optimisticIndex - startIndex) / OUTPLUSONE;
+      const stateUpdate = relayer.fetchTransactionsOptimistic(this.network, startIndex, numOfTx).then( async txs => {
         console.log(`Getting ${txs.length} transactions from index ${startIndex}`);
         
         const indexedTxs: IndexedTx[] = [];
 
         for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-          const tx = txs[txIdx];
-          // Get the first leaf index in the tree
-          const memo_idx = Number(startIndex) + txIdx * OUTPLUSONE;
-          
-          // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
-          // 1. Extract memo block
-          const memo = tx.slice(129); // Skip mined flag, txHash and commitment
-
-          // 2. Get transaction commitment
-          const commitment = tx.slice(65, 129)
-          
+          const tx = txs[txIdx];          
           const indexedTx: IndexedTx = {
-            index: memo_idx,
-            memo: memo,
-            commitment: commitment,
+            index: tx.index,
+            memo: tx.memo,
+            commitment: tx.commitment,
           }
 
           // 3. add indexed tx

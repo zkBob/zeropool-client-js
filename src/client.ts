@@ -19,7 +19,7 @@ import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
 import { PERMIT2_CONTRACT } from './signers/permit2-signer';
 import { DirectDepositProcessor, DirectDepositType } from './dd';
-import { ForcedExitProcessor, ForcedExitState, ForcedExit, CommittedForcedExit, FinalizedForcedExit } from './emergency';
+import { ForcedExitProcessor, ForcedExitState, CommittedForcedExit, FinalizedForcedExit } from './emergency';
 
 import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks';
@@ -1781,7 +1781,7 @@ export class ZkBobClient extends ZkBobProvider {
     return this.feProcessor().getActiveForcedExit();
   }
 
-  // Returns only executed (not cancelled) exits
+  // Returns only executed (not cancelled) exit
   // (because cancelled events cannot be located efficiently due to nullifier updates)
   public async executedForcedExit(): Promise<FinalizedForcedExit | undefined> {
     await this.updateStateWithFallback();

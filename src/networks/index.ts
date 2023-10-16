@@ -2,7 +2,7 @@ import { ZkBobState } from "../state";
 import { EvmNetwork, InternalError, TxType } from "..";
 import { DirectDeposit, PoolTxDetails } from "../tx";
 import { TronNetwork } from "./tron";
-import { CommittedForcedExit, FinalizedForcedExit, ForcedExit, ForcedExitRequest } from "@/emergency";
+import { CommittedForcedExit, FinalizedForcedExit, ForcedExitRequest } from "../emergency";
 
 export interface PreparedTransaction {
     to: string;
