@@ -15,6 +15,7 @@ import { ZkBobRelayer } from './services/relayer';
 import { CONSTANTS } from './constants';
 import { NetworkBackend } from './networks';
 import { ZkBobSubgraph } from './subgraph';
+import { TreeState } from './client-provider';
 
 const LOG_STATE_HOTSYNC = false;
 
@@ -321,12 +322,12 @@ export class ZkBobState {
 
   public async updateState(
     relayer: ZkBobRelayer,
-    getPoolRoot: (index: bigint) => Promise<bigint>,
+    getPoolState: (index?: bigint) => Promise<TreeState>,
     coldConfig?: ColdStorageConfig,
     coldBaseAddr?: string,
   ): Promise<boolean> {
     if (this.updateStatePromise == undefined) {
-      this.updateStatePromise = this.updateStateOptimisticWorker(relayer, getPoolRoot, coldConfig, coldBaseAddr).finally(() => {
+      this.updateStatePromise = this.updateStateOptimisticWorker(relayer, getPoolState, coldConfig, coldBaseAddr).finally(() => {
         this.updateStatePromise = undefined;
       });
     } else {
@@ -339,14 +340,23 @@ export class ZkBobState {
   // returns is ready to transact
   private async updateStateOptimisticWorker(
     relayer: ZkBobRelayer,
-    getPoolRoot: (index: bigint) => Promise<bigint>,
+    getPoolState: (index?: bigint) => Promise<TreeState>,
     coldConfig?: ColdStorageConfig,
     coldBaseAddr?: string,
   ): Promise<boolean> {
     this.lastSyncInfo = {txCount: 0, hotSyncCount: 0, processedTxCount: 0, startTimestamp: Date.now()}
     let startIndex = Number(await this.getNextIndex());
 
-    const stateInfo = await relayer.info();
+    const stateInfo = await relayer.info().catch(async (err) => {
+      console.warn(`Cannot get relayer state. Getting current index from the pool contract...`);
+      const poolState = await getPoolState();
+      return {
+        root: poolState.root.toString(),
+        optimisticRoot: poolState.root.toString,
+        deltaIndex: poolState.index,
+        optimisticDeltaIndex: poolState.index
+      }
+    });
     const nextIndex = Number(stateInfo.deltaIndex);
     const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
@@ -377,7 +387,7 @@ export class ZkBobState {
       this.lastSyncInfo.txCount = (optimisticIndex - startIndex) /  OUTPLUSONE;
 
       // Try to using the cold storage if possible
-      const coldResultPromise = this.startColdSync(getPoolRoot, coldConfig, coldBaseAddr, startIndex);
+      const coldResultPromise = this.startColdSync(getPoolState, coldConfig, coldBaseAddr, startIndex);
 
       // Start the hot sync simultaneously with the cold sync
       const assumedNextIndex = this.nextIndexAfterColdSync(coldConfig, startIndex);
@@ -487,7 +497,7 @@ export class ZkBobState {
     const checkIndex = await this.getNextIndex();
     const stableIndex = await this.lastVerifiedIndex();
     if (checkIndex != stableIndex) {
-      const isStateCorrect = await this.verifyState(getPoolRoot);
+      const isStateCorrect = await this.verifyState(getPoolState);
       if (!isStateCorrect) {
         console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
         if (stableIndex > 0 && stableIndex < checkIndex &&
@@ -512,7 +522,7 @@ export class ZkBobState {
         }
 
         // resync the state
-        return await this.updateStateOptimisticWorker(relayer, getPoolRoot, coldConfig, coldBaseAddr);
+        return await this.updateStateOptimisticWorker(relayer, getPoolState, coldConfig, coldBaseAddr);
       } else {
         this.rollbackAttempts = 0;
         this.wipeAttempts = 0;
@@ -728,10 +738,10 @@ export class ZkBobState {
   }
 
   // returns false when the local state is inconsistent
-  private async verifyState(getPoolRoot: (index: bigint) => Promise<bigint>): Promise<boolean> {
+  private async verifyState(getPoolState: (index?: bigint) => Promise<TreeState>): Promise<boolean> {
     const checkIndex = await this.getNextIndex();
     const localRoot = await this.getRoot();
-    const poolRoot =  await getPoolRoot(checkIndex);
+    const poolRoot = (await getPoolState(checkIndex)).root;
 
     if (localRoot == poolRoot) {
       await this.setLastVerifiedIndex(checkIndex);
@@ -771,7 +781,7 @@ export class ZkBobState {
   }
 
   private async startColdSync(
-    getPoolRoot: (index: bigint) => Promise<bigint>,
+    getPoolState: (index?: bigint) => Promise<TreeState>,
     coldConfig?: ColdStorageConfig,
     coldStorageBaseAddr?: string,
     fromIndex?: number,
@@ -834,7 +844,7 @@ export class ZkBobState {
           syncResult.nextIndex = actualRangeEnd;
           syncResult.totalTime = Date.now() - startTime;
           
-          const isStateCorrect = await this.verifyState(getPoolRoot);
+          const isStateCorrect = await this.verifyState(getPoolState);
           if (!isStateCorrect) {
             console.warn(`🧊[ColdSync] Merkle tree root at index ${await this.getNextIndex()} mistmatch! Wiping the state...`);
             await this.clean();  // rollback to 0

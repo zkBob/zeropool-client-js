@@ -425,7 +425,7 @@ export class ZkBobClient extends ZkBobProvider {
     const relayer = this.relayer();
     const readyToTransact = await giftCardState.updateState(
       relayer,
-      async (index) => (await this.getPoolState(index)).root,
+      async (index) => this.getPoolState(index),
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );
@@ -1551,7 +1551,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     noOwnTxsInOptimisticState = await this.zpState().updateState(
       this.relayer(),
-      async (index) => (await this.getPoolState(index)).root,
+      async (index) => this.getPoolState(index),
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );

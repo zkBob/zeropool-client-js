@@ -96,9 +96,9 @@ export class ForcedExitProcessor {
         } else {
           return ForcedExitState.Canceled;
         }
-    }
+      }
 
-    return ForcedExitState.NotStarted;
+      return ForcedExitState.NotStarted;
     } else {
     // nullifier value doesn't equal zero: analyze ii
     if ((nullifierValue & DEAD_SIG_MASK) == DEAD_SIGNATURE) {
@@ -110,7 +110,11 @@ export class ForcedExitProcessor {
   }
 
   public async getActiveForcedExit(): Promise<CommittedForcedExit | undefined> {
-    return this.network.committedForcedExit(this.poolAddress, BigInt(await this.getCurrentNullifier()))
+    if (!(await this.isAccountDead())) {
+      return this.network.committedForcedExit(this.poolAddress, BigInt(await this.getCurrentNullifier()))
+    }
+
+    return undefined;
   }
 
   public async availableFundsToForcedExit(): Promise<bigint> {

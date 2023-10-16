@@ -306,21 +306,19 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         pool.options.address = poolAddress;
 
         const commitEventAbi = poolContractABI.find((val) => val.name == 'CommitForcedExit');
-        const executeEventAbi = poolContractABI.find((val) => val.name == 'ForcedExit');
         const cancelEventAbi = poolContractABI.find((val) => val.name == 'CancelForcedExit');
 
-        if (!commitEventAbi || ! executeEventAbi || !cancelEventAbi) {
+        if (!commitEventAbi || !cancelEventAbi) {
             throw new InternalError('Could not find ABI items for forced exit events');
         }
 
         const commitSignature = this.activeWeb3().eth.abi.encodeEventSignature(commitEventAbi);
-        const executeSignature = this.activeWeb3().eth.abi.encodeEventSignature(executeEventAbi);
         const cancelSignature = this.activeWeb3().eth.abi.encodeEventSignature(cancelEventAbi);
 
         const associatedEvents = await this.activeWeb3().eth.getPastLogs({
             address: poolAddress,
             topics: [
-                [commitSignature, executeSignature, cancelSignature],
+                [commitSignature, cancelSignature],
                 addHexPrefix(nullifier.toString(16).padStart(64, '0')),
             ],
             fromBlock: 0,
@@ -345,7 +343,6 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                         };
                         break;
 
-                    case executeSignature:
                     case cancelSignature:
                         result = undefined;
                         break;
