@@ -1769,8 +1769,8 @@ export class ZkBobClient extends ZkBobProvider {
   public async isForcedExitSupported(): Promise<boolean> {
     return await this.feProcessor().isForcedExitSupported();
   }
-
   // The following forced exit related routines should called only if forced exit supported
+
   public async forcedExitState(): Promise<ForcedExitState> {
     await this.updateStateWithFallback();
     return this.feProcessor().forcedExitState();

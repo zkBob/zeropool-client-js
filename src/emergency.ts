@@ -16,7 +16,6 @@ export enum ForcedExitState {
   CommittedWaitingSlot,
   CommittedReady,
   Completed,
-  Canceled,
   Outdated,
 }
 
@@ -94,8 +93,6 @@ export class ForcedExitProcessor {
             return ForcedExitState.Outdated;
           }
           return ForcedExitState.CommittedReady;
-        } else {
-          return ForcedExitState.Canceled;
         }
       }
 
