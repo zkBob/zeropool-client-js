@@ -17,8 +17,6 @@ import { NetworkBackend } from './networks';
 import { ZkBobSubgraph } from './subgraph';
 import { TreeState } from './client-provider';
 
-const LOG_STATE_HOTSYNC = false;
-
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const BATCH_SIZE = 1000;  // number of transactions per request during a sync state
 const PARTIAL_TREE_USAGE_THRESHOLD = 500; // minimum tx count in Merkle tree to partial tree update using
@@ -618,9 +616,6 @@ export class ZkBobState {
       const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, batch.minedTxs);
       const decryptedMemos = parseResult.decryptedMemos;
       batchState.set(batch.fromIndex, parseResult.stateUpdate);
-      //if (LOG_STATE_HOTSYNC) {
-      //  this.logStateSync(i, i + txs.length * OUTPLUSONE, decryptedMemos);
-      //}
       for (let decryptedMemoIndex = 0; decryptedMemoIndex < decryptedMemos.length; ++decryptedMemoIndex) {
         // save memos corresponding to the our account to restore history
         const myMemo = decryptedMemos[decryptedMemoIndex];
@@ -672,21 +667,14 @@ export class ZkBobState {
 
       const numOfTx = (optimisticIndex - startIndex) / OUTPLUSONE;
       const stateUpdate = relayer.fetchTransactionsOptimistic(this.network, startIndex, numOfTx).then( async txs => {
-        console.log(`Getting ${txs.length} transactions from index ${startIndex}`);
-        
-        const indexedTxs: IndexedTx[] = [];
-
-        for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-          const tx = txs[txIdx];          
-          const indexedTx: IndexedTx = {
+        console.log(`Got ${txs.length} transactions from index ${startIndex}`);
+        const indexedTxs: IndexedTx[] = txs.map((tx) => {
+          return  {
             index: tx.index,
             memo: tx.memo,
             commitment: tx.commitment,
           }
-
-          // 3. add indexed tx
-          indexedTxs.push(indexedTx);
-        }
+        });
 
         const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, indexedTxs);
 
@@ -695,7 +683,6 @@ export class ZkBobState {
 
       const msElapsed = Date.now() - startTime;
       const avgSpeed = msElapsed / numOfTx;
-
       console.log(`Fetch finished in ${msElapsed / 1000} sec | ${numOfTx} tx, avg speed ${avgSpeed.toFixed(1)} ms/tx`);
 
       return stateUpdate;
@@ -706,7 +693,7 @@ export class ZkBobState {
     }
   }
 
-  public async logStateSync(startIndex: number, endIndex: number, decryptedMemos: DecryptedMemo[]) {
+  private async logStateSync(startIndex: number, endIndex: number, decryptedMemos: DecryptedMemo[]) {
     for (const decryptedMemo of decryptedMemos) {
       if (decryptedMemo.index > startIndex) {
         console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${decryptedMemo.index - OUTPLUSONE})`);
