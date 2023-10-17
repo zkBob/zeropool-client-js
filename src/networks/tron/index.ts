@@ -227,8 +227,6 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return this.isMethodSupportedByContract(tokenAddress, 'nonces');
     }
 
-
-
     // ---------------------=========< Pool Interaction >=========--------------------
     // | Getting common info: pool ID, denominator, limits etc                       |
     // -------------------------------------------------------------------------------
@@ -625,7 +623,25 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public async getTxRevertReason(txHash: string): Promise<string | null> {
-        return 'UNKNOWN_REASON'
+        try {
+            const txInfo = await this.commonRpcRetry(async () => {
+                return this.activeTronweb().trx.getTransactionInfo(txHash);
+            }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
+
+            if (txInfo && txInfo.receipt) {
+                if (txInfo.result && txInfo.result == 'FAILED') {
+                    if (txInfo.resMessage) {
+                        return this.tronWeb.toAscii(txInfo.resMessage);
+                    }
+
+                    return 'UNKNOWN_REASON';
+                }
+            }
+        } catch(err) {
+            console.warn(`[TronNetwork] error on checking tx ${txHash}: ${err.message}`);
+        }
+
+        return null;
     }
 
     public async getChainId(): Promise<number> {
@@ -665,7 +681,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             const tronTransaction = await this.commonRpcRetry(async () => {
                 return this.activeTronweb().trx.getTransaction(poolTxHash);
             }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
-            //const tronTransactionInfo = await this.activeTronweb().trx.getTransaction(poolTxHash);
+            const txState = await this.getTransactionState(poolTxHash);
             const timestamp = tronTransaction?.raw_data?.timestamp
             const contract = tronTransaction?.raw_data?.contract;
             let txData: any | undefined;
@@ -674,8 +690,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             }
 
             if (txData && timestamp) {
-                // TODO: get is tx mined!!!
-                let isMined = true;
+                let isMined = txState == L1TxState.MinedSuccess;
 
                 const txSelector = txData.slice(0, 8).toLowerCase();
                 if (txSelector == PoolSelector.Transact) {
@@ -750,9 +765,20 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
 
     public async getTransactionState(txHash: string): Promise<L1TxState> {
         try {
-            // TODO: implement
+            const txInfo = await this.commonRpcRetry(async () => {
+                return this.activeTronweb().trx.getTransactionInfo(txHash);
+            }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
+
+            if (txInfo && txInfo.receipt) {
+                // tx is on the blockchain (assume mined)
+                if (txInfo.result && txInfo.result == 'FAILED') {
+                    return L1TxState.MinedFailed;
+                }
+
+                return L1TxState.MinedSuccess;
+            }
         } catch(err) {
-            console.warn(`[EvmNetwork] error on checking tx ${txHash}: ${err.message}`);
+            console.warn(`[TronNetwork] error on checking tx ${txHash}: ${err.message}`);
         }
 
         return L1TxState.NotFound;
