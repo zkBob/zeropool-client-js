@@ -138,7 +138,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
         return isSupport
     }
-
+    
     // -----------------=========< Token-Related Routiness >=========-----------------
     // | Getting balance, allowance, nonce etc                                       |
     // -------------------------------------------------------------------------------

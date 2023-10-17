@@ -1120,6 +1120,221 @@ export type Payment_filter = {
 
 export type Payment_orderBy =
   | 'id'
+  | 'index'
+  | 'pending'
+  | 'completed'
+  | 'refunded'
+  | 'sender'
+  | 'fallbackUser'
+  | 'zkAddress_diversifier'
+  | 'zkAddress_pk'
+  | 'deposit'
+  | 'fee'
+  | 'bnInit'
+  | 'tsInit'
+  | 'txInit'
+  | 'payment'
+  | 'payment__id'
+  | 'payment__sender'
+  | 'payment__token'
+  | 'payment__note'
+  | 'bnClosed'
+  | 'tsClosed'
+  | 'txClosed';
+
+export type LastSyncBlock = {
+  id: Scalars['Bytes'];
+  block?: Maybe<Scalars['BigInt']>;
+};
+
+export type LastSyncBlock_filter = {
+  id?: InputMaybe<Scalars['Bytes']>;
+  id_not?: InputMaybe<Scalars['Bytes']>;
+  id_gt?: InputMaybe<Scalars['Bytes']>;
+  id_lt?: InputMaybe<Scalars['Bytes']>;
+  id_gte?: InputMaybe<Scalars['Bytes']>;
+  id_lte?: InputMaybe<Scalars['Bytes']>;
+  id_in?: InputMaybe<Array<Scalars['Bytes']>>;
+  id_not_in?: InputMaybe<Array<Scalars['Bytes']>>;
+  id_contains?: InputMaybe<Scalars['Bytes']>;
+  id_not_contains?: InputMaybe<Scalars['Bytes']>;
+  block?: InputMaybe<Scalars['BigInt']>;
+  block_not?: InputMaybe<Scalars['BigInt']>;
+  block_gt?: InputMaybe<Scalars['BigInt']>;
+  block_lt?: InputMaybe<Scalars['BigInt']>;
+  block_gte?: InputMaybe<Scalars['BigInt']>;
+  block_lte?: InputMaybe<Scalars['BigInt']>;
+  block_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  block_not_in?: InputMaybe<Array<Scalars['BigInt']>>;
+  /** Filter for the block changed event. */
+  _change_block?: InputMaybe<BlockChangedFilter>;
+  and?: InputMaybe<Array<InputMaybe<LastSyncBlock_filter>>>;
+  or?: InputMaybe<Array<InputMaybe<LastSyncBlock_filter>>>;
+};
+
+export type LastSyncBlock_orderBy =
+  | 'id'
+  | 'block';
+
+export type Operation = {
+  id: Scalars['String'];
+  pooltx: PoolTx;
+};
+
+export type Operation_filter = {
+  id?: InputMaybe<Scalars['String']>;
+  id_not?: InputMaybe<Scalars['String']>;
+  id_gt?: InputMaybe<Scalars['String']>;
+  id_lt?: InputMaybe<Scalars['String']>;
+  id_gte?: InputMaybe<Scalars['String']>;
+  id_lte?: InputMaybe<Scalars['String']>;
+  id_in?: InputMaybe<Array<Scalars['String']>>;
+  id_not_in?: InputMaybe<Array<Scalars['String']>>;
+  id_contains?: InputMaybe<Scalars['String']>;
+  id_contains_nocase?: InputMaybe<Scalars['String']>;
+  id_not_contains?: InputMaybe<Scalars['String']>;
+  id_not_contains_nocase?: InputMaybe<Scalars['String']>;
+  id_starts_with?: InputMaybe<Scalars['String']>;
+  id_starts_with_nocase?: InputMaybe<Scalars['String']>;
+  id_not_starts_with?: InputMaybe<Scalars['String']>;
+  id_not_starts_with_nocase?: InputMaybe<Scalars['String']>;
+  id_ends_with?: InputMaybe<Scalars['String']>;
+  id_ends_with_nocase?: InputMaybe<Scalars['String']>;
+  id_not_ends_with?: InputMaybe<Scalars['String']>;
+  id_not_ends_with_nocase?: InputMaybe<Scalars['String']>;
+  pooltx?: InputMaybe<Scalars['String']>;
+  pooltx_not?: InputMaybe<Scalars['String']>;
+  pooltx_gt?: InputMaybe<Scalars['String']>;
+  pooltx_lt?: InputMaybe<Scalars['String']>;
+  pooltx_gte?: InputMaybe<Scalars['String']>;
+  pooltx_lte?: InputMaybe<Scalars['String']>;
+  pooltx_in?: InputMaybe<Array<Scalars['String']>>;
+  pooltx_not_in?: InputMaybe<Array<Scalars['String']>>;
+  pooltx_contains?: InputMaybe<Scalars['String']>;
+  pooltx_contains_nocase?: InputMaybe<Scalars['String']>;
+  pooltx_not_contains?: InputMaybe<Scalars['String']>;
+  pooltx_not_contains_nocase?: InputMaybe<Scalars['String']>;
+  pooltx_starts_with?: InputMaybe<Scalars['String']>;
+  pooltx_starts_with_nocase?: InputMaybe<Scalars['String']>;
+  pooltx_not_starts_with?: InputMaybe<Scalars['String']>;
+  pooltx_not_starts_with_nocase?: InputMaybe<Scalars['String']>;
+  pooltx_ends_with?: InputMaybe<Scalars['String']>;
+  pooltx_ends_with_nocase?: InputMaybe<Scalars['String']>;
+  pooltx_not_ends_with?: InputMaybe<Scalars['String']>;
+  pooltx_not_ends_with_nocase?: InputMaybe<Scalars['String']>;
+  pooltx_?: InputMaybe<PoolTx_filter>;
+  /** Filter for the block changed event. */
+  _change_block?: InputMaybe<BlockChangedFilter>;
+  and?: InputMaybe<Array<InputMaybe<Operation_filter>>>;
+  or?: InputMaybe<Array<InputMaybe<Operation_filter>>>;
+};
+
+export type Operation_orderBy =
+  | 'id'
+  | 'pooltx'
+  | 'pooltx__id'
+  | 'pooltx__index'
+  | 'pooltx__tx'
+  | 'pooltx__ts'
+  | 'pooltx__all_messages_hash'
+  | 'pooltx__type'
+  | 'pooltx__message'
+  | 'pooltx__gas_used'
+  | 'pooltx__calldata';
+
+/** Defines the order direction, either ascending or descending */
+export type OrderDirection =
+  | 'asc'
+  | 'desc';
+
+export type Payment = {
+  id: Scalars['String'];
+  sender?: Maybe<Scalars['Bytes']>;
+  delegated_deposit: DirectDeposit;
+  token: Scalars['Bytes'];
+  note?: Maybe<Scalars['Bytes']>;
+};
+
+export type Payment_filter = {
+  id?: InputMaybe<Scalars['String']>;
+  id_not?: InputMaybe<Scalars['String']>;
+  id_gt?: InputMaybe<Scalars['String']>;
+  id_lt?: InputMaybe<Scalars['String']>;
+  id_gte?: InputMaybe<Scalars['String']>;
+  id_lte?: InputMaybe<Scalars['String']>;
+  id_in?: InputMaybe<Array<Scalars['String']>>;
+  id_not_in?: InputMaybe<Array<Scalars['String']>>;
+  id_contains?: InputMaybe<Scalars['String']>;
+  id_contains_nocase?: InputMaybe<Scalars['String']>;
+  id_not_contains?: InputMaybe<Scalars['String']>;
+  id_not_contains_nocase?: InputMaybe<Scalars['String']>;
+  id_starts_with?: InputMaybe<Scalars['String']>;
+  id_starts_with_nocase?: InputMaybe<Scalars['String']>;
+  id_not_starts_with?: InputMaybe<Scalars['String']>;
+  id_not_starts_with_nocase?: InputMaybe<Scalars['String']>;
+  id_ends_with?: InputMaybe<Scalars['String']>;
+  id_ends_with_nocase?: InputMaybe<Scalars['String']>;
+  id_not_ends_with?: InputMaybe<Scalars['String']>;
+  id_not_ends_with_nocase?: InputMaybe<Scalars['String']>;
+  sender?: InputMaybe<Scalars['Bytes']>;
+  sender_not?: InputMaybe<Scalars['Bytes']>;
+  sender_gt?: InputMaybe<Scalars['Bytes']>;
+  sender_lt?: InputMaybe<Scalars['Bytes']>;
+  sender_gte?: InputMaybe<Scalars['Bytes']>;
+  sender_lte?: InputMaybe<Scalars['Bytes']>;
+  sender_in?: InputMaybe<Array<Scalars['Bytes']>>;
+  sender_not_in?: InputMaybe<Array<Scalars['Bytes']>>;
+  sender_contains?: InputMaybe<Scalars['Bytes']>;
+  sender_not_contains?: InputMaybe<Scalars['Bytes']>;
+  delegated_deposit?: InputMaybe<Scalars['String']>;
+  delegated_deposit_not?: InputMaybe<Scalars['String']>;
+  delegated_deposit_gt?: InputMaybe<Scalars['String']>;
+  delegated_deposit_lt?: InputMaybe<Scalars['String']>;
+  delegated_deposit_gte?: InputMaybe<Scalars['String']>;
+  delegated_deposit_lte?: InputMaybe<Scalars['String']>;
+  delegated_deposit_in?: InputMaybe<Array<Scalars['String']>>;
+  delegated_deposit_not_in?: InputMaybe<Array<Scalars['String']>>;
+  delegated_deposit_contains?: InputMaybe<Scalars['String']>;
+  delegated_deposit_contains_nocase?: InputMaybe<Scalars['String']>;
+  delegated_deposit_not_contains?: InputMaybe<Scalars['String']>;
+  delegated_deposit_not_contains_nocase?: InputMaybe<Scalars['String']>;
+  delegated_deposit_starts_with?: InputMaybe<Scalars['String']>;
+  delegated_deposit_starts_with_nocase?: InputMaybe<Scalars['String']>;
+  delegated_deposit_not_starts_with?: InputMaybe<Scalars['String']>;
+  delegated_deposit_not_starts_with_nocase?: InputMaybe<Scalars['String']>;
+  delegated_deposit_ends_with?: InputMaybe<Scalars['String']>;
+  delegated_deposit_ends_with_nocase?: InputMaybe<Scalars['String']>;
+  delegated_deposit_not_ends_with?: InputMaybe<Scalars['String']>;
+  delegated_deposit_not_ends_with_nocase?: InputMaybe<Scalars['String']>;
+  delegated_deposit_?: InputMaybe<DirectDeposit_filter>;
+  token?: InputMaybe<Scalars['Bytes']>;
+  token_not?: InputMaybe<Scalars['Bytes']>;
+  token_gt?: InputMaybe<Scalars['Bytes']>;
+  token_lt?: InputMaybe<Scalars['Bytes']>;
+  token_gte?: InputMaybe<Scalars['Bytes']>;
+  token_lte?: InputMaybe<Scalars['Bytes']>;
+  token_in?: InputMaybe<Array<Scalars['Bytes']>>;
+  token_not_in?: InputMaybe<Array<Scalars['Bytes']>>;
+  token_contains?: InputMaybe<Scalars['Bytes']>;
+  token_not_contains?: InputMaybe<Scalars['Bytes']>;
+  note?: InputMaybe<Scalars['Bytes']>;
+  note_not?: InputMaybe<Scalars['Bytes']>;
+  note_gt?: InputMaybe<Scalars['Bytes']>;
+  note_lt?: InputMaybe<Scalars['Bytes']>;
+  note_gte?: InputMaybe<Scalars['Bytes']>;
+  note_lte?: InputMaybe<Scalars['Bytes']>;
+  note_in?: InputMaybe<Array<Scalars['Bytes']>>;
+  note_not_in?: InputMaybe<Array<Scalars['Bytes']>>;
+  note_contains?: InputMaybe<Scalars['Bytes']>;
+  note_not_contains?: InputMaybe<Scalars['Bytes']>;
+  /** Filter for the block changed event. */
+  _change_block?: InputMaybe<BlockChangedFilter>;
+  and?: InputMaybe<Array<InputMaybe<Payment_filter>>>;
+  or?: InputMaybe<Array<InputMaybe<Payment_filter>>>;
+};
+
+export type Payment_orderBy =
+  | 'id'
   | 'sender'
   | 'delegated_deposit'
   | 'delegated_deposit__id'
@@ -2441,6 +2656,7 @@ export type PoolTxesFromIndexQuery = { poolTxes: Array<(
   )> };
 
 
+
 export const DirectDepositByIdDocument = gql`
     query DirectDepositById($id: ID!) {
   directDeposit(id: $id) {
@@ -2552,6 +2768,7 @@ export const PoolTxesByIndexesDocument = gql`
   }
 }
     ` as unknown as DocumentNode<PoolTxesByIndexesQuery, PoolTxesByIndexesQueryVariables>;
+
 export const PoolTxesFromIndexDocument = gql`
     query PoolTxesFromIndex($index_gte: BigInt!, $first: Int = 1000) {
   poolTxes(where: {index_gte: $index_gte}, first: $first, orderBy: index) {

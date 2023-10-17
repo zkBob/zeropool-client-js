@@ -35,7 +35,6 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     private ddContractAddresses = new Map<string, string>();    // poolAddress -> ddQueueAddress
     private supportedMethods = new Map<string, boolean>(); // contractAddress+method => isSupport
 
-
     // ------------------------=========< Lifecycle >=========------------------------
     // | Init, enabling and disabling backend                                        |
     // -------------------------------------------------------------------------------
