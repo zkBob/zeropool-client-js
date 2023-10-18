@@ -16,6 +16,7 @@ const bs58 = require('bs58')
 
 const RETRY_COUNT = 5;
 const DEFAULT_ENERGY_FEE = 420;
+const DEFAULT_FEE_LIMIT = 100_000_000;
 const ZERO_ADDRESS = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
 
 export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcManagerDelegate {
@@ -292,6 +293,32 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return BigInt(res);
     }
 
+    private async prepareTransaction(
+        contractAddress: string,
+        selector: string,   // name(arg1_type,arg2_type,...)
+        parameters: {type: string, value: any}[],
+        nativeAmount: bigint = 0n,  // sun
+        feeLimit: number = DEFAULT_FEE_LIMIT,   // how many user's trx can be converted to energy
+    ): Promise<PreparedTransaction> {
+        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(contractAddress, selector, { feeLimit }, parameters);
+        const contract = tx?.transaction?.raw_data?.contract;
+        let txData: any | undefined;
+        if (Array.isArray(contract) && contract.length > 0) {
+            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
+        }
+
+        if (typeof txData !== 'string' || txData.length < 8) {
+            throw new InternalError(`Unable to extract tx (${selector.split('(')[0]}) calldata`);
+        }
+
+        return {
+            to: contractAddress,
+            amount: nativeAmount,
+            data: txData.slice(8),  // skip selector from the calldata
+            selector,
+        };
+    }
+
     public async createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction> {
         const selector = 'commitForcedExit(address,address,uint256,uint256,uint256,uint256,uint256[8])';
         const parameters = [
@@ -306,23 +333,8 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                                          forcedExit.tx_proof.c,
                                         ].flat(2)},
         ];
-        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(poolAddress, selector, { feeLimit: 100_000_000 }, parameters);
-        const contract = tx?.transaction?.raw_data?.contract;
-        let txData: any | undefined;
-        if (Array.isArray(contract) && contract.length > 0) {
-            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
-        }
-
-        if (typeof txData !== 'string' && txData.length < 8) {
-            throw new InternalError('Unable to extract tx (commitForcedExit) calldata');
-        }
-
-        return {
-            to: poolAddress,
-            amount: 0n,
-            data: txData.slice(8),  // skip selector from the calldata
-            selector,
-        };
+        
+        return this.prepareTransaction(poolAddress, selector, parameters);
     }
 
     public async committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined> {
@@ -344,23 +356,8 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             {type: 'uint256', value: forcedExit.exitEnd},
             {type: 'bool',    value: 0},
         ];
-        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(poolAddress, selector, { feeLimit: 100_000_000 }, parameters);
-        const contract = tx?.transaction?.raw_data?.contract;
-        let txData: any | undefined;
-        if (Array.isArray(contract) && contract.length > 0) {
-            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
-        }
-
-        if (typeof txData !== 'string' && txData.length < 8) {
-            throw new InternalError('Unable to extract tx (executeForcedExit) calldata');
-        }
-
-        return {
-            to: poolAddress,
-            amount: 0n,
-            data: txData.slice(8),  // skip selector from the calldata
-            selector,
-        };
+        
+        return this.prepareTransaction(poolAddress, selector, parameters);
     }
 
     public async createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
@@ -374,23 +371,8 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             {type: 'uint256', value: forcedExit.exitEnd},
             {type: 'bool',    value: 1},
         ];
-        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(poolAddress, selector, { feeLimit: 100_000_000 }, parameters);
-        const contract = tx?.transaction?.raw_data?.contract;
-        let txData: any | undefined;
-        if (Array.isArray(contract) && contract.length > 0) {
-            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
-        }
 
-        if (typeof txData !== 'string' && txData.length < 8) {
-            throw new InternalError('Unable to extract tx (executeForcedExit) calldata');
-        }
-
-        return {
-            to: poolAddress,
-            amount: 0n,
-            data: txData.slice(8),  // skip selector from the calldata
-            selector,
-        };
+        return this.prepareTransaction(poolAddress, selector, parameters);
     }
 
     public async getTokenSellerContract(poolAddress: string): Promise<string> {
@@ -448,23 +430,8 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             {type: 'uint256', value: amount},
             {type: 'bytes', value: zkAddrBytes}
         ];
-        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(ddQueueAddress, selector, { feeLimit: 100_000_000 }, parameters);
-        const contract = tx?.transaction?.raw_data?.contract;
-        let txData: any | undefined;
-        if (Array.isArray(contract) && contract.length > 0) {
-            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
-        }
-
-        if (typeof txData !== 'string' && txData.length < 8) {
-            throw new InternalError('Unable to extract DD calldata');
-        }
-
-        return {
-            to: ddQueueAddress,
-            amount: 0n,
-            data: txData.slice(8),  // skip selector from the calldata
-            selector,
-        };
+        
+        return this.prepareTransaction(ddQueueAddress, selector, parameters);
     }
 
     public async createNativeDirectDepositTx(

@@ -240,7 +240,7 @@ export class ZkBobSubgraph {
                 .then((data) => data.poolTxes)
                 .catch((err) => {
                     console.warn(`[Subgraph]: Cannot fetch txes from index ${i} (${err.message})`);
-                    return [];
+                    throw new InternalError(`Subgraph tx fetching error: ${err.message}`);
                 });
             }));
         }

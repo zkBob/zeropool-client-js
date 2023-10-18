@@ -98,12 +98,12 @@ export class ForcedExitProcessor {
 
       return ForcedExitState.NotStarted;
     } else {
-    // nullifier value doesn't equal zero: analyze ii
-    if ((nullifierValue & DEAD_SIG_MASK) == DEAD_SIGNATURE) {
-        return ForcedExitState.Completed;
-    }
+      // nullifier value doesn't equal zero: checking if account was already killed
+      if ((nullifierValue & DEAD_SIG_MASK) == DEAD_SIGNATURE) {
+          return ForcedExitState.Completed;
+      }
 
-    throw new InternalError('The nullifier is not last for that account');
+      throw new InternalError('The nullifier is not last for that account');
     }
   }
 
