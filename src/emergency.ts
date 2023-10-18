@@ -1,4 +1,4 @@
-import { Account, IWithdrawData, SnarkProof } from "libzkbob-rs-wasm-web";
+import { IWithdrawData, SnarkProof } from "libzkbob-rs-wasm-web";
 import { Pool } from "./config";
 import { L1TxState, NetworkBackend, PreparedTransaction } from "./networks";
 import { ZkBobState, ZERO_OPTIMISTIC_STATE } from "./state";

@@ -129,7 +129,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                 await contract.methods[methodName](...testParams).call()
                 isSupport = true;
             } catch (err) {
-                console.warn(`The token seems doesn't support \'${methodName}\' method`);
+                console.warn(`The contract seems doesn't support \'${methodName}\' method`);
                 isSupport = false;
             }
 
