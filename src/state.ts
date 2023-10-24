@@ -24,6 +24,7 @@ const CORRUPT_STATE_ROLLBACK_ATTEMPTS = 2; // number of state restore attempts (
 const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via wipe)
 const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
 const MIN_TX_COUNT_FOR_STAT = 100;
+const MIN_RESYNC_INTERVAL = 1000; // minimum interval between state resyncs (ms)
 
 export const ZERO_OPTIMISTIC_STATE: StateUpdate = {
   newLeafs: [],
@@ -98,6 +99,8 @@ export class ZkBobState {
   private updateStatePromise: Promise<boolean> | undefined;
   private syncStats: SyncStat[] = [];
   private skipColdStorage: boolean = false;
+  private lastSyncTimestamp: number = 0;  // it's need for frequent resyncs preventing
+  private lastSyncResult: boolean = true; // true: no own transactions in optimistic state during the last state sync
 
   // State self-healing
   private rollbackAttempts = 0;
@@ -344,6 +347,10 @@ export class ZkBobState {
     coldConfig?: ColdStorageConfig,
     coldBaseAddr?: string,
   ): Promise<boolean> {
+    // Skip sync if the last one was just finished
+    if (Date.now() < this.lastSyncTimestamp + MIN_RESYNC_INTERVAL) {
+      return this.lastSyncResult;
+    }
     this.lastSyncInfo = {txCount: 0, hotSyncCount: 0, processedTxCount: 0, startTimestamp: Date.now()}
     let startIndex = Number(await this.getNextIndex());
 
@@ -467,7 +474,6 @@ export class ZkBobState {
       this.history?.setLastMinedTxIndex(totalRes.maxMinedIndex);
       this.history?.setLastPendingTxIndex(totalRes.maxPendingIndex);
 
-
       const fullSyncTime = Date.now() - startSyncTime;
       const fullSyncTimePerTx = fullSyncTime / (coldResult.txCount + totalRes.txCount);
 
@@ -531,6 +537,9 @@ export class ZkBobState {
 
     // set finish sync timestamp
     this.lastSyncInfo.endTimestamp = Date.now();
+
+    this.lastSyncTimestamp = Date.now();
+    this.lastSyncResult = isReadyToTransact;
 
     return isReadyToTransact;
   }
