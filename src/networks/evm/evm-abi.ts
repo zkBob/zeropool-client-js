@@ -221,72 +221,15 @@ export const poolContractABI: AbiItem[] = [
         type: 'function'
     },
     {
-        inputs: [{
-            internalType: 'address',
-            name: '_user',
-            type: 'address',
-        }],
-        name: 'getLimitsFor',
+        inputs: [],
+        name: 'accounting',
         outputs: [{
-            components: [{
-                internalType: 'uint256',
-                name: 'tvlCap',
-                type: 'uint256',
-            }, {
-                internalType: 'uint256',
-                name: 'tvl',
-                type: 'uint256',
-            }, {
-                internalType: 'uint256',
-                name: 'dailyDepositCap',
-                type: 'uint256',
-            }, {
-                internalType: 'uint256',
-                name: 'dailyDepositCapUsage',
-                type: 'uint256',
-            }, {
-                internalType: 'uint256',
-                name: 'dailyWithdrawalCap',
-                type: 'uint256',
-            }, {
-                internalType: 'uint256',
-                name: 'dailyWithdrawalCapUsage',
-                type: 'uint256',
-            }, {
-                internalType: 'uint256',
-                name: 'dailyUserDepositCap',
-                type: 'uint256',
-            }, {
-                internalType: 'uint256',
-                name: 'dailyUserDepositCapUsage',
-                type: 'uint256',
-            }, {
-                internalType: 'uint256',
-                name: 'depositCap',
-                type: 'uint256',
-            }, {
-                internalType: 'uint8',
-                name: 'tier',
-                type: 'uint8',
-            }, {
-                internalType: 'uint256',
-                name: 'dailyUserDirectDepositCap',
-                type: 'uint256'
-            }, {
-                internalType: 'uint256',
-                name: 'dailyUserDirectDepositCapUsage',
-                type: 'uint256'
-            }, {
-                internalType: 'uint256',
-                name: 'directDepositCap',
-                type: 'uint256'
-            }],
-            internalType: 'struct ZkBobAccounting.Limits',
+            internalType: 'contract IZkBobAccounting',
             name: '',
-            type: 'tuple'
+            type: 'address'
         }],
         stateMutability: 'view',
-        type: 'function',
+        type: 'function'
     },
     {
         inputs: [],
@@ -681,5 +624,76 @@ export const ddContractABI: AbiItem[] = [
         }],
         name: 'RefundDirectDeposit',
         type: 'event'
+    },
+];
+
+export const accountingABI: AbiItem[] = [
+    {
+        inputs:[{
+            internalType: 'address',
+            name: '_user',
+            type: 'address'
+        }],
+        name: 'getLimitsFor',
+        outputs: [{
+            components: [{
+                internalType: 'uint256',
+                name: 'tvlCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'tvl',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyWithdrawalCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyWithdrawalCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'depositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint8',
+                name: 'tier',
+                type: 'uint8'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'directDepositCap',
+                type: 'uint256'
+            }],
+            internalType: 'struct IZkBobAccounting.Limits',
+            name: '',
+            type: 'tuple'
+        }],
+        stateMutability: 'view',
+        type: 'function'
     },
 ];

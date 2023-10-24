@@ -2,7 +2,7 @@ import { L1TxState, NetworkBackend, PreparedTransaction } from '..';
 import { InternalError, TxType } from '../../index';
 import { DDBatchTxDetails, DirectDeposit, DirectDepositState, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from '../../tx';
 import tokenAbi from './abi/usdt-abi.json';
-import { ddContractABI as ddAbi, poolContractABI as poolAbi} from '../evm/evm-abi';
+import { ddContractABI as ddAbi, poolContractABI as poolAbi, accountingABI} from '../evm/evm-abi';
 import { bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from '../evm/calldata';
 import { hexToBytes } from 'web3-utils';
@@ -26,6 +26,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     private tokenContracts = new Map<string, object>();  // tokenAddress -> contact object
     private poolContracts = new Map<string, object>();  // tokenAddress -> contact object
     private ddContracts = new Map<string, object>();  // tokenAddress -> contact object
+    private accountingContracts = new Map<string, object>();  // tokenAddress -> contact object
 
     // blockchain long-lived cached parameters
     private chainId: number | undefined = undefined;
@@ -34,6 +35,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     private tokenDecimals = new Map<string, number>();  // tokenAddress -> decimals
     private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolAddress -> ddQueueAddress
+    private accountingAddresses = new Map<string, string>();    // poolAddress -> accountingAddress
     private supportedMethods = new Map<string, boolean>(); // contractAddress+method => isSupport
 
     // ------------------------=========< Lifecycle >=========------------------------
@@ -73,6 +75,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             this.tokenContracts.clear();
             this.poolContracts.clear();
             this.ddContracts.clear();
+            this.accountingContracts.clear();
         }
     }
 
@@ -112,6 +115,20 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                 this.ddContracts.set(ddQueueAddress, contract);
             } else {
                 throw new Error(`Cannot initialize a contact object for the DD queue ${ddQueueAddress}`);
+            }
+        }
+
+        return contract;
+    }
+
+    protected async getAccountingContract(accountingAddress: string): Promise<any> {
+        let contract = this.accountingContracts.get(accountingAddress);
+        if (!contract) {
+            contract = await this.activeTronweb().contract(accountingABI, accountingAddress);
+            if (contract) {
+                this.ddContracts.set(accountingAddress, contract);
+            } else {
+                throw new Error(`Cannot initialize a contact object for the accounting ${accountingAddress}`);
             }
         }
 
@@ -271,8 +288,20 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
-        const pool = await this.getPoolContract(poolAddress);
-        return await this.contractCallRetry(pool, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
+        let accountingAddr = this.accountingAddresses.get(poolAddress);
+        if (!accountingAddr) {
+            const pool = await this.getPoolContract(poolAddress);
+            const rawAddr = await this.contractCallRetry(pool, 'accounting');
+            accountingAddr = TronWeb.address.fromHex(rawAddr);
+            if (accountingAddr) {
+                this.accountingAddresses.set(poolAddress, accountingAddr);
+            } else {
+                throw new InternalError(`Cannot fetch accounting contract address`);
+            }
+        }
+
+        const accounting = await this.getAccountingContract(accountingAddr);
+        return await this.contractCallRetry(accounting, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
     }
 
     public async isSupportForcedExit(poolAddress: string): Promise<boolean> {

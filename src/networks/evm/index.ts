@@ -3,7 +3,7 @@ import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
 import { NetworkBackend, PreparedTransaction, L1TxState} from '..';
 import { InternalError } from '../../errors';
-import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
+import { accountingABI, ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
 import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType, DirectDeposit, DirectDepositState } from '../../tx';
 import { addHexPrefix, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
@@ -31,10 +31,12 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     private pool?: Contract;
     private dd?: Contract;
     private token?: Contract;
+    private accounting?: Contract;
 
     // Local cache
     private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
+    private accountingAddresses = new Map<string, string>();    // poolContractAddress -> accountingContractAddress
     private supportedMethods = new Map<string, boolean>();      // (contractAddress + methodName) => isSupported
 
     // ------------------------=========< Lifecycle >=========------------------------
@@ -54,7 +56,8 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         return this.web3 !== undefined &&
                 this.pool !== undefined &&
                 this.dd !== undefined &&
-                this.token !== undefined;
+                this.token !== undefined &&
+                this.accounting !== undefined;
     }
 
     public setEnabled(enabled: boolean) {
@@ -64,12 +67,14 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                 this.pool = new this.web3.eth.Contract(poolContractABI) as unknown as Contract;
                 this.dd = new this.web3.eth.Contract(ddContractABI) as unknown as Contract;
                 this.token = new this.web3.eth.Contract(tokenABI) as unknown as Contract;
+                this.accounting = new this.web3.eth.Contract(accountingABI) as unknown as Contract;
             }
         } else {
             this.web3 = undefined;
             this.pool = undefined;
             this.dd = undefined;
             this.token = undefined;
+            this.accounting = undefined;
         }
     }
 
@@ -103,6 +108,14 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         }
 
         return this.token;
+    }
+
+    private accountingContract(): Contract {
+        if (!this.accounting) {
+            throw new InternalError(`EvmNetwork: accounting contract object is undefined`);
+        }
+
+        return this.accounting;
     }
 
     private contractCallRetry(contract: Contract, address: string, method: string, args: any[] = []): Promise<any> {
@@ -257,7 +270,17 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
-        return await this.contractCallRetry(this.poolContract(), poolAddress, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
+        let accountingAddress = this.accountingAddresses.get(poolAddress);
+        if (!accountingAddress) {
+            accountingAddress = await this.contractCallRetry(this.poolContract(), poolAddress, 'accounting');
+            if (accountingAddress) {
+                this.accountingAddresses.set(poolAddress, accountingAddress)
+            } else {
+                throw new InternalError(`Cannot retrieve accounting contract address for the pool ${poolAddress}`);
+            }
+        }
+
+        return await this.contractCallRetry(this.accountingContract(), accountingAddress, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
     }
 
     public async isSupportForcedExit(poolAddress: string): Promise<boolean> {
