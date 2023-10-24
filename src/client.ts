@@ -1,16 +1,14 @@
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx, Account } from 'libzkbob-rs-wasm-web';
 import { Chains, Pools, SnarkConfigParams, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
-import { truncateHexPrefix,
-          toTwosComplementHex, bufToHex, bigintToArrayLe
-        } from './utils';
+import { truncateHexPrefix, toTwosComplementHex, bigintToArrayLe } from './utils';
 import { SyncStat, ZkBobState, ZERO_OPTIMISTIC_STATE } from './state';
 import { DirectDeposit, RegularTxType, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
 import { 
-  InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
+  InternalError, PoolJobError, RelayerJobError, SignatureError, TxAccountDeadError, TxAccountLocked, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
 import { JobInfo, RelayerFee } from './services/relayer';
@@ -696,6 +694,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     await this.updateState();
+    await this.assertAccountCanTransact();
 
     // Fee estimating
     const usedFee = relayerFee ?? await this.getRelayerFee();
@@ -847,6 +846,8 @@ export class ZkBobClient extends ZkBobProvider {
     const ddQueueAddress = await processor.getQueueContract();
     const zkAddress = await this.generateAddress();
 
+    await this.assertAccountCanTransact();
+
     const limits = await this.getLimits(fromAddress);
     if (amount > limits.dd.total) {
       throw new TxLimitError(amount, limits.dd.total);
@@ -908,6 +909,8 @@ export class ZkBobClient extends ZkBobProvider {
         throw new TxSmallAmount(aTx.amountGwei, minTx);
       }
     }));
+
+    await this.assertAccountCanTransact();
 
     const usedFee = relayerFee ?? await this.getRelayerFee();
     const txParts = await this.getTransactionParts(RegularTxType.Transfer, transfers, usedFee);
@@ -981,6 +984,8 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxInvalidArgumentError('Please provide a valid non-zero address');
     }
     const addressBin = this.network().addressToBytes(address);
+
+    await this.assertAccountCanTransact();
 
     const supportedSwapAmount = await this.maxSupportedTokenSwap();
     if (swapAmount > supportedSwapAmount) {
@@ -1078,6 +1083,8 @@ export class ZkBobClient extends ZkBobProvider {
     if (giftCard.poolAlias != this.curPool) {
       throw new InternalError(`Cannot redeem gift card due to unsuitable pool (gift-card pool: ${giftCard.poolAlias}, current pool: ${this.curPool})`);
     }
+
+    await this.assertAccountCanTransact();
     
     const giftCardAcc: AccountConfig = {
         sk: giftCard.sk,
@@ -1141,6 +1148,19 @@ export class ZkBobClient extends ZkBobProvider {
 
     if (factLen != estimatedLen) {
       throw new InternalError(`Calldata length estimation error: est ${estimatedLen}, actual ${factLen} bytes`);
+    }
+  }
+
+  private async assertAccountCanTransact() {
+    if (await this.isAccountDead()) {
+      throw new TxAccountDeadError();
+    }
+
+    if (await this.isForcedExitSupported()) {
+      const committed = await this.activeForcedExit();
+      if (committed && committed.exitEnd * 1000 > Date.now()) {
+        throw new TxAccountLocked(new Date(committed.exitEnd * 1000));
+      }
     }
   }
 
