@@ -108,8 +108,14 @@ export class ForcedExitProcessor {
   }
 
   public async getActiveForcedExit(): Promise<CommittedForcedExit | undefined> {
-    if (!(await this.isAccountDead())) {
-      return this.network.committedForcedExit(this.poolAddress, BigInt(await this.getCurrentNullifier()))
+    const nullifier = BigInt(await this.getCurrentNullifier());
+    const [isDead, isCommitted] = await Promise.all([
+      this.isAccountDead(),
+      this.network.committedForcedExitHash(this.poolAddress, nullifier).then((hash) => hash != 0n)
+    ]);
+    
+    if (!isDead && isCommitted) {
+      return this.network.committedForcedExit(this.poolAddress, nullifier)
     }
 
     return undefined;

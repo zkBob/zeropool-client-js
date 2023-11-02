@@ -302,7 +302,7 @@ export class ZkBobClient extends ZkBobProvider {
         );
       this.zpStates[newPoolAlias] = state;
       this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state, this.subgraph());
-      this.feProcessor[newPoolAlias] = new ForcedExitProcessor(pool, network, state, this.subgraph())
+      this.feProcessors[newPoolAlias] = new ForcedExitProcessor(pool, network, state, this.subgraph())
 
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {
@@ -1152,11 +1152,11 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   private async assertAccountCanTransact() {
-    if (await this.isAccountDead()) {
-      throw new TxAccountDeadError();
-    }
-
     if (await this.isForcedExitSupported()) {
+      if (await this.isAccountDead()) {
+        throw new TxAccountDeadError();
+      }
+
       const committed = await this.activeForcedExit();
       if (committed && committed.exitEnd * 1000 > Date.now()) {
         throw new TxAccountLocked(new Date(committed.exitEnd * 1000));
@@ -1763,7 +1763,7 @@ export class ZkBobClient extends ZkBobProvider {
   // -------------------------------------------------------------------------
 
   protected feProcessor(): ForcedExitProcessor {
-    const proccessor = this.feProcessor[this.curPool];
+    const proccessor = this.feProcessors[this.curPool];
     if (!proccessor) {
         throw new InternalError(`No forced exit processor initialized for the pool ${this.curPool}`);
     }
