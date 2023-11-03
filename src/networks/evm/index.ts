@@ -19,6 +19,7 @@ import { CommittedForcedExit, FinalizedForcedExit, ForcedExitRequest } from '../
 
 const RETRY_COUNT = 10;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const ZERO_ADDRESS1 = '0x0000000000000000000000000000000000000001';
 
 export enum PoolSelector {
     Transact = "af989083",
@@ -270,17 +271,28 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
-        let accountingAddress = this.accountingAddresses.get(poolAddress);
-        if (!accountingAddress) {
-            accountingAddress = await this.contractCallRetry(this.poolContract(), poolAddress, 'accounting');
-            if (accountingAddress) {
-                this.accountingAddresses.set(poolAddress, accountingAddress)
-            } else {
-                throw new InternalError(`Cannot retrieve accounting contract address for the pool ${poolAddress}`);
+        let contract: Contract;
+        let contractAddress: string;
+        if (await this.isMethodSupportedByContract(this.poolContract(), poolAddress, 'accounting')) {
+            // Current contract deployments (getLimitsFor implemented in the separated ZkBobAccounting contract)
+            let accountingAddress = this.accountingAddresses.get(poolAddress);
+            if (!accountingAddress) {
+                accountingAddress = await this.contractCallRetry(this.poolContract(), poolAddress, 'accounting');
+                if (accountingAddress) {
+                    this.accountingAddresses.set(poolAddress, accountingAddress)
+                } else {
+                    throw new InternalError(`Cannot retrieve accounting contract address for the pool ${poolAddress}`);
+                }
             }
+            contract = this.accountingContract();
+            contractAddress = accountingAddress;
+        } else {
+            // Fallback for the old deployments (getLimitsFor implemented in pool contract)
+            contract = this.poolContract();
+            contractAddress = poolAddress;
         }
 
-        return await this.contractCallRetry(this.accountingContract(), accountingAddress, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
+        return await this.contractCallRetry(contract, contractAddress, 'getLimitsFor', [address ?? ZERO_ADDRESS1]);
     }
 
     public async isSupportForcedExit(poolAddress: string): Promise<boolean> {

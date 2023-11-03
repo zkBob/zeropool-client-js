@@ -94,7 +94,7 @@ enum SupportedNetwork {
 }
 
 function networkType(chainId: number): SupportedNetwork | undefined {
-    if ([0x2b6653dc, 0x94a9059e].includes(chainId)) {
+    if ([0x2b6653dc, 0x94a9059e, 0xcd8690dc].includes(chainId)) {
         return SupportedNetwork.TronNetwork;
     } else if ([1, 137, 10, 11155111, 5, 420, 1337, 31337].includes(chainId)) {
         return SupportedNetwork.EvmNetwork;

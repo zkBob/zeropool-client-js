@@ -288,20 +288,28 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
-        let accountingAddr = this.accountingAddresses.get(poolAddress);
-        if (!accountingAddr) {
-            const pool = await this.getPoolContract(poolAddress);
-            const rawAddr = await this.contractCallRetry(pool, 'accounting');
-            accountingAddr = TronWeb.address.fromHex(rawAddr);
-            if (accountingAddr) {
-                this.accountingAddresses.set(poolAddress, accountingAddr);
-            } else {
-                throw new InternalError(`Cannot fetch accounting contract address`);
+        let contract: any;
+        if (await this.isMethodSupportedByContract(poolAddress, 'accounting')) {
+            // Current contract deployments (getLimitsFor implemented in the separated ZkBobAccounting contract)
+            let accountingAddr = this.accountingAddresses.get(poolAddress);
+            if (!accountingAddr) {
+                const pool = await this.getPoolContract(poolAddress);
+                const rawAddr = await this.contractCallRetry(pool, 'accounting');
+                accountingAddr = TronWeb.address.fromHex(rawAddr);
+                if (accountingAddr) {
+                    this.accountingAddresses.set(poolAddress, accountingAddr);
+                } else {
+                    throw new InternalError(`Cannot fetch accounting contract address`);
+                }
             }
+
+            contract = await this.getAccountingContract(accountingAddr);
+        } else {
+            // Fallback for the old deployments (getLimitsFor implemented in pool contract)
+            contract = await this.getPoolContract(poolAddress);
         }
 
-        const accounting = await this.getAccountingContract(accountingAddr);
-        return await this.contractCallRetry(accounting, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
+        return await this.contractCallRetry(contract, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
     }
 
     public async isSupportForcedExit(poolAddress: string): Promise<boolean> {

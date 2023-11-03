@@ -221,6 +221,74 @@ export const poolContractABI: AbiItem[] = [
         type: 'function'
     },
     {
+        inputs:[{
+            internalType: 'address',
+            name: '_user',
+            type: 'address'
+        }],
+        name: 'getLimitsFor',
+        outputs: [{
+            components: [{
+                internalType: 'uint256',
+                name: 'tvlCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'tvl',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyWithdrawalCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyWithdrawalCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'depositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint8',
+                name: 'tier',
+                type: 'uint8'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'directDepositCap',
+                type: 'uint256'
+            }],
+            internalType: 'struct IZkBobAccounting.Limits',
+            name: '',
+            type: 'tuple'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    },
+    {
         inputs: [],
         name: 'accounting',
         outputs: [{

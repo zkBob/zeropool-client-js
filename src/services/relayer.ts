@@ -296,7 +296,7 @@ export class ZkBobRelayer implements IZkBobService {
   
   public async limits(address: string | undefined): Promise<LimitsFetch> {
     const url = new URL('/limits', this.url());
-    if (address !== undefined) {
+    if (address) {
       url.searchParams.set('address', address);
     }
     const headers = defaultHeaders(this.supportId);
