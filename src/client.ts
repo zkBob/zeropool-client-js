@@ -1,5 +1,5 @@
 import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
-import { Chains, Pools, SnarkConfigParams, ClientConfig,
+import { Chains, Pools, Parameters, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
 import { truncateHexPrefix,
           toTwosComplementHex, bufToHex, bigintToArrayLe
@@ -32,6 +32,8 @@ const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx p
 
 const CONTINUOUS_STATE_UPD_INTERVAL = 200; // updating client's state timer interval for continuous states (in ms)
 const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous after that interval (in ms)
+
+const GLOBAL_PARAMS_NAME = '__globalParams';
 
 const PROVIDER_SYNC_TIMEOUT = 60;  // maximum time to sync network backend by blockNumber (in seconds)
 
@@ -98,7 +100,6 @@ export class ZkBobClient extends ZkBobProvider {
   // Direct deposit processors are used to create DD and fetch DD pending txs
   private ddProcessors: { [poolAlias: string]: DirectDepositProcessor } = {};
   // The single worker for the all pools
-  // Currently we assume parameters are the same for the all pools
   private worker: any;
   // Performance estimation (msec per tx)
   private wasmSpeed: number | undefined;
@@ -152,28 +153,34 @@ export class ZkBobClient extends ZkBobProvider {
     this.statDb = statDb;
   }
 
-  private async workerInit(
-    snarkParams: SnarkConfigParams,
-    forcedMultithreading: boolean | undefined = undefined, // specify this parameter to override multithreading autoselection
-  ): Promise<Worker> {
-    // Get tx parameters hash from the relayer
-    // to check local params consistence
-    let txParamsHash: string | undefined = undefined;
-    try {
-      txParamsHash = await this.relayer().txParamsHash();
-    } catch (err) {
-      console.warn(`Cannot fetch tx parameters hash from the relayer (${err.message})`);
+  private async workerInit(config: ClientConfig): Promise<Worker> {
+    // collecting SNARK params config (only used)
+    const allParamsSet: Parameters = {};
+    const usedParams: string[] = Object.keys(config.pools)
+      .map((aPool) => config.pools[aPool].parameters ?? GLOBAL_PARAMS_NAME)
+      .filter((val, idx, arr) => arr.indexOf(val) === idx); // only unique values
+    usedParams.forEach((val) => {
+      if (val != GLOBAL_PARAMS_NAME) {
+        if (config.snarkParamsSet && config.snarkParamsSet[val]) {
+          allParamsSet[val] = config.snarkParamsSet[val];
+        } else {
+          throw new InternalError(`Cannot find SNARK parameters \'${val}\' in the client config (check snarkParamsSet)`);
+        }
+      } else {
+        if (config.snarkParams) {
+          allParamsSet[GLOBAL_PARAMS_NAME] = config.snarkParams;
+        } else {
+          throw new InternalError(`Not all pools have assigned SNARK parameters (check snarkParams in client config)`);
+        }
+      }
+    });
+    if (usedParams.length > 1) {
+      console.log(`The following SNARK parameters are supported: ${usedParams.join(', ')}`);
     }
-  
+
     let worker: any;
-  
     worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
-      await worker.initWasm(
-        snarkParams.transferParamsUrl,
-        txParamsHash, 
-        snarkParams.transferVkUrl,
-        forcedMultithreading
-      );
+    await worker.initWasm(allParamsSet, config.forcedMultithreading);
   
     return worker;
   }
@@ -198,7 +205,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "", callback, commonDb);
 
-    const worker = await client.workerInit(config.snarkParams);
+    const worker = await client.workerInit(config);
 
     client.zpStates = {};
     client.worker = worker;
@@ -232,11 +239,6 @@ export class ZkBobClient extends ZkBobProvider {
   public async login(account: AccountConfig) {
     this.account = account;
     await this.switchToPool(account.pool, account.birthindex);
-    try {
-      await this.setProverMode(this.account.proverMode);
-    } catch (err) {
-      console.error(err);
-    }
   }
 
   public async logout() {
@@ -301,6 +303,12 @@ export class ZkBobClient extends ZkBobProvider {
       this.zpStates[newPoolAlias] = state;
       this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state, this.subgraph());
 
+      try {
+        await this.setProverMode(this.account.proverMode);
+      } catch (err) {
+        console.error(err);
+      }
+
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {
       console.log(`Pool was switched to ${newPoolAlias} but account is not set yet`);
@@ -321,6 +329,11 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     return this.zpStates[requestedPool];
+  }
+
+  private snarkParamsAlias(): string {
+    const pool = this.pool();
+    return pool.parameters ?? GLOBAL_PARAMS_NAME;
   }
 
   // ------------------=========< Balances and History >=========-------------------
@@ -1396,10 +1409,13 @@ export class ZkBobClient extends ZkBobProvider {
   // | Local and delegated prover support                                       |
   // ----------------------------------------------------------------------------
   public async setProverMode(mode: ProverMode) {
-    if (mode != ProverMode.Delegated) {
-        this.worker.loadTxParams();
-    }
-    await super.setProverMode(mode);
+    await super.setProverMode(mode).finally(async () => {
+      // The invoked setProverMode method doesn't ensure the requested mode will set
+      if (this.getProverMode() != ProverMode.Delegated) {
+        const relayerParamsHash = await this.relayer().txParamsHash().catch(() => undefined);
+        this.worker.loadTxParams(this.snarkParamsAlias(), relayerParamsHash);
+      }
+    });
   }
 
   // Universal proving routine
@@ -1411,7 +1427,7 @@ export class ZkBobClient extends ZkBobProvider {
       try {
         const proof = await prover.proveTx(pub, sec);
         const inputs = Object.values(pub);
-        const txValid = await this.worker.verifyTxProof(inputs, proof);
+        const txValid = await this.worker.verifyTxProof(this.snarkParamsAlias(), inputs, proof);
         if (!txValid) {
           throw new TxProofError();
         }
@@ -1426,8 +1442,8 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }
 
-    const txProof = await this.worker.proveTx(pub, sec);
-    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+    const txProof = await this.worker.proveTx(this.snarkParamsAlias(), pub, sec);
+    const txValid = await this.worker.verifyTxProof(this.snarkParamsAlias(), txProof.inputs, txProof.proof);
     if (!txValid) {
       throw new TxProofError();
     }
