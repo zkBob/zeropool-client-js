@@ -6,9 +6,10 @@ import { IDepositData, IDepositPermittableData, ITransferData, IWithdrawData,
         } from 'libzkbob-rs-wasm-web';
 import { threads } from 'wasm-feature-detect';
 import { SnarkParams } from './params';
+import { Parameters } from './config';
 import { InternalError } from './errors';
 
-let txParams: SnarkParams;
+let txParams: { [name: string]: SnarkParams } = {};
 let txParser: any;
 let zpAccounts: { [accountId: string]: any } = {};
 
@@ -16,9 +17,7 @@ let wasm: any;
 
 const obj = {
   async initWasm(
-    txParamsUrl: string,
-    txParamsHash: string | undefined = undefined,  // skip hash checking when undefined
-    txVkUrl: string,
+    params: Parameters,
     forcedMultithreading: boolean | undefined = undefined,
   ) {
     console.info('Initializing web worker...');
@@ -39,25 +38,50 @@ const obj = {
       await wasm.default()
     }
 
-    txParams = new SnarkParams(txParamsUrl, txVkUrl, txParamsHash);
-    // VK is always needed to transact, so initiate its loading right now
-    txParams.getVk().catch((err) => {
-      console.warn(`Unable to fetch tx verification key (don't worry, it will refetched when needed): ${err.message}`);
-    });
+
+    // Initialize parameters
+    for (const [name, par] of Object.entries(params)) {
+      const snarkParams = new SnarkParams(par);
+      // VK is always needed to transact, so initiate its loading right now
+      snarkParams.getVk().catch((err) => {
+        console.warn(`Unable to fetch tx verification key (don't worry, it will refetched when needed): ${err.message}`);
+      });
+      txParams[name] = snarkParams;
+    }
 
     txParser = wasm.TxParser._new()
 
     console.info('Web worker init complete.');
   },
 
-  async loadTxParams() {
-    txParams.getParams(wasm);
+  async loadTxParams(paramsName: string, expectedHash?: string) {
+    const params = txParams[paramsName];
+    if (params === undefined) {
+      throw new InternalError(`Cannot find snark parameters set \'${paramsName}\'`);
+    }
+
+    params.getParams(wasm, expectedHash);
   },
 
-  async proveTx(pub, sec) {
+  async proveTx(paramsName: string, pub, sec) {
+    const params = txParams[paramsName];
+    if (params === undefined) {
+      throw new InternalError(`Cannot find snark parameters set \'${paramsName}\'`);
+    }
+
     console.debug('Web worker: proveTx');
-    let params = await txParams.getParams(wasm);
-    return wasm.Proof.tx(params, pub, sec);
+    let snarkParams = await params.getParams(wasm);
+    return wasm.Proof.tx(snarkParams, pub, sec);
+  },
+
+  async verifyTxProof(paramsName: string, inputs: string[], proof: SnarkProof): Promise<boolean> {
+    const params = txParams[paramsName];
+    if (params === undefined) {
+      throw new InternalError(`Cannot find snark parameters set \'${paramsName}\'`);
+    }
+
+    const vk = await params.getVk();  // will throw error if VK fetch fail
+    return wasm.Proof.verify(vk, inputs, proof);
   },
 
   async parseTxs(sk: Uint8Array, txs: IndexedTx[]): Promise<ParseTxsResult> {
@@ -191,11 +215,6 @@ const obj = {
     return zpAccounts[accountId].updateStateColdStorage(bulks, indexFrom, indexTo);
   },
 
-  async verifyTxProof(inputs: string[], proof: SnarkProof): Promise<boolean> {
-    const vk = await txParams.getVk();  // will throw error if VK fetch fail
-    return wasm.Proof.verify(vk, inputs, proof);
-  },
-
   async generateAddress(accountId: string): Promise<string> {
     return zpAccounts[accountId].generateAddress();
   },
@@ -226,7 +245,12 @@ const obj = {
 
   async parseAddress(accountId: string, shieldedAddress: string): Promise<IAddressComponents> {
     return zpAccounts[accountId].parseAddress(shieldedAddress);
+  },
+
+  async accountNullifier(accountId: string): Promise<string> {
+    return zpAccounts[accountId].accountNullifier();
   }
+
 };
 
 expose(obj);

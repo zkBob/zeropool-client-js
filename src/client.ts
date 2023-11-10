@@ -1,16 +1,14 @@
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
-import { Chains, Pools, SnarkConfigParams, ClientConfig,
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx, Account } from 'libzkbob-rs-wasm-web';
+import { Chains, Pools, Parameters, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
-import { truncateHexPrefix,
-          toTwosComplementHex, bufToHex, bigintToArrayLe
-        } from './utils';
-import { SyncStat, ZkBobState } from './state';
+import { truncateHexPrefix, toTwosComplementHex, bigintToArrayLe } from './utils';
+import { SyncStat, ZkBobState, ZERO_OPTIMISTIC_STATE } from './state';
 import { DirectDeposit, RegularTxType, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
 import { 
-  InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
+  InternalError, PoolJobError, RelayerJobError, SignatureError, TxAccountDeadError, TxAccountLocked, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
 import { JobInfo, RelayerFee } from './services/relayer';
@@ -19,6 +17,7 @@ import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
 import { PERMIT2_CONTRACT } from './signers/permit2-signer';
 import { DirectDepositProcessor, DirectDepositType } from './dd';
+import { ForcedExitProcessor, ForcedExitState, CommittedForcedExit, FinalizedForcedExit } from './emergency';
 
 import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks';
@@ -32,6 +31,8 @@ const PERMIT_DEADLINE_THRESHOLD = 300;   // minimum time to deadline before tx p
 
 const CONTINUOUS_STATE_UPD_INTERVAL = 200; // updating client's state timer interval for continuous states (in ms)
 const CONTINUOUS_STATE_THRESHOLD = 1000;  // the state considering continuous after that interval (in ms)
+
+const GLOBAL_PARAMS_NAME = '__globalParams';
 
 const PROVIDER_SYNC_TIMEOUT = 60;  // maximum time to sync network backend by blockNumber (in seconds)
 
@@ -97,8 +98,10 @@ export class ZkBobClient extends ZkBobProvider {
   private auxZpStates: { [id: string]: ZkBobState } = {};
   // Direct deposit processors are used to create DD and fetch DD pending txs
   private ddProcessors: { [poolAlias: string]: DirectDepositProcessor } = {};
+  // Forced exit processors are used to withdraw funds emergency from the pool
+  // and deactivate the account
+  private feProcessors: { [poolAlias: string]: ForcedExitProcessor } = {};
   // The single worker for the all pools
-  // Currently we assume parameters are the same for the all pools
   private worker: any;
   // Performance estimation (msec per tx)
   private wasmSpeed: number | undefined;
@@ -152,28 +155,34 @@ export class ZkBobClient extends ZkBobProvider {
     this.statDb = statDb;
   }
 
-  private async workerInit(
-    snarkParams: SnarkConfigParams,
-    forcedMultithreading: boolean | undefined = undefined, // specify this parameter to override multithreading autoselection
-  ): Promise<Worker> {
-    // Get tx parameters hash from the relayer
-    // to check local params consistence
-    let txParamsHash: string | undefined = undefined;
-    try {
-      txParamsHash = await this.relayer().txParamsHash();
-    } catch (err) {
-      console.warn(`Cannot fetch tx parameters hash from the relayer (${err.message})`);
+  private async workerInit(config: ClientConfig): Promise<Worker> {
+    // collecting SNARK params config (only used)
+    const allParamsSet: Parameters = {};
+    const usedParams: string[] = Object.keys(config.pools)
+      .map((aPool) => config.pools[aPool].parameters ?? GLOBAL_PARAMS_NAME)
+      .filter((val, idx, arr) => arr.indexOf(val) === idx); // only unique values
+    usedParams.forEach((val) => {
+      if (val != GLOBAL_PARAMS_NAME) {
+        if (config.snarkParamsSet && config.snarkParamsSet[val]) {
+          allParamsSet[val] = config.snarkParamsSet[val];
+        } else {
+          throw new InternalError(`Cannot find SNARK parameters \'${val}\' in the client config (check snarkParamsSet)`);
+        }
+      } else {
+        if (config.snarkParams) {
+          allParamsSet[GLOBAL_PARAMS_NAME] = config.snarkParams;
+        } else {
+          throw new InternalError(`Not all pools have assigned SNARK parameters (check snarkParams in client config)`);
+        }
+      }
+    });
+    if (usedParams.length > 1) {
+      console.log(`The following SNARK parameters are supported: ${usedParams.join(', ')}`);
     }
-  
+
     let worker: any;
-  
     worker = wrap(new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
-      await worker.initWasm(
-        snarkParams.transferParamsUrl,
-        txParamsHash, 
-        snarkParams.transferVkUrl,
-        forcedMultithreading
-      );
+    await worker.initWasm(allParamsSet, config.forcedMultithreading);
   
     return worker;
   }
@@ -198,7 +207,7 @@ export class ZkBobClient extends ZkBobProvider {
     
     const client = new ZkBobClient(config.pools, config.chains, activePoolAlias, config.supportId ?? "", callback, commonDb);
 
-    const worker = await client.workerInit(config.snarkParams);
+    const worker = await client.workerInit(config);
 
     client.zpStates = {};
     client.worker = worker;
@@ -232,11 +241,6 @@ export class ZkBobClient extends ZkBobProvider {
   public async login(account: AccountConfig) {
     this.account = account;
     await this.switchToPool(account.pool, account.birthindex);
-    try {
-      await this.setProverMode(this.account.proverMode);
-    } catch (err) {
-      console.error(err);
-    }
   }
 
   public async logout() {
@@ -300,6 +304,13 @@ export class ZkBobClient extends ZkBobProvider {
         );
       this.zpStates[newPoolAlias] = state;
       this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state, this.subgraph());
+      this.feProcessors[newPoolAlias] = new ForcedExitProcessor(pool, network, state, this.subgraph())
+
+      try {
+        await this.setProverMode(this.account.proverMode);
+      } catch (err) {
+        console.error(err);
+      }
 
       console.log(`Pool and user account was switched to ${newPoolAlias} successfully`);
     } else {
@@ -321,6 +332,11 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     return this.zpStates[requestedPool];
+  }
+
+  private snarkParamsAlias(): string {
+    const pool = this.pool();
+    return pool.parameters ?? GLOBAL_PARAMS_NAME;
   }
 
   // ------------------=========< Balances and History >=========-------------------
@@ -420,7 +436,7 @@ export class ZkBobClient extends ZkBobProvider {
     const relayer = this.relayer();
     const readyToTransact = await giftCardState.updateState(
       relayer,
-      async (index) => (await this.getPoolState(index)).root,
+      async (index) => this.getPoolState(index),
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );
@@ -691,6 +707,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     await this.updateState();
+    await this.assertAccountCanTransact();
 
     // Fee estimating
     const usedFee = relayerFee ?? await this.getRelayerFee();
@@ -842,6 +859,8 @@ export class ZkBobClient extends ZkBobProvider {
     const ddQueueAddress = await processor.getQueueContract();
     const zkAddress = await this.generateAddress();
 
+    await this.assertAccountCanTransact();
+
     const limits = await this.getLimits(fromAddress);
     if (amount > limits.dd.total) {
       throw new TxLimitError(amount, limits.dd.total);
@@ -904,6 +923,8 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }));
 
+    await this.assertAccountCanTransact();
+
     const usedFee = relayerFee ?? await this.getRelayerFee();
     const txParts = await this.getTransactionParts(RegularTxType.Transfer, transfers, usedFee);
 
@@ -916,7 +937,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     let jobsIds: string[] = [];
-    let optimisticState = this.zeroOptimisticState();
+    let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       const outputs = onePart.outNotes.map((aNote) => { return {to: aNote.destination, amount: `${aNote.amountGwei}`} });
@@ -963,17 +984,6 @@ export class ZkBobClient extends ZkBobProvider {
     return jobsIds;
   }
 
-  private zeroOptimisticState(): StateUpdate {
-    const optimisticState: StateUpdate = {
-      newLeafs: [],
-      newCommitments: [],
-      newAccounts: [],
-      newNotes: [],
-    }
-
-    return optimisticState;
-  }
-
   // Withdraw shielded funds to the specified native chain address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // relayerFee - fee from the relayer (request one if undefined)
@@ -987,6 +997,8 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxInvalidArgumentError('Please provide a valid non-zero address');
     }
     const addressBin = this.network().addressToBytes(address);
+
+    await this.assertAccountCanTransact();
 
     const supportedSwapAmount = await this.maxSupportedTokenSwap();
     if (swapAmount > supportedSwapAmount) {
@@ -1013,7 +1025,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     let jobsIds: string[] = [];
-    let optimisticState = this.zeroOptimisticState();
+    let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       
@@ -1084,6 +1096,8 @@ export class ZkBobClient extends ZkBobProvider {
     if (giftCard.poolAlias != this.curPool) {
       throw new InternalError(`Cannot redeem gift card due to unsuitable pool (gift-card pool: ${giftCard.poolAlias}, current pool: ${this.curPool})`);
     }
+
+    await this.assertAccountCanTransact();
     
     const giftCardAcc: AccountConfig = {
         sk: giftCard.sk,
@@ -1113,7 +1127,7 @@ export class ZkBobClient extends ZkBobProvider {
       fee: actualFee.toString(),
     };
     const giftCardState = this.auxZpStates[accId];
-    const txData = await giftCardState.createTransferOptimistic(oneTx, this.zeroOptimisticState());
+    const txData = await giftCardState.createTransferOptimistic(oneTx, ZERO_OPTIMISTIC_STATE);
 
     const startProofDate = Date.now();
     const txProof: Proof = await this.proveTx(txData.public, txData.secret, giftCardAcc.proverMode);
@@ -1147,6 +1161,19 @@ export class ZkBobClient extends ZkBobProvider {
 
     if (factLen != estimatedLen) {
       throw new InternalError(`Calldata length estimation error: est ${estimatedLen}, actual ${factLen} bytes`);
+    }
+  }
+
+  private async assertAccountCanTransact() {
+    if (await this.isForcedExitSupported()) {
+      if (await this.isAccountDead()) {
+        throw new TxAccountDeadError();
+      }
+
+      const committed = await this.activeForcedExit();
+      if (committed && committed.exitEnd * 1000 > Date.now()) {
+        throw new TxAccountLocked(new Date(committed.exitEnd * 1000));
+      }
     }
   }
 
@@ -1396,10 +1423,13 @@ export class ZkBobClient extends ZkBobProvider {
   // | Local and delegated prover support                                       |
   // ----------------------------------------------------------------------------
   public async setProverMode(mode: ProverMode) {
-    if (mode != ProverMode.Delegated) {
-        this.worker.loadTxParams();
-    }
-    await super.setProverMode(mode);
+    await super.setProverMode(mode).finally(async () => {
+      // The invoked setProverMode method doesn't ensure the requested mode will set
+      if (this.getProverMode() != ProverMode.Delegated) {
+        const relayerParamsHash = await this.relayer().txParamsHash().catch(() => undefined);
+        this.worker.loadTxParams(this.snarkParamsAlias(), relayerParamsHash);
+      }
+    });
   }
 
   // Universal proving routine
@@ -1411,7 +1441,7 @@ export class ZkBobClient extends ZkBobProvider {
       try {
         const proof = await prover.proveTx(pub, sec);
         const inputs = Object.values(pub);
-        const txValid = await this.worker.verifyTxProof(inputs, proof);
+        const txValid = await this.worker.verifyTxProof(this.snarkParamsAlias(), inputs, proof);
         if (!txValid) {
           throw new TxProofError();
         }
@@ -1426,11 +1456,12 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }
 
-    const txProof = await this.worker.proveTx(pub, sec);
-    const txValid = await this.worker.verifyTxProof(txProof.inputs, txProof.proof);
+    const txProof = await this.worker.proveTx(this.snarkParamsAlias(), pub, sec);
+    const txValid = await this.worker.verifyTxProof(this.snarkParamsAlias(), txProof.inputs, txProof.proof);
     if (!txValid) {
       throw new TxProofError();
     }
+
     return txProof;
   }
 
@@ -1556,7 +1587,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     noOwnTxsInOptimisticState = await this.zpState().updateState(
       this.relayer(),
-      async (index) => (await this.getPoolState(index)).root,
+      async (index) => this.getPoolState(index),
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );
@@ -1717,7 +1748,7 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   // ------------------=========< Direct Deposits >=========------------------
-  // | Calculating sync time                                                 |
+  // | Direct deposit srvice routines                                        |
   // -------------------------------------------------------------------------
 
   protected ddProcessor(): DirectDepositProcessor {
@@ -1742,5 +1773,83 @@ export class ZkBobClient extends ZkBobProvider {
       return this.network().getDirectDepositFee(ddQueueAddr);
     }
   }
-  
+
+  // --------------------=========< Forced Exit >=========--------------------
+  // | Emergency withdrawing funds (direct contract interaction)             |
+  // -------------------------------------------------------------------------
+
+  protected feProcessor(): ForcedExitProcessor {
+    const proccessor = this.feProcessors[this.curPool];
+    if (!proccessor) {
+        throw new InternalError(`No forced exit processor initialized for the pool ${this.curPool}`);
+    }
+
+    return proccessor;
+  }
+
+  protected async updateStateWithFallback(): Promise<boolean> {
+    return this.updateState().catch((err) => { // try to sync state (we must have the actual last nullifier)
+      console.warn(`Unable to sync state (${err.message}). The last nullifier may be invalid`);
+      // TODO: sync with the pool contract directly
+      return false;
+    });
+  }
+
+  // This routine available regardless forced exit support
+  public async isAccountDead(): Promise<boolean> {
+    await this.updateStateWithFallback();
+    return await this.feProcessor().isAccountDead();
+  }
+
+  // Checking is FE available for the current pool
+  public async isForcedExitSupported(): Promise<boolean> {
+    return await this.feProcessor().isForcedExitSupported();
+  }
+  // The following forced exit related routines should called only if forced exit supported
+
+  public async forcedExitState(): Promise<ForcedExitState> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().forcedExitState();
+  }
+
+  public async activeForcedExit(): Promise<CommittedForcedExit | undefined> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().getActiveForcedExit();
+  }
+
+  // Returns only executed (not cancelled) exit
+  // (because cancelled events cannot be located efficiently due to nullifier updates)
+  public async executedForcedExit(): Promise<FinalizedForcedExit | undefined> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().getExecutedForcedExit();
+  }
+
+  public async availableFundsToForcedExit(): Promise<bigint> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().availableFundsToForcedExit();
+  }
+
+  public async requestForcedExit(
+    executerAddress: string, // who will send emergency exit execute transaction
+    toAddress: string,     // which address should receive funds
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>  // callback to send transaction 
+  ): Promise<CommittedForcedExit> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().requestForcedExit(
+      executerAddress,
+      toAddress,
+      sendTxCallback,
+      (pub: any, sec: any) => this.proveTx(pub, sec)
+    );
+  }
+
+  public async executeForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<FinalizedForcedExit> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().executeForcedExit(sendTxCallback);
+  }
+
+  public async cancelForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<FinalizedForcedExit> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().cancelForcedExit(sendTxCallback);
+  }
 }

@@ -15,8 +15,7 @@ import { ZkBobRelayer } from './services/relayer';
 import { CONSTANTS } from './constants';
 import { NetworkBackend } from './networks';
 import { ZkBobSubgraph } from './subgraph';
-
-const LOG_STATE_HOTSYNC = false;
+import { TreeState } from './client-provider';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const BATCH_SIZE = 1000;  // number of transactions per request during a sync state
@@ -25,6 +24,14 @@ const CORRUPT_STATE_ROLLBACK_ATTEMPTS = 2; // number of state restore attempts (
 const CORRUPT_STATE_WIPE_ATTEMPTS = 5; // number of state restore attempts (via wipe)
 const COLD_STORAGE_USAGE_THRESHOLD = 1000;  // minimum number of txs to cold storage using
 const MIN_TX_COUNT_FOR_STAT = 100;
+const MIN_RESYNC_INTERVAL = 1000; // minimum interval between state resyncs (ms)
+
+export const ZERO_OPTIMISTIC_STATE: StateUpdate = {
+  newLeafs: [],
+  newCommitments: [],
+  newAccounts: [],
+  newNotes: [],
+}
 
 
 export interface BatchResult {
@@ -84,6 +91,7 @@ export class ZkBobState {
   public stateId: string; // should depends on pool and sk
   private sk: Uint8Array;
   private network: NetworkBackend;
+  private subgraph?: ZkBobSubgraph;
   private birthIndex?: number;
   public history?: HistoryStorage; // should work synchronically with the state
   private ephemeralAddrPool?: EphemeralPool; // depends on sk so we placed it here
@@ -91,6 +99,8 @@ export class ZkBobState {
   private updateStatePromise: Promise<boolean> | undefined;
   private syncStats: SyncStat[] = [];
   private skipColdStorage: boolean = false;
+  private lastSyncTimestamp: number = 0;  // it's need for frequent resyncs preventing
+  private lastSyncResult: boolean = true; // true: no own transactions in optimistic state during the last state sync
 
   // State self-healing
   private rollbackAttempts = 0;
@@ -120,6 +130,7 @@ export class ZkBobState {
     const zpState = new ZkBobState();
     zpState.sk = new Uint8Array(sk);
     zpState.network = network;
+    zpState.subgraph = subgraph;
     zpState.birthIndex = birthIndex;
     
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
@@ -314,12 +325,12 @@ export class ZkBobState {
 
   public async updateState(
     relayer: ZkBobRelayer,
-    getPoolRoot: (index: bigint) => Promise<bigint>,
+    getPoolState: (index?: bigint) => Promise<TreeState>,
     coldConfig?: ColdStorageConfig,
     coldBaseAddr?: string,
   ): Promise<boolean> {
     if (this.updateStatePromise == undefined) {
-      this.updateStatePromise = this.updateStateOptimisticWorker(relayer, getPoolRoot, coldConfig, coldBaseAddr).finally(() => {
+      this.updateStatePromise = this.updateStateOptimisticWorker(relayer, getPoolState, coldConfig, coldBaseAddr).finally(() => {
         this.updateStatePromise = undefined;
       });
     } else {
@@ -332,14 +343,27 @@ export class ZkBobState {
   // returns is ready to transact
   private async updateStateOptimisticWorker(
     relayer: ZkBobRelayer,
-    getPoolRoot: (index: bigint) => Promise<bigint>,
+    getPoolState: (index?: bigint) => Promise<TreeState>,
     coldConfig?: ColdStorageConfig,
     coldBaseAddr?: string,
   ): Promise<boolean> {
+    // Skip sync if the last one was just finished
+    if (Date.now() < this.lastSyncTimestamp + MIN_RESYNC_INTERVAL) {
+      return this.lastSyncResult;
+    }
     this.lastSyncInfo = {txCount: 0, hotSyncCount: 0, processedTxCount: 0, startTimestamp: Date.now()}
     let startIndex = Number(await this.getNextIndex());
 
-    const stateInfo = await relayer.info();
+    const stateInfo = await relayer.info().catch(async (err) => {
+      console.warn(`Cannot get relayer state. Getting current index from the pool contract...`);
+      const poolState = await getPoolState();
+      return {
+        root: poolState.root.toString(),
+        optimisticRoot: poolState.root.toString,
+        deltaIndex: poolState.index,
+        optimisticDeltaIndex: poolState.index
+      }
+    });
     const nextIndex = Number(stateInfo.deltaIndex);
     const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
@@ -370,7 +394,7 @@ export class ZkBobState {
       this.lastSyncInfo.txCount = (optimisticIndex - startIndex) /  OUTPLUSONE;
 
       // Try to using the cold storage if possible
-      const coldResultPromise = this.startColdSync(getPoolRoot, coldConfig, coldBaseAddr, startIndex);
+      const coldResultPromise = this.startColdSync(getPoolState, coldConfig, coldBaseAddr, startIndex);
 
       // Start the hot sync simultaneously with the cold sync
       const assumedNextIndex = this.nextIndexAfterColdSync(coldConfig, startIndex);
@@ -450,7 +474,6 @@ export class ZkBobState {
       this.history?.setLastMinedTxIndex(totalRes.maxMinedIndex);
       this.history?.setLastPendingTxIndex(totalRes.maxPendingIndex);
 
-
       const fullSyncTime = Date.now() - startSyncTime;
       const fullSyncTimePerTx = fullSyncTime / (coldResult.txCount + totalRes.txCount);
 
@@ -480,7 +503,7 @@ export class ZkBobState {
     const checkIndex = await this.getNextIndex();
     const stableIndex = await this.lastVerifiedIndex();
     if (checkIndex != stableIndex) {
-      const isStateCorrect = await this.verifyState(getPoolRoot);
+      const isStateCorrect = await this.verifyState(getPoolState);
       if (!isStateCorrect) {
         console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
         if (stableIndex > 0 && stableIndex < checkIndex &&
@@ -505,7 +528,7 @@ export class ZkBobState {
         }
 
         // resync the state
-        return await this.updateStateOptimisticWorker(relayer, getPoolRoot, coldConfig, coldBaseAddr);
+        return await this.updateStateOptimisticWorker(relayer, getPoolState, coldConfig, coldBaseAddr);
       } else {
         this.rollbackAttempts = 0;
         this.wipeAttempts = 0;
@@ -514,6 +537,9 @@ export class ZkBobState {
 
     // set finish sync timestamp
     this.lastSyncInfo.endTimestamp = Date.now();
+
+    this.lastSyncTimestamp = Date.now();
+    this.lastSyncResult = isReadyToTransact;
 
     return isReadyToTransact;
   }
@@ -537,58 +563,54 @@ export class ZkBobState {
 
   // Get the transactions from the relayer starting from the specified index
   private async fetchBatch(relayer: ZkBobRelayer, fromIndex: number, count: number): Promise<RawTxsBatch> {
-    return relayer.fetchTransactionsOptimistic(BigInt(fromIndex), count).then( async txs => {      
-      const txHashes: Record<number, string> = {};
-      const indexedTxs: IndexedTx[] = [];
-      const indexedTxsPending: IndexedTx[] = [];
-
-      let maxMinedIndex = -1;
-      let maxPendingIndex = -1;
-
-      for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-        const tx = txs[txIdx];
-        const memo_idx = fromIndex + txIdx * OUTPLUSONE; // Get the first leaf index in the tree
-        
-        // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
-        const memo = tx.slice(129); // Skip mined flag, txHash and commitment
-        const commitment = tx.slice(65, 129)
-
-        const indexedTx: IndexedTx = {
-          index: memo_idx,
-          memo: memo,
-          commitment: commitment,
-        }
-
-        // 3. Get txHash
-        const txHash = tx.slice(1, 65);
-        txHashes[memo_idx] = this.network.txHashFromHexString(txHash);
-
-        // 4. Get mined flag
-        if (tx.slice(0, 1) === '1') {
-          indexedTxs.push(indexedTx);
-          maxMinedIndex = Math.max(maxMinedIndex, memo_idx);
+    return relayer.fetchTransactionsOptimistic(this.network, fromIndex, count)
+      .catch((err) => {
+        if (this.subgraph) {
+          console.warn(`Unable to load transactions from the relayer (${err.message}), fallbacking to subgraph`);
+          return this.subgraph.getTxesMinimal(fromIndex, count);
         } else {
-          indexedTxsPending.push(indexedTx);
-          maxPendingIndex = Math.max(maxPendingIndex, memo_idx);
+          console.log(`🔥[HotSync] cannot get txs batch from index ${fromIndex}: ${err.message}`)
+          throw new InternalError(`Cannot fetch txs from the relayer: ${err.message}`);
         }
-      }
+      })
+      .then( async txs => {      
+        const txHashes: Record<number, string> = {};
+        const indexedTxs: IndexedTx[] = [];
+        const indexedTxsPending: IndexedTx[] = [];
 
-      console.log(`🔥[HotSync] got batch of ${txs.length} transactions from index ${fromIndex}`);
+        let maxMinedIndex = -1;
+        let maxPendingIndex = -1;
 
-      return {
-        fromIndex: fromIndex,
-        count: txs.length,
-        minedTxs: indexedTxs,
-        pendingTxs: indexedTxsPending,
-        maxMinedIndex,
-        maxPendingIndex,
-        txHashes,
-      }
+        for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
+          const tx = txs[txIdx];
+          txHashes[tx.index] = tx.txHash;
+          const indexedTx: IndexedTx = {
+            index: tx.index,
+            memo: tx.memo,
+            commitment: tx.commitment,
+          }
+
+          if (tx.isMined) {
+            indexedTxs.push(indexedTx);
+            maxMinedIndex = Math.max(maxMinedIndex, tx.index);
+          } else {
+            indexedTxsPending.push(indexedTx);
+            maxPendingIndex = Math.max(maxPendingIndex, tx.index);
+          }
+        }
+
+        console.log(`🔥[HotSync] got batch of ${txs.length} transactions from index ${fromIndex}`);
+
+        return {
+          fromIndex: fromIndex,
+          count: txs.length,
+          minedTxs: indexedTxs,
+          pendingTxs: indexedTxsPending,
+          maxMinedIndex,
+          maxPendingIndex,
+          txHashes,
+        }
     })
-    .catch((err) => {
-      console.log(`🔥[HotSync] cannot get txs batch from index ${fromIndex}: ${err.message}`)
-      throw new InternalError(`Cannot fetch txs from the relayer: ${err.message}`);
-    });
   }
 
   // The heaviest work: parse txs batch
@@ -603,9 +625,6 @@ export class ZkBobState {
       const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, batch.minedTxs);
       const decryptedMemos = parseResult.decryptedMemos;
       batchState.set(batch.fromIndex, parseResult.stateUpdate);
-      //if (LOG_STATE_HOTSYNC) {
-      //  this.logStateSync(i, i + txs.length * OUTPLUSONE, decryptedMemos);
-      //}
       for (let decryptedMemoIndex = 0; decryptedMemoIndex < decryptedMemos.length; ++decryptedMemoIndex) {
         // save memos corresponding to the our account to restore history
         const myMemo = decryptedMemos[decryptedMemoIndex];
@@ -645,43 +664,26 @@ export class ZkBobState {
   // Return StateUpdate object
   // This method used for multi-tx
   public async getNewState(relayer: ZkBobRelayer, accBirthIndex: number): Promise<StateUpdate> {
-    const startIndex = await this.getNextIndex();
+    const startIndex = Number(await this.getNextIndex());
 
     const stateInfo = await relayer.info();
-    const optimisticIndex = BigInt(stateInfo.optimisticDeltaIndex);
+    const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
 
     if (optimisticIndex > startIndex) {
       const startTime = Date.now();
       
       console.log(`⬇ Fetching transactions between ${startIndex} and ${optimisticIndex}...`);
 
-      const numOfTx = Number((optimisticIndex - startIndex) / BigInt(OUTPLUSONE));
-      const stateUpdate = relayer.fetchTransactionsOptimistic(startIndex, numOfTx).then( async txs => {
-        console.log(`Getting ${txs.length} transactions from index ${startIndex}`);
-        
-        const indexedTxs: IndexedTx[] = [];
-
-        for (let txIdx = 0; txIdx < txs.length; ++txIdx) {
-          const tx = txs[txIdx];
-          // Get the first leaf index in the tree
-          const memo_idx = Number(startIndex) + txIdx * OUTPLUSONE;
-          
-          // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
-          // 1. Extract memo block
-          const memo = tx.slice(129); // Skip mined flag, txHash and commitment
-
-          // 2. Get transaction commitment
-          const commitment = tx.slice(65, 129)
-          
-          const indexedTx: IndexedTx = {
-            index: memo_idx,
-            memo: memo,
-            commitment: commitment,
+      const numOfTx = (optimisticIndex - startIndex) / OUTPLUSONE;
+      const stateUpdate = relayer.fetchTransactionsOptimistic(this.network, startIndex, numOfTx).then( async txs => {
+        console.log(`Got ${txs.length} transactions from index ${startIndex}`);
+        const indexedTxs: IndexedTx[] = txs.map((tx) => {
+          return  {
+            index: tx.index,
+            memo: tx.memo,
+            commitment: tx.commitment,
           }
-
-          // 3. add indexed tx
-          indexedTxs.push(indexedTx);
-        }
+        });
 
         const parseResult: ParseTxsResult = await this.worker.parseTxs(this.sk, indexedTxs);
 
@@ -690,7 +692,6 @@ export class ZkBobState {
 
       const msElapsed = Date.now() - startTime;
       const avgSpeed = msElapsed / numOfTx;
-
       console.log(`Fetch finished in ${msElapsed / 1000} sec | ${numOfTx} tx, avg speed ${avgSpeed.toFixed(1)} ms/tx`);
 
       return stateUpdate;
@@ -701,7 +702,7 @@ export class ZkBobState {
     }
   }
 
-  public async logStateSync(startIndex: number, endIndex: number, decryptedMemos: DecryptedMemo[]) {
+  private async logStateSync(startIndex: number, endIndex: number, decryptedMemos: DecryptedMemo[]) {
     for (const decryptedMemo of decryptedMemos) {
       if (decryptedMemo.index > startIndex) {
         console.info(`📝 Adding hashes to state (from index ${startIndex} to index ${decryptedMemo.index - OUTPLUSONE})`);
@@ -721,10 +722,10 @@ export class ZkBobState {
   }
 
   // returns false when the local state is inconsistent
-  private async verifyState(getPoolRoot: (index: bigint) => Promise<bigint>): Promise<boolean> {
+  private async verifyState(getPoolState: (index?: bigint) => Promise<TreeState>): Promise<boolean> {
     const checkIndex = await this.getNextIndex();
     const localRoot = await this.getRoot();
-    const poolRoot =  await getPoolRoot(checkIndex);
+    const poolRoot = (await getPoolState(checkIndex)).root;
 
     if (localRoot == poolRoot) {
       await this.setLastVerifiedIndex(checkIndex);
@@ -764,7 +765,7 @@ export class ZkBobState {
   }
 
   private async startColdSync(
-    getPoolRoot: (index: bigint) => Promise<bigint>,
+    getPoolState: (index?: bigint) => Promise<TreeState>,
     coldConfig?: ColdStorageConfig,
     coldStorageBaseAddr?: string,
     fromIndex?: number,
@@ -827,7 +828,7 @@ export class ZkBobState {
           syncResult.nextIndex = actualRangeEnd;
           syncResult.totalTime = Date.now() - startTime;
           
-          const isStateCorrect = await this.verifyState(getPoolRoot);
+          const isStateCorrect = await this.verifyState(getPoolState);
           if (!isStateCorrect) {
             console.warn(`🧊[ColdSync] Merkle tree root at index ${await this.getNextIndex()} mistmatch! Wiping the state...`);
             await this.clean();  // rollback to 0
@@ -888,5 +889,9 @@ export class ZkBobState {
 
   public async decryptNote(symkey: Uint8Array, encrypted: Uint8Array): Promise<Note> {
     return this.worker.decryptNote(symkey, encrypted);
+  }
+
+  public async accountNullifier(): Promise<string> {
+    return this.worker.accountNullifier(this.stateId);
   }
 }

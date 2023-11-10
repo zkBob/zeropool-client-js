@@ -1,11 +1,13 @@
-import { RegularTxType } from "../tx";
-import { hexToNode } from "../utils";
+import { PoolTxMinimal, RegularTxType } from "../tx";
+import { addHexPrefix, hexToNode } from "../utils";
 import { InternalError, ServiceError } from "../errors";
 import { IZkBobService, ServiceType,
          ServiceVersion, isServiceVersion, ServiceVersionFetch,
          defaultHeaders, fetchJson,
         } from "./common";
 import { Proof, TreeNode } from 'libzkbob-rs-wasm-web';
+import { CONSTANTS } from "../constants";
+import { NetworkBackend } from "../networks";
 
 const RELAYER_VERSION_REQUEST_THRESHOLD = 3600; // relayer's version expiration (in seconds)
 
@@ -182,7 +184,7 @@ export class ZkBobRelayer implements IZkBobService {
   // |                                                                             |
   // -------------------------------------------------------------------------------
 
-  public async fetchTransactionsOptimistic(offset: BigInt, limit: number = 100): Promise<string[]> {
+  public async fetchTransactionsOptimistic(network: NetworkBackend, offset: number, limit: number = 100): Promise<PoolTxMinimal[]> {
     const url = new URL(`/transactions/v2`, this.url());
     url.searchParams.set('limit', limit.toString());
     url.searchParams.set('offset', offset.toString());
@@ -193,7 +195,18 @@ export class ZkBobRelayer implements IZkBobService {
       throw new ServiceError(this.type(), 200, `Response should be an array`);
     }
   
-    return txs;
+    const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
+    
+    return txs.map((tx, txIdx) => {
+      // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
+      return {
+        index: offset + txIdx * OUTPLUSONE,
+        commitment: tx.slice(65, 129),
+        txHash: network.txHashFromHexString(tx.slice(1, 65)),
+        memo: tx.slice(129),
+        isMined: tx.slice(0, 1) === '1',
+      }
+    });
   }
   
   // returns transaction job ID
@@ -283,7 +296,7 @@ export class ZkBobRelayer implements IZkBobService {
   
   public async limits(address: string | undefined): Promise<LimitsFetch> {
     const url = new URL('/limits', this.url());
-    if (address !== undefined) {
+    if (address) {
       url.searchParams.set('address', address);
     }
     const headers = defaultHeaders(this.supportId);

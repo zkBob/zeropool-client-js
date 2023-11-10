@@ -1,5 +1,6 @@
 import { InternalError } from "./errors";
 import { FileCache } from "./file-cache";
+import { SnarkConfigParams } from "./config";
 
 const MAX_VK_LOAD_ATTEMPTS = 3;
 
@@ -15,7 +16,6 @@ export enum LoadingStatus {
 export class SnarkParams {
     private paramUrl: string;
     private vkUrl: string;
-    private expectedHash: string | undefined;   // only params verified by a hash
 
     private cache: FileCache;
 
@@ -27,16 +27,15 @@ export class SnarkParams {
     private loadingPromise: Promise<any> | undefined;
     private loadingStatus: LoadingStatus;
 
-    public constructor(paramUrl: string, vkUrl: string, expectedParamHash: string | undefined) {
+    public constructor(params: SnarkConfigParams) {
         this.loadingStatus = LoadingStatus.NotStarted;
-        this.paramUrl = paramUrl;
-        this.vkUrl = vkUrl;
-        this.expectedHash = expectedParamHash;
+        this.paramUrl = params.transferParamsUrl;
+        this.vkUrl = params.transferVkUrl;
     }
 
-    public async getParams(wasm: any): Promise<any> {
+    public async getParams(wasm: any, expectedHash?: string): Promise<any> {
         if (!this.isParamsReady()) {
-            this.loadParams(wasm);
+            this.loadParams(wasm, expectedHash);
             return await this.loadingPromise;
         }
 
@@ -47,8 +46,9 @@ export class SnarkParams {
     // VK doesn't stored at the local storage (no verification ability currently)
     public async getVk(): Promise<any> {
         let attempts = 0;
+        const filename = this.vkUrl.substring(this.vkUrl.lastIndexOf('/') + 1);
+        const startTs = Date.now();
         while (!this.isVkReady() && attempts++ < MAX_VK_LOAD_ATTEMPTS) {
-          console.time(`VK initializing`);
           try {
             const vk = await (await fetch(this.vkUrl, { headers: { 'Cache-Control': 'no-cache' } })).json();
             // verify VK structure
@@ -65,10 +65,10 @@ export class SnarkParams {
             }
 
             this.vk = vk;
+
+            console.log(`VK ${filename} loaded in ${Date.now() - startTs} ms`);
           } catch(err) {
             console.warn(`VK loading attempt has failed: ${err.message}`);
-          } finally {
-            console.timeEnd(`VK initializing`);
           }
         }
 
@@ -79,7 +79,7 @@ export class SnarkParams {
         return this.vk;
       }
 
-    private loadParams(wasm: any) {
+    private loadParams(wasm: any, expectedHash?: string) {
         if (this.isParamsReady() || this.loadingStatus == LoadingStatus.InProgress) {
             return;
         }
@@ -94,15 +94,15 @@ export class SnarkParams {
                     .finally(() => console.timeEnd(`Load parameters from DB`));
 
                 // check parameters hash if needed
-                if (txParamsData && this.expectedHash !== undefined) {
-                    let computedHash = await cache.getHash(this.paramUrl);
-                    if (!computedHash) {
-                        computedHash = await cache.saveHash(this.paramUrl, txParamsData);
+                if (txParamsData && expectedHash !== undefined) {
+                    let cachedHash = await cache.getHash(this.paramUrl);
+                    if (!cachedHash) {
+                        cachedHash = await cache.saveHash(this.paramUrl, txParamsData);
                     }
 
-                    if (computedHash.toLowerCase() != this.expectedHash.toLowerCase()) {
+                    if (cachedHash.toLowerCase() != expectedHash.toLowerCase()) {
                         // forget saved params in case of hash inconsistence
-                        console.warn(`Hash of cached tx params (${computedHash}) doesn't associated with provided (${this.paramUrl}).`);
+                        console.warn(`Hash of cached tx params (${cachedHash}) doesn't associated with provided (${this.paramUrl}).`);
                         cache.remove(this.paramUrl);
                         txParamsData = null;
                     }
