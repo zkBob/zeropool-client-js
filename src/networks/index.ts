@@ -2,6 +2,7 @@ import { ZkBobState } from "../state";
 import { EvmNetwork, InternalError, TxType } from "..";
 import { DirectDeposit, PoolTxDetails } from "../tx";
 import { TronNetwork } from "./tron";
+import { CommittedForcedExit, FinalizedForcedExit, ForcedExitRequest } from "../emergency";
 
 export interface PreparedTransaction {
     to: string;
@@ -10,6 +11,12 @@ export interface PreparedTransaction {
     selector?: string;
 }
 
+export enum L1TxState {
+    NotFound,
+    Pending,
+    MinedSuccess,
+    MinedFailed,
+}
 
 export interface NetworkBackend {
     // Backend Maintenance
@@ -33,6 +40,14 @@ export interface NetworkBackend {
     getDenominator(poolAddress: string): Promise<bigint>;
     poolState(poolAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}>;
     poolLimits(poolAddress: string, address: string | undefined): Promise<any>;
+    isSupportForcedExit(poolAddress: string): Promise<boolean>;
+    nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint>;
+    committedForcedExitHash(poolAddress: string, nullifier: bigint): Promise<bigint>;
+    createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction>;
+    committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined>;
+    executedForcedExit(poolAddress: string, nullifier: bigint): Promise<FinalizedForcedExit | undefined>;
+    createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction>;
+    createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction>;
     getTokenSellerContract(poolAddress: string): Promise<string>;
 
     // Direct Deposits
@@ -65,6 +80,7 @@ export interface NetworkBackend {
     getTxDetails(index: number, poolTxHash: string, state: ZkBobState): Promise<PoolTxDetails | null>;
     calldataBaseLength(): number;
     estimateCalldataLength(txType: TxType, notesCnt: number, extraDataLen: number): number;
+    getTransactionState(txHash: string): Promise<L1TxState>;
 
     // syncing with external providers
     getBlockNumber(): Promise<number>;
@@ -78,7 +94,7 @@ enum SupportedNetwork {
 }
 
 function networkType(chainId: number): SupportedNetwork | undefined {
-    if ([0x2b6653dc, 0x94a9059e].includes(chainId)) {
+    if ([0x2b6653dc, 0x94a9059e, 0xcd8690dc].includes(chainId)) {
         return SupportedNetwork.TronNetwork;
     } else if ([1, 137, 10, 11155111, 5, 420, 1337, 31337].includes(chainId)) {
         return SupportedNetwork.EvmNetwork;

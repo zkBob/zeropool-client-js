@@ -245,7 +245,12 @@ const obj = {
 
   async parseAddress(accountId: string, shieldedAddress: string): Promise<IAddressComponents> {
     return zpAccounts[accountId].parseAddress(shieldedAddress);
+  },
+
+  async accountNullifier(accountId: string): Promise<string> {
+    return zpAccounts[accountId].accountNullifier();
   }
+
 };
 
 expose(obj);

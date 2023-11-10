@@ -72,7 +72,19 @@ export class TxInsufficientFundsError extends BobError {
 
 export class TxSwapTooHighError extends BobError {
     constructor(public requested: bigint, public supported: bigint) {
-        super(`The pool doesn't support requested swap amount (requested ${requested.toString()}, supported ${supported.toString()})`);52
+        super(`The pool doesn't support requested swap amount (requested ${requested.toString()}, supported ${supported.toString()})`);
+    }
+}
+
+export class TxAccountDeadError extends BobError {
+    constructor() {
+        super('The account cannot transact or receive funds anymore due to executed forced exit');
+    }
+}
+
+export class TxAccountLocked extends BobError {
+    constructor(public upto: Date) {
+        super(`The account was locked for emergency exit up to ${upto.toLocaleString()}`);
     }
 }
 

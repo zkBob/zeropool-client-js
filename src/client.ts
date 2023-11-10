@@ -1,16 +1,14 @@
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
+import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx, Account } from 'libzkbob-rs-wasm-web';
 import { Chains, Pools, Parameters, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType } from './config';
-import { truncateHexPrefix,
-          toTwosComplementHex, bufToHex, bigintToArrayLe
-        } from './utils';
-import { SyncStat, ZkBobState } from './state';
+import { truncateHexPrefix, toTwosComplementHex, bigintToArrayLe } from './utils';
+import { SyncStat, ZkBobState, ZERO_OPTIMISTIC_STATE } from './state';
 import { DirectDeposit, RegularTxType, txTypeToString } from './tx';
 import { CONSTANTS } from './constants';
 import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHistoryRecord } from './history'
 import { EphemeralAddress } from './ephemeral';
 import { 
-  InternalError, PoolJobError, RelayerJobError, SignatureError, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
+  InternalError, PoolJobError, RelayerJobError, SignatureError, TxAccountDeadError, TxAccountLocked, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError
 } from './errors';
 import { JobInfo, RelayerFee } from './services/relayer';
@@ -19,6 +17,7 @@ import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
 import { PERMIT2_CONTRACT } from './signers/permit2-signer';
 import { DirectDepositProcessor, DirectDepositType } from './dd';
+import { ForcedExitProcessor, ForcedExitState, CommittedForcedExit, FinalizedForcedExit } from './emergency';
 
 import { wrap } from 'comlink';
 import { PreparedTransaction } from './networks';
@@ -99,6 +98,9 @@ export class ZkBobClient extends ZkBobProvider {
   private auxZpStates: { [id: string]: ZkBobState } = {};
   // Direct deposit processors are used to create DD and fetch DD pending txs
   private ddProcessors: { [poolAlias: string]: DirectDepositProcessor } = {};
+  // Forced exit processors are used to withdraw funds emergency from the pool
+  // and deactivate the account
+  private feProcessors: { [poolAlias: string]: ForcedExitProcessor } = {};
   // The single worker for the all pools
   private worker: any;
   // Performance estimation (msec per tx)
@@ -302,6 +304,7 @@ export class ZkBobClient extends ZkBobProvider {
         );
       this.zpStates[newPoolAlias] = state;
       this.ddProcessors[newPoolAlias] = new DirectDepositProcessor(pool, network, state, this.subgraph());
+      this.feProcessors[newPoolAlias] = new ForcedExitProcessor(pool, network, state, this.subgraph())
 
       try {
         await this.setProverMode(this.account.proverMode);
@@ -433,7 +436,7 @@ export class ZkBobClient extends ZkBobProvider {
     const relayer = this.relayer();
     const readyToTransact = await giftCardState.updateState(
       relayer,
-      async (index) => (await this.getPoolState(index)).root,
+      async (index) => this.getPoolState(index),
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );
@@ -704,6 +707,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     await this.updateState();
+    await this.assertAccountCanTransact();
 
     // Fee estimating
     const usedFee = relayerFee ?? await this.getRelayerFee();
@@ -855,6 +859,8 @@ export class ZkBobClient extends ZkBobProvider {
     const ddQueueAddress = await processor.getQueueContract();
     const zkAddress = await this.generateAddress();
 
+    await this.assertAccountCanTransact();
+
     const limits = await this.getLimits(fromAddress);
     if (amount > limits.dd.total) {
       throw new TxLimitError(amount, limits.dd.total);
@@ -917,6 +923,8 @@ export class ZkBobClient extends ZkBobProvider {
       }
     }));
 
+    await this.assertAccountCanTransact();
+
     const usedFee = relayerFee ?? await this.getRelayerFee();
     const txParts = await this.getTransactionParts(RegularTxType.Transfer, transfers, usedFee);
 
@@ -929,7 +937,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     let jobsIds: string[] = [];
-    let optimisticState = this.zeroOptimisticState();
+    let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       const outputs = onePart.outNotes.map((aNote) => { return {to: aNote.destination, amount: `${aNote.amountGwei}`} });
@@ -976,17 +984,6 @@ export class ZkBobClient extends ZkBobProvider {
     return jobsIds;
   }
 
-  private zeroOptimisticState(): StateUpdate {
-    const optimisticState: StateUpdate = {
-      newLeafs: [],
-      newCommitments: [],
-      newAccounts: [],
-      newNotes: [],
-    }
-
-    return optimisticState;
-  }
-
   // Withdraw shielded funds to the specified native chain address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // relayerFee - fee from the relayer (request one if undefined)
@@ -1000,6 +997,8 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxInvalidArgumentError('Please provide a valid non-zero address');
     }
     const addressBin = this.network().addressToBytes(address);
+
+    await this.assertAccountCanTransact();
 
     const supportedSwapAmount = await this.maxSupportedTokenSwap();
     if (swapAmount > supportedSwapAmount) {
@@ -1026,7 +1025,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     let jobsIds: string[] = [];
-    let optimisticState = this.zeroOptimisticState();
+    let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
       
@@ -1097,6 +1096,8 @@ export class ZkBobClient extends ZkBobProvider {
     if (giftCard.poolAlias != this.curPool) {
       throw new InternalError(`Cannot redeem gift card due to unsuitable pool (gift-card pool: ${giftCard.poolAlias}, current pool: ${this.curPool})`);
     }
+
+    await this.assertAccountCanTransact();
     
     const giftCardAcc: AccountConfig = {
         sk: giftCard.sk,
@@ -1126,7 +1127,7 @@ export class ZkBobClient extends ZkBobProvider {
       fee: actualFee.toString(),
     };
     const giftCardState = this.auxZpStates[accId];
-    const txData = await giftCardState.createTransferOptimistic(oneTx, this.zeroOptimisticState());
+    const txData = await giftCardState.createTransferOptimistic(oneTx, ZERO_OPTIMISTIC_STATE);
 
     const startProofDate = Date.now();
     const txProof: Proof = await this.proveTx(txData.public, txData.secret, giftCardAcc.proverMode);
@@ -1160,6 +1161,19 @@ export class ZkBobClient extends ZkBobProvider {
 
     if (factLen != estimatedLen) {
       throw new InternalError(`Calldata length estimation error: est ${estimatedLen}, actual ${factLen} bytes`);
+    }
+  }
+
+  private async assertAccountCanTransact() {
+    if (await this.isForcedExitSupported()) {
+      if (await this.isAccountDead()) {
+        throw new TxAccountDeadError();
+      }
+
+      const committed = await this.activeForcedExit();
+      if (committed && committed.exitEnd * 1000 > Date.now()) {
+        throw new TxAccountLocked(new Date(committed.exitEnd * 1000));
+      }
     }
   }
 
@@ -1447,6 +1461,7 @@ export class ZkBobClient extends ZkBobProvider {
     if (!txValid) {
       throw new TxProofError();
     }
+
     return txProof;
   }
 
@@ -1572,7 +1587,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     noOwnTxsInOptimisticState = await this.zpState().updateState(
       this.relayer(),
-      async (index) => (await this.getPoolState(index)).root,
+      async (index) => this.getPoolState(index),
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
     );
@@ -1733,7 +1748,7 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   // ------------------=========< Direct Deposits >=========------------------
-  // | Calculating sync time                                                 |
+  // | Direct deposit srvice routines                                        |
   // -------------------------------------------------------------------------
 
   protected ddProcessor(): DirectDepositProcessor {
@@ -1758,5 +1773,83 @@ export class ZkBobClient extends ZkBobProvider {
       return this.network().getDirectDepositFee(ddQueueAddr);
     }
   }
-  
+
+  // --------------------=========< Forced Exit >=========--------------------
+  // | Emergency withdrawing funds (direct contract interaction)             |
+  // -------------------------------------------------------------------------
+
+  protected feProcessor(): ForcedExitProcessor {
+    const proccessor = this.feProcessors[this.curPool];
+    if (!proccessor) {
+        throw new InternalError(`No forced exit processor initialized for the pool ${this.curPool}`);
+    }
+
+    return proccessor;
+  }
+
+  protected async updateStateWithFallback(): Promise<boolean> {
+    return this.updateState().catch((err) => { // try to sync state (we must have the actual last nullifier)
+      console.warn(`Unable to sync state (${err.message}). The last nullifier may be invalid`);
+      // TODO: sync with the pool contract directly
+      return false;
+    });
+  }
+
+  // This routine available regardless forced exit support
+  public async isAccountDead(): Promise<boolean> {
+    await this.updateStateWithFallback();
+    return await this.feProcessor().isAccountDead();
+  }
+
+  // Checking is FE available for the current pool
+  public async isForcedExitSupported(): Promise<boolean> {
+    return await this.feProcessor().isForcedExitSupported();
+  }
+  // The following forced exit related routines should called only if forced exit supported
+
+  public async forcedExitState(): Promise<ForcedExitState> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().forcedExitState();
+  }
+
+  public async activeForcedExit(): Promise<CommittedForcedExit | undefined> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().getActiveForcedExit();
+  }
+
+  // Returns only executed (not cancelled) exit
+  // (because cancelled events cannot be located efficiently due to nullifier updates)
+  public async executedForcedExit(): Promise<FinalizedForcedExit | undefined> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().getExecutedForcedExit();
+  }
+
+  public async availableFundsToForcedExit(): Promise<bigint> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().availableFundsToForcedExit();
+  }
+
+  public async requestForcedExit(
+    executerAddress: string, // who will send emergency exit execute transaction
+    toAddress: string,     // which address should receive funds
+    sendTxCallback: (tx: PreparedTransaction) => Promise<string>  // callback to send transaction 
+  ): Promise<CommittedForcedExit> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().requestForcedExit(
+      executerAddress,
+      toAddress,
+      sendTxCallback,
+      (pub: any, sec: any) => this.proveTx(pub, sec)
+    );
+  }
+
+  public async executeForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<FinalizedForcedExit> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().executeForcedExit(sendTxCallback);
+  }
+
+  public async cancelForcedExit(sendTxCallback: (tx: PreparedTransaction) => Promise<string>): Promise<FinalizedForcedExit> {
+    await this.updateStateWithFallback();
+    return this.feProcessor().cancelForcedExit(sendTxCallback);
+  }
 }

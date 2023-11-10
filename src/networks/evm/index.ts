@@ -1,9 +1,9 @@
 import Web3 from 'web3';
 import { Contract } from 'web3-eth-contract'
 import { TransactionConfig } from 'web3-core'
-import { NetworkBackend, PreparedTransaction} from '..';
+import { NetworkBackend, PreparedTransaction, L1TxState} from '..';
 import { InternalError } from '../../errors';
-import { ddContractABI, poolContractABI, tokenABI } from './evm-abi';
+import { accountingABI, ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
 import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType, DirectDeposit, DirectDepositState } from '../../tx';
 import { addHexPrefix, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
@@ -15,9 +15,11 @@ import { isAddress } from 'web3-utils';
 import { Transaction, TransactionReceipt } from 'web3-core';
 import { RpcManagerDelegate, MultiRpcManager } from '../rpcman';
 import { ZkBobState } from '../../state';
+import { CommittedForcedExit, FinalizedForcedExit, ForcedExitRequest } from '../../emergency';
 
 const RETRY_COUNT = 10;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const ZERO_ADDRESS1 = '0x0000000000000000000000000000000000000001';
 
 export enum PoolSelector {
     Transact = "af989083",
@@ -30,11 +32,13 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     private pool?: Contract;
     private dd?: Contract;
     private token?: Contract;
+    private accounting?: Contract;
 
     // Local cache
     private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolContractAddress -> directDepositContractAddress
-    private supportsNonces = new Map<string, boolean>();        // tokenAddress -> isSupportsNonceMethod
+    private accountingAddresses = new Map<string, string>();    // poolContractAddress -> accountingContractAddress
+    private supportedMethods = new Map<string, boolean>();      // (contractAddress + methodName) => isSupported
 
     // ------------------------=========< Lifecycle >=========------------------------
     // | Init, enabling and disabling backend                                        |
@@ -53,7 +57,8 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         return this.web3 !== undefined &&
                 this.pool !== undefined &&
                 this.dd !== undefined &&
-                this.token !== undefined;
+                this.token !== undefined &&
+                this.accounting !== undefined;
     }
 
     public setEnabled(enabled: boolean) {
@@ -63,12 +68,14 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                 this.pool = new this.web3.eth.Contract(poolContractABI) as unknown as Contract;
                 this.dd = new this.web3.eth.Contract(ddContractABI) as unknown as Contract;
                 this.token = new this.web3.eth.Contract(tokenABI) as unknown as Contract;
+                this.accounting = new this.web3.eth.Contract(accountingABI) as unknown as Contract;
             }
         } else {
             this.web3 = undefined;
             this.pool = undefined;
             this.dd = undefined;
             this.token = undefined;
+            this.accounting = undefined;
         }
     }
 
@@ -104,6 +111,14 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         return this.token;
     }
 
+    private accountingContract(): Contract {
+        if (!this.accounting) {
+            throw new InternalError(`EvmNetwork: accounting contract object is undefined`);
+        }
+
+        return this.accounting;
+    }
+
     private contractCallRetry(contract: Contract, address: string, method: string, args: any[] = []): Promise<any> {
         return this.commonRpcRetry(async () => {
                 contract.options.address = address;
@@ -114,6 +129,30 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         );
     }
 
+    private async isMethodSupportedByContract(
+        contract: Contract,
+        address: string,
+        methodName: string,
+        testParams: any[] = [],
+    ): Promise<boolean> {
+        const mapKey = address + methodName;
+        let isSupport = this.supportedMethods.get(mapKey);
+        if (isSupport === undefined) {
+            try {
+                contract.options.address = address;
+                await contract.methods[methodName](...testParams).call()
+                isSupport = true;
+            } catch (err) {
+                console.warn(`The contract seems doesn't support \'${methodName}\' method`);
+                isSupport = false;
+            }
+
+            this.supportedMethods.set(mapKey, isSupport);
+        };
+
+        return isSupport
+    }
+    
     // -----------------=========< Token-Related Routiness >=========-----------------
     // | Getting balance, allowance, nonce etc                                       |
     // -------------------------------------------------------------------------------
@@ -191,22 +230,8 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async isSupportNonce(tokenAddress: string): Promise<boolean> {
-        let isSupport = this.supportsNonces.get(tokenAddress);
-        if (isSupport === undefined) {
-            try {
-                const tokenContract = this.tokenContract();
-                tokenContract.options.address = tokenAddress;
-                await tokenContract.methods['nonces'](ZERO_ADDRESS).call()
-                isSupport = true;
-            } catch (err) {
-                console.warn(`The token seems doesn't support nonces method`);
-                isSupport = false;
-            }
-
-            this.supportsNonces.set(tokenAddress, isSupport);
-        };
-
-        return isSupport
+        const tokenContract = this.tokenContract();
+        return this.isMethodSupportedByContract(tokenContract, tokenAddress, 'nonces', [ZERO_ADDRESS]);
     }
 
 
@@ -246,7 +271,193 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
-        return await this.contractCallRetry(this.poolContract(), poolAddress, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
+        let contract: Contract;
+        let contractAddress: string;
+        if (await this.isMethodSupportedByContract(this.poolContract(), poolAddress, 'accounting')) {
+            // Current contract deployments (getLimitsFor implemented in the separated ZkBobAccounting contract)
+            let accountingAddress = this.accountingAddresses.get(poolAddress);
+            if (!accountingAddress) {
+                accountingAddress = await this.contractCallRetry(this.poolContract(), poolAddress, 'accounting');
+                if (accountingAddress) {
+                    this.accountingAddresses.set(poolAddress, accountingAddress)
+                } else {
+                    throw new InternalError(`Cannot retrieve accounting contract address for the pool ${poolAddress}`);
+                }
+            }
+            contract = this.accountingContract();
+            contractAddress = accountingAddress;
+        } else {
+            // Fallback for the old deployments (getLimitsFor implemented in pool contract)
+            contract = this.poolContract();
+            contractAddress = poolAddress;
+        }
+
+        return await this.contractCallRetry(contract, contractAddress, 'getLimitsFor', [address ?? ZERO_ADDRESS1]);
+    }
+
+    public async isSupportForcedExit(poolAddress: string): Promise<boolean> {
+        const poolContract = this.poolContract();
+        return this.isMethodSupportedByContract(poolContract, poolAddress, 'committedForcedExits', ['0']);
+    }
+
+    public async nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint> {
+        const res = await this.contractCallRetry(this.poolContract(), poolAddress, 'nullifiers', [nullifier]);
+        
+        return BigInt(res);
+    }
+
+    public async committedForcedExitHash(poolAddress: string, nullifier: bigint): Promise<bigint> {
+        const res = await this.contractCallRetry(this.poolContract(), poolAddress, 'committedForcedExits', [nullifier.toString()]);
+
+        return BigInt(res);
+    }
+
+    public async createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction> {
+        const method = 'commitForcedExit(address,address,uint256,uint256,uint256,uint256,uint256[8])';
+        const encodedTx = await this.poolContract().methods[method](
+            forcedExit.operator,
+            forcedExit.to,
+            forcedExit.amount.toString(),
+            forcedExit.index,
+            forcedExit.nullifier.toString(),
+            forcedExit.out_commit.toString(),
+            [forcedExit.tx_proof.a,
+             forcedExit.tx_proof.b,
+             forcedExit.tx_proof.c
+            ].flat(2),
+        ).encodeABI();
+
+        return {
+            to: poolAddress,
+            amount: 0n,
+            data: encodedTx,
+        };
+    }
+
+    public async committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined> {
+        const pool = this.poolContract();
+        pool.options.address = poolAddress;
+
+        const commitEventAbi = poolContractABI.find((val) => val.name == 'CommitForcedExit');
+        const cancelEventAbi = poolContractABI.find((val) => val.name == 'CancelForcedExit');
+
+        if (!commitEventAbi || !cancelEventAbi) {
+            throw new InternalError('Could not find ABI items for forced exit events');
+        }
+
+        const commitSignature = this.activeWeb3().eth.abi.encodeEventSignature(commitEventAbi);
+        const cancelSignature = this.activeWeb3().eth.abi.encodeEventSignature(cancelEventAbi);
+
+        const associatedEvents = await this.activeWeb3().eth.getPastLogs({
+            address: poolAddress,
+            topics: [
+                [commitSignature, cancelSignature],
+                addHexPrefix(nullifier.toString(16).padStart(64, '0')),
+            ],
+            fromBlock: 0,
+            toBlock: 'latest'
+        });
+
+        let result: CommittedForcedExit | undefined;
+        associatedEvents
+            .sort((e1, e2) => e1.blockNumber - e2.blockNumber)
+            .forEach((e) => {
+                switch (e.topics[0]) {
+                    case commitSignature:
+                        const decoded = this.activeWeb3().eth.abi.decodeLog(commitEventAbi.inputs ?? [], e.data, e.topics.slice(1))
+                        result = {
+                            nullifier: BigInt(decoded.nullifier),
+                            operator: decoded.operator,
+                            to: decoded.to,
+                            amount: BigInt(decoded.amount),
+                            exitStart: Number(decoded.exitStart),
+                            exitEnd: Number(decoded.exitEnd),
+                            txHash: e.transactionHash,
+                        };
+                        break;
+
+                    case cancelSignature:
+                        result = undefined;
+                        break;
+                }
+            })
+
+        return result;
+    }
+
+    public async executedForcedExit(poolAddress: string, nullifier: bigint): Promise<FinalizedForcedExit | undefined> {
+        const pool = this.poolContract();
+        pool.options.address = poolAddress;
+
+        const executeEventAbi = poolContractABI.find((val) => val.name == 'ForcedExit');
+
+        if (!executeEventAbi) {
+            throw new InternalError('Could not find ABI items for forced exit event');
+        }
+
+        const executeSignature = this.activeWeb3().eth.abi.encodeEventSignature(executeEventAbi);
+
+        const associatedEvents = await this.activeWeb3().eth.getPastLogs({
+            address: poolAddress,
+            topics: [
+                [executeSignature],
+                null,
+                addHexPrefix(nullifier.toString(16).padStart(64, '0')),
+            ],
+            fromBlock: 0,
+            toBlock: 'latest'
+        });
+
+        if (associatedEvents.length > 0) {
+            const decoded = this.activeWeb3().eth.abi.decodeLog(executeEventAbi.inputs ?? [], associatedEvents[0].data, associatedEvents[0].topics.slice(1))
+            return {
+                nullifier: BigInt(decoded.nullifier),
+                to: decoded.to,
+                amount: BigInt(decoded.amount),
+                cancelled: false,
+                txHash: associatedEvents[0].transactionHash,
+            };
+        }
+
+        return undefined;
+    }
+
+    public async createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
+        const method = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
+        const encodedTx = await this.poolContract().methods[method](
+            forcedExit.nullifier.toString(),
+            forcedExit.operator,
+            forcedExit.to,
+            forcedExit.amount.toString(),
+            forcedExit.exitStart,
+            forcedExit.exitEnd,
+            0
+        ).encodeABI();
+
+        return {
+            to: poolAddress,
+            amount: 0n,
+            data: encodedTx,
+        };
+    }
+
+    public async createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
+        const method = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
+        const encodedTx = await this.poolContract().methods[method](
+            forcedExit.nullifier.toString(),
+            forcedExit.operator,
+            forcedExit.to,
+            forcedExit.amount.toString(),
+            forcedExit.exitStart,
+            forcedExit.exitEnd,
+            1
+        ).encodeABI();
+
+        return {
+            to: poolAddress,
+            amount: 0n,
+            data: encodedTx,
+        };
     }
 
     public async getTokenSellerContract(poolAddress: string): Promise<string> {
@@ -647,6 +858,31 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public estimateCalldataLength(txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
         return estimateEvmCalldataLength(txType, notesCnt, extraDataLen)
+    }
+
+    public async getTransactionState(txHash: string): Promise<L1TxState> {
+        try {
+            const [tx, receipt] = await Promise.all([
+                this.activeWeb3().eth.getTransaction(txHash),
+                this.activeWeb3().eth.getTransactionReceipt(txHash),
+            ]);
+
+            if (receipt) {
+                if (receipt.status == true) {
+                    return L1TxState.MinedSuccess;
+                } else {
+                    return L1TxState.MinedFailed;
+                }
+            }
+
+            if (tx) {
+                return L1TxState.Pending;
+            }
+        } catch(err) {
+            console.warn(`[EvmNetwork] error on checking tx ${txHash}: ${err.message}`);
+        }
+
+        return L1TxState.NotFound;
     }
 
     // ----------------------=========< Syncing >=========----------------------

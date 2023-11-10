@@ -1,20 +1,22 @@
-import { NetworkBackend, PreparedTransaction } from '..';
+import { L1TxState, NetworkBackend, PreparedTransaction } from '..';
 import { InternalError, TxType } from '../../index';
 import { DDBatchTxDetails, DirectDeposit, DirectDepositState, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from '../../tx';
 import tokenAbi from './abi/usdt-abi.json';
-import { ddContractABI as ddAbi, poolContractABI as poolAbi} from '../evm/evm-abi';
+import { ddContractABI as ddAbi, poolContractABI as poolAbi, accountingABI} from '../evm/evm-abi';
 import { bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
 import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from '../evm/calldata';
 import { hexToBytes } from 'web3-utils';
 import { PoolSelector } from '../evm';
 import { MultiRpcManager, RpcManagerDelegate } from '../rpcman';
 import { ZkBobState } from '../../state';
+import { CommittedForcedExit, FinalizedForcedExit, ForcedExitRequest } from '../../emergency';
 
 const TronWeb = require('tronweb')
 const bs58 = require('bs58')
 
 const RETRY_COUNT = 5;
 const DEFAULT_ENERGY_FEE = 420;
+const DEFAULT_FEE_LIMIT = 100_000_000;
 const ZERO_ADDRESS = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
 
 export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcManagerDelegate {
@@ -24,6 +26,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     private tokenContracts = new Map<string, object>();  // tokenAddress -> contact object
     private poolContracts = new Map<string, object>();  // tokenAddress -> contact object
     private ddContracts = new Map<string, object>();  // tokenAddress -> contact object
+    private accountingContracts = new Map<string, object>();  // tokenAddress -> contact object
 
     // blockchain long-lived cached parameters
     private chainId: number | undefined = undefined;
@@ -32,8 +35,8 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     private tokenDecimals = new Map<string, number>();  // tokenAddress -> decimals
     private tokenSellerAddresses = new Map<string, string>();   // poolContractAddress -> tokenSellerContractAddress
     private ddContractAddresses = new Map<string, string>();    // poolAddress -> ddQueueAddress
-    private supportsNonces = new Map<string, boolean>();        // tokenAddress -> isSupportsNonceMethod
-
+    private accountingAddresses = new Map<string, string>();    // poolAddress -> accountingAddress
+    private supportedMethods = new Map<string, boolean>(); // contractAddress+method => isSupport
 
     // ------------------------=========< Lifecycle >=========------------------------
     // | Init, enabling and disabling backend                                        |
@@ -72,6 +75,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             this.tokenContracts.clear();
             this.poolContracts.clear();
             this.ddContracts.clear();
+            this.accountingContracts.clear();
         }
     }
 
@@ -117,6 +121,20 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return contract;
     }
 
+    protected async getAccountingContract(accountingAddress: string): Promise<any> {
+        let contract = this.accountingContracts.get(accountingAddress);
+        if (!contract) {
+            contract = await this.activeTronweb().contract(accountingABI, accountingAddress);
+            if (contract) {
+                this.ddContracts.set(accountingAddress, contract);
+            } else {
+                throw new Error(`Cannot initialize a contact object for the accounting ${accountingAddress}`);
+            }
+        }
+
+        return contract;
+    }
+
     private contractCallRetry(contract: any, method: string, args: any[] = []): Promise<any> {
         return this.commonRpcRetry(async () => {
                 return await contract[method](...args).call()
@@ -124,6 +142,25 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             `[TronNetwork] Contract call (${method}) error`,
             RETRY_COUNT,
         );
+    }
+
+    private async isMethodSupportedByContract(contractAddress: string, methodName: string): Promise<boolean> {
+        const mapKey = contractAddress + methodName;
+        let isSupport = this.supportedMethods.get(mapKey);
+        if (isSupport === undefined) {
+            const contract = await this.commonRpcRetry(() => {
+                return this.tronWeb.trx.getContract(contractAddress);
+            }, 'Unable to retrieve smart contract object', RETRY_COUNT);
+            const methods = contract.abi.entrys;
+            if (Array.isArray(methods)) {
+                isSupport = methods.find((val) => val.name == methodName) !== undefined;
+                this.supportedMethods.set(mapKey, isSupport);
+            } else {
+                isSupport = false;
+            }
+        }
+
+        return isSupport;
     }
     
     // -----------------=========< Token-Related Routiness >=========-----------------
@@ -205,24 +242,8 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public async isSupportNonce(tokenAddress: string): Promise<boolean> {
-        let isSupport = this.supportsNonces.get(tokenAddress);
-        if (isSupport === undefined) {
-            const contract = await this.commonRpcRetry(() => {
-                return this.activeTronweb().trx.getContract(tokenAddress);
-            }, 'Unable to retrieve smart contract object', RETRY_COUNT);
-            const methods = contract.abi.entrys;
-            if (Array.isArray(methods)) {
-                isSupport = methods.find((val) => val.name == 'nonces') !== undefined;
-                this.supportsNonces.set(tokenAddress, isSupport);
-            } else {
-                isSupport = false;
-            }
-        }
-
-        return isSupport;
+        return this.isMethodSupportedByContract(tokenAddress, 'nonces');
     }
-
-
 
     // ---------------------=========< Pool Interaction >=========--------------------
     // | Getting common info: pool ID, denominator, limits etc                       |
@@ -267,8 +288,128 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
+        let contract: any;
+        if (await this.isMethodSupportedByContract(poolAddress, 'accounting')) {
+            // Current contract deployments (getLimitsFor implemented in the separated ZkBobAccounting contract)
+            let accountingAddr = this.accountingAddresses.get(poolAddress);
+            if (!accountingAddr) {
+                const pool = await this.getPoolContract(poolAddress);
+                const rawAddr = await this.contractCallRetry(pool, 'accounting');
+                accountingAddr = TronWeb.address.fromHex(rawAddr);
+                if (accountingAddr) {
+                    this.accountingAddresses.set(poolAddress, accountingAddr);
+                } else {
+                    throw new InternalError(`Cannot fetch accounting contract address`);
+                }
+            }
+
+            contract = await this.getAccountingContract(accountingAddr);
+        } else {
+            // Fallback for the old deployments (getLimitsFor implemented in pool contract)
+            contract = await this.getPoolContract(poolAddress);
+        }
+
+        return await this.contractCallRetry(contract, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
+    }
+
+    public async isSupportForcedExit(poolAddress: string): Promise<boolean> {
+        return this.isMethodSupportedByContract(poolAddress, 'committedForcedExits');
+    }
+
+    public async nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint> {
         const pool = await this.getPoolContract(poolAddress);
-        return await this.contractCallRetry(pool, 'getLimitsFor', [address ?? ZERO_ADDRESS]);
+        const res = await this.contractCallRetry(pool, 'nullifiers', [nullifier.toString()]);
+
+        return BigInt(res);
+    }
+
+    public async committedForcedExitHash(poolAddress: string, nullifier: bigint): Promise<bigint> {
+        const pool = await this.getPoolContract(poolAddress);
+        const res = await this.contractCallRetry(pool, 'committedForcedExits', [nullifier.toString()]);
+
+        return BigInt(res);
+    }
+
+    private async prepareTransaction(
+        contractAddress: string,
+        selector: string,   // name(arg1_type,arg2_type,...)
+        parameters: {type: string, value: any}[],
+        nativeAmount: bigint = 0n,  // sun
+        feeLimit: number = DEFAULT_FEE_LIMIT,   // how many user's trx can be converted to energy
+    ): Promise<PreparedTransaction> {
+        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(contractAddress, selector, { feeLimit }, parameters);
+        const contract = tx?.transaction?.raw_data?.contract;
+        let txData: any | undefined;
+        if (Array.isArray(contract) && contract.length > 0) {
+            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
+        }
+
+        if (typeof txData !== 'string' || txData.length < 8) {
+            throw new InternalError(`Unable to extract tx (${selector.split('(')[0]}) calldata`);
+        }
+
+        return {
+            to: contractAddress,
+            amount: nativeAmount,
+            data: txData.slice(8),  // skip selector from the calldata
+            selector,
+        };
+    }
+
+    public async createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction> {
+        const selector = 'commitForcedExit(address,address,uint256,uint256,uint256,uint256,uint256[8])';
+        const parameters = [
+            {type: 'address', value: forcedExit.operator},
+            {type: 'address', value: forcedExit.to},
+            {type: 'uint256', value: forcedExit.amount.toString()},
+            {type: 'uint256', value: forcedExit.index},
+            {type: 'uint256', value: forcedExit.nullifier.toString()},
+            {type: 'uint256', value: forcedExit.out_commit.toString()},
+            {type: 'uint256[8]', value: [forcedExit.tx_proof.a,
+                                         forcedExit.tx_proof.b,
+                                         forcedExit.tx_proof.c,
+                                        ].flat(2)},
+        ];
+        
+        return this.prepareTransaction(poolAddress, selector, parameters);
+    }
+
+    public async committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined> {
+        throw new InternalError('unimplemented');
+    }
+
+    public async executedForcedExit(poolAddress: string, nullifier: bigint): Promise<FinalizedForcedExit | undefined> {
+        throw new InternalError('unimplemented');
+    }
+
+    public async createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
+        const selector = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
+        const parameters = [
+            {type: 'uint256', value: forcedExit.nullifier.toString()},
+            {type: 'address', value: forcedExit.operator},
+            {type: 'address', value: forcedExit.to},
+            {type: 'uint256', value: forcedExit.amount.toString()},
+            {type: 'uint256', value: forcedExit.exitStart},
+            {type: 'uint256', value: forcedExit.exitEnd},
+            {type: 'bool',    value: 0},
+        ];
+        
+        return this.prepareTransaction(poolAddress, selector, parameters);
+    }
+
+    public async createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
+        const selector = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
+        const parameters = [
+            {type: 'uint256', value: forcedExit.nullifier.toString()},
+            {type: 'address', value: forcedExit.operator},
+            {type: 'address', value: forcedExit.to},
+            {type: 'uint256', value: forcedExit.amount.toString()},
+            {type: 'uint256', value: forcedExit.exitStart},
+            {type: 'uint256', value: forcedExit.exitEnd},
+            {type: 'bool',    value: 1},
+        ];
+
+        return this.prepareTransaction(poolAddress, selector, parameters);
     }
 
     public async getTokenSellerContract(poolAddress: string): Promise<string> {
@@ -326,23 +467,8 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             {type: 'uint256', value: amount},
             {type: 'bytes', value: zkAddrBytes}
         ];
-        const tx = await this.activeTronweb().transactionBuilder.triggerSmartContract(ddQueueAddress, selector, { feeLimit: 100_000_000 }, parameters);
-        const contract = tx?.transaction?.raw_data?.contract;
-        let txData: any | undefined;
-        if (Array.isArray(contract) && contract.length > 0) {
-            txData = truncateHexPrefix(contract[0].parameter?.value?.data);
-        }
-
-        if (typeof txData !== 'string' && txData.length < 8) {
-            throw new InternalError('Unable to extract DD calldata');
-        }
-
-        return {
-            to: ddQueueAddress,
-            amount: 0n,
-            data: txData.slice(8),  // skip selector from the calldata
-            selector,
-        };
+        
+        return this.prepareTransaction(ddQueueAddress, selector, parameters);
     }
 
     public async createNativeDirectDepositTx(
@@ -501,7 +627,25 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public async getTxRevertReason(txHash: string): Promise<string | null> {
-        return 'UNKNOWN_REASON'
+        try {
+            const txInfo = await this.commonRpcRetry(async () => {
+                return this.activeTronweb().trx.getTransactionInfo(txHash);
+            }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
+
+            if (txInfo && txInfo.receipt) {
+                if (txInfo.result && txInfo.result == 'FAILED') {
+                    if (txInfo.resMessage) {
+                        return this.tronWeb.toAscii(txInfo.resMessage);
+                    }
+
+                    return 'UNKNOWN_REASON';
+                }
+            }
+        } catch(err) {
+            console.warn(`[TronNetwork] error on checking tx ${txHash}: ${err.message}`);
+        }
+
+        return null;
     }
 
     public async getChainId(): Promise<number> {
@@ -541,7 +685,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             const tronTransaction = await this.commonRpcRetry(async () => {
                 return this.activeTronweb().trx.getTransaction(poolTxHash);
             }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
-            //const tronTransactionInfo = await this.activeTronweb().trx.getTransaction(poolTxHash);
+            const txState = await this.getTransactionState(poolTxHash);
             const timestamp = tronTransaction?.raw_data?.timestamp
             const contract = tronTransaction?.raw_data?.contract;
             let txData: any | undefined;
@@ -550,8 +694,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             }
 
             if (txData && timestamp) {
-                // TODO: get is tx mined!!!
-                let isMined = true;
+                let isMined = txState == L1TxState.MinedSuccess;
 
                 const txSelector = txData.slice(0, 8).toLowerCase();
                 if (txSelector == PoolSelector.Transact) {
@@ -622,6 +765,27 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
 
     public estimateCalldataLength(txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
         return estimateEvmCalldataLength(txType, notesCnt, extraDataLen)
+    }
+
+    public async getTransactionState(txHash: string): Promise<L1TxState> {
+        try {
+            const txInfo = await this.commonRpcRetry(async () => {
+                return this.activeTronweb().trx.getTransactionInfo(txHash);
+            }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
+
+            if (txInfo && txInfo.receipt) {
+                // tx is on the blockchain (assume mined)
+                if (txInfo.result && txInfo.result == 'FAILED') {
+                    return L1TxState.MinedFailed;
+                }
+
+                return L1TxState.MinedSuccess;
+            }
+        } catch(err) {
+            console.warn(`[TronNetwork] error on checking tx ${txHash}: ${err.message}`);
+        }
+
+        return L1TxState.NotFound;
     }
 
 

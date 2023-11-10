@@ -2347,6 +2347,12 @@ const merger = new(BareMerger as any)({
           return printWithCache(PoolTxesByIndexesDocument);
         },
         location: 'PoolTxesByIndexesDocument.graphql'
+      },{
+        document: PoolTxesFromIndexDocument,
+        get rawSDL() {
+          return printWithCache(PoolTxesFromIndexDocument);
+        },
+        location: 'PoolTxesFromIndexDocument.graphql'
       }
     ];
     },
@@ -2421,6 +2427,17 @@ export type PoolTxesByIndexesQuery = { poolTxes: Array<(
       Pick<DepositOperation, 'fee' | 'nullifier' | 'token_amount'>
       & { pooltx: Pick<PoolTx, 'calldata'> }
     ) | Pick<PermittableDepositOperation, 'fee' | 'nullifier' | 'permit_holder' | 'token_amount'> | Pick<TransferOperation, 'fee' | 'nullifier'> | Pick<WithdrawalOperation, 'fee' | 'native_amount' | 'nullifier' | 'receiver' | 'token_amount'> }
+  )> };
+
+export type PoolTxesFromIndexQueryVariables = Exact<{
+  index_gte: Scalars['BigInt'];
+  first?: InputMaybe<Scalars['Int']>;
+}>;
+
+
+export type PoolTxesFromIndexQuery = { poolTxes: Array<(
+    Pick<PoolTx, 'index' | 'tx' | 'message'>
+    & { zk: Pick<ZkCommon, 'out_commit'> }
   )> };
 
 
@@ -2535,6 +2552,19 @@ export const PoolTxesByIndexesDocument = gql`
   }
 }
     ` as unknown as DocumentNode<PoolTxesByIndexesQuery, PoolTxesByIndexesQueryVariables>;
+export const PoolTxesFromIndexDocument = gql`
+    query PoolTxesFromIndex($index_gte: BigInt!, $first: Int = 1000) {
+  poolTxes(where: {index_gte: $index_gte}, first: $first, orderBy: index) {
+    index
+    zk {
+      out_commit
+    }
+    tx
+    message
+  }
+}
+    ` as unknown as DocumentNode<PoolTxesFromIndexQuery, PoolTxesFromIndexQueryVariables>;
+
 
 
 
@@ -2550,6 +2580,9 @@ export function getSdk<C, E>(requester: Requester<C, E>) {
     },
     PoolTxesByIndexes(variables?: PoolTxesByIndexesQueryVariables, options?: C): Promise<PoolTxesByIndexesQuery> {
       return requester<PoolTxesByIndexesQuery, PoolTxesByIndexesQueryVariables>(PoolTxesByIndexesDocument, variables, options) as Promise<PoolTxesByIndexesQuery>;
+    },
+    PoolTxesFromIndex(variables: PoolTxesFromIndexQueryVariables, options?: C): Promise<PoolTxesFromIndexQuery> {
+      return requester<PoolTxesFromIndexQuery, PoolTxesFromIndexQueryVariables>(PoolTxesFromIndexDocument, variables, options) as Promise<PoolTxesFromIndexQuery>;
     }
   };
 }

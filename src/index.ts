@@ -3,7 +3,7 @@ export { ClientConfig, AccountConfig, accountId,
         SnarkConfigParams, Parameters, DepositType,
       } from './config';
 export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount,
-        ClientState, ClientStateCallback
+        ClientState, ClientStateCallback,
       } from './client';
 export { ZkBobProvider as ZkBobAccountlessClient, GiftCardProperties } from './client-provider';
 export { SyncStat } from './state';
@@ -19,5 +19,6 @@ export { deriveSpendingKeyZkBob } from './utils'
 export { IAddressComponents } from 'libzkbob-rs-wasm-web';
 export { SignatureType } from './signers/abstract-signer'
 export { DirectDepositType } from './dd'
+export { ForcedExitState, CommittedForcedExit, FinalizedForcedExit } from './emergency'
 
 export * from './errors'

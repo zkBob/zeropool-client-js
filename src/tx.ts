@@ -29,20 +29,15 @@ export class ShieldedTx {
   extra: string;
 }
 
-// The raw low-level append direct deposit calldata
-/*export class AppendDDTx {
-  nullifier: bigint;
-  outCommit: bigint;
-  transferIndex: bigint;
-  energyAmount: bigint;
-  tokenAmount: bigint;
-  transactProof: bigint[];
-  rootAfter: bigint;
-  treeProof: bigint[];
-  txType: RegularTxType;
-  memo: string;
-  extra: string;
-}*/
+// Minimal required pool transaction info
+// needed to restore local state
+export class PoolTxMinimal {
+  index: number;
+  commitment: string; // hex (without 0x prefix)
+  txHash: string; // needed to retrieve PoolTxDetails
+  memo: string;   // hex (without 0x prefix)
+  isMined: boolean;
+}
 
 // The top-level transaction details needed in the client library (HistoryStorage for example)
 export enum PoolTxType {

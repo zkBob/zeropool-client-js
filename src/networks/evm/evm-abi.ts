@@ -196,7 +196,7 @@ export const poolContractABI: AbiItem[] = [
             name: '',
             type: 'uint256'
         }],
-        name: 'roots',
+        name: 'nullifiers',
         outputs: [{
             internalType: 'uint256',
             name: '',
@@ -207,52 +207,67 @@ export const poolContractABI: AbiItem[] = [
     },
     {
         inputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        name: 'roots',
+        outputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    },
+    {
+        inputs:[{
             internalType: 'address',
             name: '_user',
-            type: 'address',
+            type: 'address'
         }],
         name: 'getLimitsFor',
         outputs: [{
             components: [{
                 internalType: 'uint256',
                 name: 'tvlCap',
-                type: 'uint256',
+                type: 'uint256'
             }, {
                 internalType: 'uint256',
                 name: 'tvl',
-                type: 'uint256',
+                type: 'uint256'
             }, {
                 internalType: 'uint256',
                 name: 'dailyDepositCap',
-                type: 'uint256',
+                type: 'uint256'
             }, {
                 internalType: 'uint256',
                 name: 'dailyDepositCapUsage',
-                type: 'uint256',
+                type: 'uint256'
             }, {
                 internalType: 'uint256',
                 name: 'dailyWithdrawalCap',
-                type: 'uint256',
+                type: 'uint256'
             }, {
                 internalType: 'uint256',
                 name: 'dailyWithdrawalCapUsage',
-                type: 'uint256',
+                type: 'uint256'
             }, {
                 internalType: 'uint256',
                 name: 'dailyUserDepositCap',
-                type: 'uint256',
+                type: 'uint256'
             }, {
                 internalType: 'uint256',
                 name: 'dailyUserDepositCapUsage',
-                type: 'uint256',
+                type: 'uint256'
             }, {
                 internalType: 'uint256',
                 name: 'depositCap',
-                type: 'uint256',
+                type: 'uint256'
             }, {
                 internalType: 'uint8',
                 name: 'tier',
-                type: 'uint8',
+                type: 'uint8'
             }, {
                 internalType: 'uint256',
                 name: 'dailyUserDirectDepositCap',
@@ -266,12 +281,23 @@ export const poolContractABI: AbiItem[] = [
                 name: 'directDepositCap',
                 type: 'uint256'
             }],
-            internalType: 'struct ZkBobAccounting.Limits',
+            internalType: 'struct IZkBobAccounting.Limits',
             name: '',
             type: 'tuple'
         }],
         stateMutability: 'view',
-        type: 'function',
+        type: 'function'
+    },
+    {
+        inputs: [],
+        name: 'accounting',
+        outputs: [{
+            internalType: 'contract IZkBobAccounting',
+            name: '',
+            type: 'address'
+        }],
+        stateMutability: 'view',
+        type: 'function'
     },
     {
         inputs: [],
@@ -321,7 +347,165 @@ export const poolContractABI: AbiItem[] = [
         outputs: [],
         stateMutability: 'nonpayable',
         type: 'function'
-    }
+    },
+    {
+        anonymous: false,
+        inputs: [{
+            indexed: true,
+            internalType: 'uint256',
+            name: 'nullifier',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'address',
+            name: 'operator',
+            type: 'address'
+        }, {
+            indexed: false,
+            internalType: 'address',
+            name: 'to',
+            type: 'address'
+        }, {
+            indexed: false,
+            internalType: 'uint256',
+            name: 'amount',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'uint256',
+            name: 'exitStart',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'uint256',
+            name: 'exitEnd',
+            type: 'uint256'
+        }],
+        name: 'CommitForcedExit',
+        type: 'event'
+    },
+    {
+        anonymous: false,
+        inputs: [{
+            indexed: true,
+            internalType: 'uint256',
+            name: 'nullifier',
+            type: 'uint256'
+        }],
+        name: 'CancelForcedExit',
+        type: 'event'
+    },
+    {
+        inputs: [{
+            internalType: 'uint256',
+            name: '',
+            type: 'uint256'
+        }],
+        name: 'committedForcedExits',
+        outputs: [{
+            internalType: 'bytes32',
+            name: '',
+            type: 'bytes32'
+        }],
+        stateMutability: 'view',
+        type: 'function'
+    },
+    {
+        inputs: [{
+            internalType: 'address',
+            name: '_operator',
+            type: 'address'
+        }, {
+            internalType: 'address',
+            name: '_to',
+            type: 'address'
+        }, {
+            internalType: 'uint256',
+            name: '_amount',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_index',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_nullifier',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_out_commit',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256[8]',
+            name: '_transfer_proof',
+            type: 'uint256[8]'
+        }],
+        name: 'commitForcedExit',
+        outputs: [],
+        stateMutability: 'nonpayable',
+        type: 'function'
+    },
+    {
+        anonymous: false,
+        inputs: [{
+            indexed: true,
+            internalType: 'uint256',
+            name: 'index',
+            type: 'uint256'
+        }, {
+            indexed: true,
+            internalType: 'uint256',
+            name: 'nullifier',
+            type: 'uint256'
+        }, {
+            indexed: false,
+            internalType: 'address',
+            name: 'to',
+            type: 'address'
+        }, {
+            indexed: false,
+            internalType: 'uint256',
+            name: 'amount',
+            type: 'uint256'
+        }],
+        name: 'ForcedExit',
+        type: 'event'
+    },
+    {
+        inputs: [{
+            internalType: 'uint256',
+            name: '_nullifier',
+            type: 'uint256'
+        }, {
+            internalType: 'address',
+            name: '_operator',
+            type: 'address'
+        }, {
+            internalType: 'address',
+            name: '_to',
+            type: 'address'
+        }, {
+            internalType: 'uint256',
+            name: '_amount',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_exitStart',
+            type: 'uint256'
+        }, {
+            internalType: 'uint256',
+            name: '_exitEnd',
+            type: 'uint256'
+        }, {
+            internalType: 'bool',
+            name: '_cancel',
+            type: 'bool'
+        }],
+        name: 'executeForcedExit',
+        outputs: [],
+        stateMutability: 'nonpayable',
+        type: 'function'
+    },
 ];
 
 export const ddContractABI: AbiItem[] = [
@@ -508,5 +692,76 @@ export const ddContractABI: AbiItem[] = [
         }],
         name: 'RefundDirectDeposit',
         type: 'event'
+    },
+];
+
+export const accountingABI: AbiItem[] = [
+    {
+        inputs:[{
+            internalType: 'address',
+            name: '_user',
+            type: 'address'
+        }],
+        name: 'getLimitsFor',
+        outputs: [{
+            components: [{
+                internalType: 'uint256',
+                name: 'tvlCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'tvl',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyWithdrawalCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyWithdrawalCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'depositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint8',
+                name: 'tier',
+                type: 'uint8'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCap',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'dailyUserDirectDepositCapUsage',
+                type: 'uint256'
+            }, {
+                internalType: 'uint256',
+                name: 'directDepositCap',
+                type: 'uint256'
+            }],
+            internalType: 'struct IZkBobAccounting.Limits',
+            name: '',
+            type: 'tuple'
+        }],
+        stateMutability: 'view',
+        type: 'function'
     },
 ];
