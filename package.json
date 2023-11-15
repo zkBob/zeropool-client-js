@@ -31,7 +31,7 @@
     "hdwallet-babyjub": "^0.0.2",
     "idb": "^7.0.0",
     "libzkbob-rs-wasm-web": "file:../libzkbob-rs/libzkbob-rs-wasm/web",
-    "libzkbob-rs-wasm-web-mt": "file:../libzkbob-rs/libzkbob-rs-wasm/web",
+    "libzkbob-rs-wasm-web-mt": "file:../libzkbob-rs/libzkbob-rs-wasm/web-mt",
     "promise-throttle": "^1.1.2",
     "regenerator-runtime": "^0.13.9",
     "tronweb": "^5.3.0",

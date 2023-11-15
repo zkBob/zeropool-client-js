@@ -4986,7 +4986,7 @@ levn@^0.3.0, levn@~0.3.0:
     prelude-ls "~1.1.2"
     type-check "~0.3.2"
 
-"libzkbob-rs-wasm-web-mt@file:../libzkbob-rs/libzkbob-rs-wasm/web":
+"libzkbob-rs-wasm-web-mt@file:../libzkbob-rs/libzkbob-rs-wasm/web-mt":
   version "1.6.0"
 
 "libzkbob-rs-wasm-web@file:../libzkbob-rs/libzkbob-rs-wasm/web":
