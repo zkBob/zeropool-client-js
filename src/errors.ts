@@ -111,3 +111,9 @@ export class PoolJobError extends BobError {
         super(`Tx ${txHash} (job ${jobId}) was reverted on the contract with reason: ${reason}`);
     }
 }
+
+export class ZkAddressFormatError extends BobError {
+    constructor(public address: string) {
+        super(`Address ${address} has invalid format and cannot be decoded`);
+    }
+}

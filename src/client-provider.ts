@@ -98,7 +98,7 @@ export class ZkBobProvider {
     private relayerFee:       { [name: string]: RelayerFeeFetch } = {};
     private maxSwapAmount:    { [name: string]: MaxSwapAmountFetch } = {};
     private coldStorageCfg:   { [name: string]: ColdStorageConfig } = {};
-    private addressPrefixes:  ZkAddressPrefix[] = [];
+    protected addressPrefixes:  ZkAddressPrefix[] = [];
     protected supportId: string | undefined;
 
     // The current pool alias should always be set

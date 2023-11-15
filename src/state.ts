@@ -136,7 +136,7 @@ export class ZkBobState {
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
 
-    await worker.createAccount(zpState.stateId, zpState.sk, poolId, networkName);
+    await worker.createAccount(zpState.stateId, zpState.sk, poolId);
     zpState.worker = worker;
     
     zpState.history = await HistoryStorage.init(zpState.stateId, network, zpState, subgraph);
@@ -164,7 +164,7 @@ export class ZkBobState {
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
 
-    await worker.createAccount(zpState.stateId, zpState.sk, poolId, networkName);
+    await worker.createAccount(zpState.stateId, zpState.sk, poolId);
     zpState.worker = worker;
 
     return zpState;
@@ -287,8 +287,8 @@ export class ZkBobState {
     return await this.worker.convertAddressToChainSpecific(this.stateId, shieldedAddress);
   }
 
-  public async parseAddress(shieldedAddress: string): Promise<IAddressComponents> {
-    return this.worker.parseAddress(this.stateId, shieldedAddress);
+  public async parseAddress(shieldedAddress: string, poolId?: number): Promise<IAddressComponents> {
+    return this.worker.parseAddress(this.stateId, shieldedAddress, poolId);
   }
 
   public async createDepositPermittable(deposit: IDepositPermittableData): Promise<any> {

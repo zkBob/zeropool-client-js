@@ -115,11 +115,11 @@ const obj = {
 
   // accountId is a unique string depends on network, poolId and sk
   // The local db will be named with accountId
-  async createAccount(accountId: string, sk: Uint8Array, poolId: number, network: string): Promise<void> {
+  async createAccount(accountId: string, sk: Uint8Array, poolId: number): Promise<void> {
     console.debug('Web worker: createAccount');
     try {
       const state = await wasm.UserState.init(accountId);
-      zpAccounts[accountId] = new wasm.UserAccount(sk, poolId, state, network);
+      zpAccounts[accountId] = new wasm.UserAccount(sk, poolId, state);
     } catch (e) {
       console.error(e);
     }
@@ -243,8 +243,8 @@ const obj = {
     return zpAccounts[accountId].convertAddressToChainSpecific(oldAddress);
   },
 
-  async parseAddress(accountId: string, shieldedAddress: string): Promise<IAddressComponents> {
-    return zpAccounts[accountId].parseAddress(shieldedAddress);
+  async parseAddress(accountId: string, shieldedAddress: string, poolId?: number): Promise<IAddressComponents> {
+    return zpAccounts[accountId].parseAddress(shieldedAddress, poolId);
   },
 
   async accountNullifier(accountId: string): Promise<string> {
