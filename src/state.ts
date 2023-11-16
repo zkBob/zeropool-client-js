@@ -16,6 +16,7 @@ import { CONSTANTS } from './constants';
 import { NetworkBackend } from './networks';
 import { ZkBobSubgraph } from './subgraph';
 import { TreeState } from './client-provider';
+import { GENERIC_ADDRESS_PREFIX } from './address-prefixes';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const BATCH_SIZE = 1000;  // number of transactions per request during a sync state
@@ -91,6 +92,7 @@ export class ZkBobState {
   public stateId: string; // should depends on pool and sk
   private sk: Uint8Array;
   private network: NetworkBackend;
+  private addressPrefix?: string;
   private subgraph?: ZkBobSubgraph;
   private birthIndex?: number;
   public history?: HistoryStorage; // should work synchronically with the state
@@ -124,6 +126,7 @@ export class ZkBobState {
     networkName: string,
     denominator: bigint,
     poolId: number,
+    addressPrefix: string | undefined,
     tokenAddress: string,
     worker: any,
   ): Promise<ZkBobState> {
@@ -135,6 +138,7 @@ export class ZkBobState {
     
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
+    zpState.addressPrefix = addressPrefix;
 
     await worker.createAccount(zpState.stateId, zpState.sk, poolId);
     zpState.worker = worker;
@@ -264,6 +268,10 @@ export class ZkBobState {
     return await this.worker.generateAddressForSeed(this.stateId, seed);
   }
 
+  public async generateUniversalAddressForSeed(seed: Uint8Array): Promise<string> {
+    return await this.worker.generateUniversalAddressForSeed(this.stateId, seed);
+  }
+
   public async verifyShieldedAddress(shieldedAddress: string): Promise<boolean> {
     return await this.worker.verifyShieldedAddress(this.stateId, shieldedAddress);
   }
@@ -279,7 +287,14 @@ export class ZkBobState {
   }
 
   public async assembleAddress(d: string, p_d: string): Promise<string> {
-    return this.worker.assembleAddress(this.stateId, forceDecimal(d), forceDecimal(p_d));
+    let addr;
+    if (this.addressPrefix) {
+      addr = await this.worker.assembleAddress(this.stateId, forceDecimal(d), forceDecimal(p_d));
+    } else {
+      addr = await this.worker.assembleUniversalAddress(this.stateId, forceDecimal(d), forceDecimal(p_d));
+    }
+
+    return `${this.addressPrefix ?? GENERIC_ADDRESS_PREFIX}:${addr}`;
   }
 
   // Converts zk-addresss from the old prefixless format to the new chain-specific one

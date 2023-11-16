@@ -268,6 +268,7 @@ export class ZkBobClient extends ZkBobProvider {
     const [denominator, poolId] = await Promise.all([this.denominator(), this.poolId()]);
     const network = this.network();
     const networkName = this.networkName();
+    const addressPrefix = await this.addressPrefix().catch(() => undefined);
 
     if (this.account) {
       this.monitoredJobs.clear();
@@ -301,6 +302,7 @@ export class ZkBobClient extends ZkBobProvider {
           networkName,
           denominator,
           poolId,
+          addressPrefix ? addressPrefix.prefix : undefined,
           pool.tokenAddress,
           this.worker
         );
@@ -490,9 +492,14 @@ export class ZkBobClient extends ZkBobProvider {
   // ---------------------------------------------------------------------------
 
   // Generate shielded address to receive funds
-  public async generateAddress(): Promise<string> {;
-    const prefix = (await this.addressPrefix()).prefix;
-    return `${prefix}:${await this.zpState().generateAddress()}`;
+  public async generateAddress(): Promise<string> {
+    try {
+      const prefix = (await this.addressPrefix()).prefix;
+      return `${prefix}:${await this.zpState().generateAddress()}`;
+    } catch(err) {
+      console.warn(`Pool specific address could not be generated (error: ${err.message}). Trying to get generic one`);
+      return this.generateUniversalAddress();
+    }
   }
 
   public async generateUniversalAddress(): Promise<string> {;
@@ -501,18 +508,22 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Generate address with the specified seed
   public async generateAddressForSeed(seed: Uint8Array): Promise<string> {
-    const prefix = (await this.addressPrefix()).prefix;
-    return `${prefix}:${await this.zpState().generateAddressForSeed(seed)}`;
+    try {
+      const prefix = (await this.addressPrefix()).prefix;
+      return `${prefix}:${await this.zpState().generateAddressForSeed(seed)}`;
+    } catch(err) {
+      console.warn(`Pool specific address could not be generated (error: ${err.message}). Trying to get generic one`);
+      return `${GENERIC_ADDRESS_PREFIX}:${await this.zpState().generateUniversalAddressForSeed(seed)}`;
+    }
   }
 
   private async checkShieldedAddressFormat(address: string, forCurrentPool: boolean = true): Promise<boolean> {
-    const curPref = await this.addressPrefix();
     if (PREFIXED_ADDR_REGEX.test(address)) {
       const addrPrefix = address.split(':')[0].toLowerCase();
       if (addrPrefix != GENERIC_ADDRESS_PREFIX) {
         if (forCurrentPool) {
           // check if address prefix is equal to the current one
-          const poolSpecificPrefix = curPref.prefix.toLowerCase();
+          const poolSpecificPrefix = (await this.addressPrefix()).prefix.toLowerCase();
           if (addrPrefix != poolSpecificPrefix) {
             return false;
           }
@@ -524,7 +535,7 @@ export class ZkBobClient extends ZkBobProvider {
         }
       }
     } else if (NAKED_ADDR_REGEX.test(address)) {
-      if (forCurrentPool && (curPref.poolId != 0 || (await this.network().getChainId()) != 137)) {
+      if (forCurrentPool && ((await this.addressPrefix()).poolId != 0 || (await this.network().getChainId()) != 137)) {
         // addresses without any prefix are accepted for Polygon USDC pool only
         // so here is a hardcoded crutch for backward compatibility
         return false;

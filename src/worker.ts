@@ -227,6 +227,10 @@ const obj = {
     return zpAccounts[accountId].generateAddressForSeed(seed);
   },
 
+  async generateUniversalAddressForSeed(accountId: string, seed: Uint8Array): Promise<string> {
+    return zpAccounts[accountId].generateUniversalAddressForSeed(seed);
+  },
+
   async verifyShieldedAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
     return zpAccounts[accountId].validateAddress(shieldedAddress);
   },
@@ -237,6 +241,10 @@ const obj = {
 
   async assembleAddress(accountId: string, d: string, p_d: string): Promise<string> {
     return zpAccounts[accountId].assembleAddress(d, p_d);
+  },
+
+  async assembleUniversalAddress(accountId: string, d: string, p_d: string): Promise<string> {
+    return zpAccounts[accountId].assembleUniversalAddress(d, p_d);
   },
 
   async convertAddressToChainSpecific(accountId: string, oldAddress: string): Promise<string> {
