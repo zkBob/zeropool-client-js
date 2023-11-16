@@ -112,8 +112,8 @@ export class PoolJobError extends BobError {
     }
 }
 
-export class ZkAddressFormatError extends BobError {
-    constructor(public address: string) {
-        super(`Address ${address} has invalid format and cannot be decoded`);
+export class ZkAddressParseError extends BobError {s
+    constructor(public description: string) {
+        super(`Address parse error: ${description}`);
     }
 }

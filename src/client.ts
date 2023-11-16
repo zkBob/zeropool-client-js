@@ -1,4 +1,4 @@
-import { Proof, ITransferData, IWithdrawData, StateUpdate, TreeNode, IAddressComponents, IndexedTx, Account } from 'libzkbob-rs-wasm-web';
+import { Proof, ITransferData, IWithdrawData, TreeNode, IAddressComponents, IndexedTx } from 'libzkbob-rs-wasm-web';
 import { Chains, Pools, Parameters, ClientConfig,
         AccountConfig, accountId, ProverMode, DepositType, ZkAddressPrefix } from './config';
 import { truncateHexPrefix, toTwosComplementHex, bigintToArrayLe } from './utils';
@@ -9,7 +9,7 @@ import { HistoryRecord, HistoryRecordState, HistoryTransactionType, ComplianceHi
 import { EphemeralAddress } from './ephemeral';
 import { 
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxAccountDeadError, TxAccountLocked, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
-  TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError, ZkAddressFormatError
+  TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError, ZkAddressParseError,
 } from './errors';
 import { JobInfo, RelayerFee } from './services/relayer';
 import { GiftCardProperties, TreeState, ZkBobProvider } from './client-provider';
@@ -509,22 +509,24 @@ export class ZkBobClient extends ZkBobProvider {
     const curPref = await this.addressPrefix();
     if (PREFIXED_ADDR_REGEX.test(address)) {
       const addrPrefix = address.split(':')[0].toLowerCase();
-      if (forCurrentPool) {
-        // check if address prefix is equal to the current one
-        const poolSpecificPrefix = curPref.prefix.toLowerCase();
-        if (addrPrefix != poolSpecificPrefix && addrPrefix != GENERIC_ADDRESS_PREFIX) {
-          return false;
-        }
-      } else {
-        // check if prefix supported
-        if (this.addressPrefixes.findIndex((p) => p.prefix.toLowerCase() == addrPrefix) == -1) {
-          return false;
+      if (addrPrefix != GENERIC_ADDRESS_PREFIX) {
+        if (forCurrentPool) {
+          // check if address prefix is equal to the current one
+          const poolSpecificPrefix = curPref.prefix.toLowerCase();
+          if (addrPrefix != poolSpecificPrefix) {
+            return false;
+          }
+        } else {
+          // check if prefix supported
+          if (this.addressPrefixes.findIndex((p) => p.prefix.toLowerCase() == addrPrefix) == -1) {
+            return false;
+          }
         }
       }
     } else if (NAKED_ADDR_REGEX.test(address)) {
-      // addresses without any prefix are accepted for Polygon USDC pool only
-      // so here is a hardcoded crutch for backward compatibility
       if (forCurrentPool && (curPref.poolId != 0 || (await this.network().getChainId()) != 137)) {
+        // addresses without any prefix are accepted for Polygon USDC pool only
+        // so here is a hardcoded crutch for backward compatibility
         return false;
       }
     } else {
@@ -554,34 +556,33 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   public async addressInfo(address: string): Promise<IAddressComponents> {
+    const handleAddressError = (e: any) => { throw new ZkAddressParseError(e.message); };
     if (await this.checkShieldedAddressFormat(address, false)) {
-      let components: IAddressComponents | undefined = await this.zpState().parseAddress(address).catch(() => undefined);
-      if (!components) {
-        for (const aPrefix of this.addressPrefixes) {
-          components = await this.zpState().parseAddress(address, aPrefix.poolId).catch(() => undefined);
-          if (components) {
-            break;
+      let components: IAddressComponents | undefined;
+      if (PREFIXED_ADDR_REGEX.test(address)) {
+        const prefix = address.split(':')[0].toLowerCase();
+        if (prefix == GENERIC_ADDRESS_PREFIX) {
+          components = await this.zpState().parseAddress(address).catch(handleAddressError);
+        } else {
+          const found = this.addressPrefixes.find((p) => p.prefix.toLowerCase() == prefix);
+          if (found) {
+            components = await this.zpState().parseAddress(address, found.poolId).catch(handleAddressError);
           }
+        }
+      } else {
+        components = await this.zpState().parseAddress(address).catch(handleAddressError);
+        if (components) {
+          // prefixless format available for Polygon USDC pool only (backward compatibility)
+          components.pool_id = '0';
         }
       }
 
-      // the address was decoded for any pool
-      if (components) {
-        // check prefix
-        /*if (PREFIXED_ADDR_REGEX.test(address) &&  /^\d+$/.test(components.pool_id)) {
-
-          const poolId = Number(components.pool_id);
-          const possiblePrefixes = this.addressPrefixes.filter((p) => p.poolId == poolId).map((p) => p.prefix.toLowerCase());
-          if (possiblePrefixes.includes(address.split(':')[0]) == false) {
-            // ???
-          }
-        }*/
-
+      if (components) { // the address was decoded
         return components;
       }
     }
 
-    throw new ZkAddressFormatError(address);
+    throw new ZkAddressParseError('invalid format');
   }
 
   // Waiting while relayer process the jobs set
