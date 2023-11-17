@@ -235,6 +235,10 @@ const obj = {
     return zpAccounts[accountId].validateAddress(shieldedAddress);
   },
 
+  async verifyUniversalShieldedAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
+    return zpAccounts[accountId].validateUniversalAddress(shieldedAddress);
+  },
+
   async isOwnAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
     return zpAccounts[accountId].isOwnAddress(shieldedAddress);
   },

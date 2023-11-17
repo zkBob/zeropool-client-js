@@ -363,6 +363,11 @@ export class ZkBobProvider {
         const poolId = await this.poolId();
         const pref = this.addressPrefixes.filter((val) => val.poolId == poolId);
         if (pref.length > 0) {
+            // Polygon and Sepolia pools share the same pool id (0)
+            // So we should select proper address prefix here
+            if (poolId == 0 && pref.length > 1 && this.pool().chainId == 11155111) {
+                return pref[1];
+            }
             return pref[0];
         }
 

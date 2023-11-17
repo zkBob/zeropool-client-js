@@ -53,7 +53,7 @@ export const hardcodedPrefixes: ZkAddressPrefix[] = [
         prefix: 'zkbob_goerli_usdc',
         name: 'USDC on Goerli testnet'
     },
-    /*{
+    {
         poolId: 0xffff06,
         prefix: 'zkbob_shasta',
         name: 'USDT on Shasta testnet'
@@ -62,5 +62,5 @@ export const hardcodedPrefixes: ZkAddressPrefix[] = [
         poolId: 0xffff07,
         prefix: 'zkbob_nile',
         name: 'USDT on Nile testnet'
-    },*/
+    },
 ];

@@ -276,6 +276,10 @@ export class ZkBobState {
     return await this.worker.verifyShieldedAddress(this.stateId, shieldedAddress);
   }
 
+  public async verifyUniversalShieldedAddress(shieldedAddress: string): Promise<boolean> {
+    return await this.worker.verifyUniversalShieldedAddress(this.stateId, shieldedAddress);
+  }
+
   public async isOwnAddress(shieldedAddress: string): Promise<boolean> {
     let res = this.shieldedAddressCache.get(shieldedAddress);
     if (res === undefined) {

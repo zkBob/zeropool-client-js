@@ -92,6 +92,12 @@ const continuousStates = [ ClientState.StateUpdatingContinuous ];
 
 export type ClientStateCallback = (state: ClientState, progress?: number) => void;
 
+enum ShieldedAddressFormat {
+  Unknown,
+  PoolSpecific,
+  Generic,
+}
+
 export class ZkBobClient extends ZkBobProvider {
   // States for the current account in the different pools
   private zpStates: { [poolAlias: string]: ZkBobState } = {};
@@ -517,41 +523,46 @@ export class ZkBobClient extends ZkBobProvider {
     }
   }
 
-  private async checkShieldedAddressFormat(address: string, forCurrentPool: boolean = true): Promise<boolean> {
+  // returns address checksum type (pool sspecific includes poolId to checksum calculation)
+  private async checkShieldedAddressFormat(address: string, forCurrentPool: boolean = true): Promise<ShieldedAddressFormat> {
+    let format = ShieldedAddressFormat.Unknown;
     if (PREFIXED_ADDR_REGEX.test(address)) {
       const addrPrefix = address.split(':')[0].toLowerCase();
       if (addrPrefix != GENERIC_ADDRESS_PREFIX) {
         if (forCurrentPool) {
           // check if address prefix is equal to the current one
           const poolSpecificPrefix = (await this.addressPrefix()).prefix.toLowerCase();
-          if (addrPrefix != poolSpecificPrefix) {
-            return false;
+          if (addrPrefix == poolSpecificPrefix) {
+            format = ShieldedAddressFormat.PoolSpecific;
           }
         } else {
           // check if prefix supported
-          if (this.addressPrefixes.findIndex((p) => p.prefix.toLowerCase() == addrPrefix) == -1) {
-            return false;
+          if (this.addressPrefixes.findIndex((p) => p.prefix.toLowerCase() == addrPrefix) != -1) {
+            format = ShieldedAddressFormat.PoolSpecific;
           }
         }
+      } else {
+        format = ShieldedAddressFormat.Generic;
       }
     } else if (NAKED_ADDR_REGEX.test(address)) {
-      if (forCurrentPool && ((await this.addressPrefix()).poolId != 0 || (await this.network().getChainId()) != 137)) {
+      if (!forCurrentPool || ((await this.addressPrefix()).poolId == 0 && this.pool().chainId == 137)) {
         // addresses without any prefix are accepted for Polygon USDC pool only
         // so here is a hardcoded crutch for backward compatibility
-        return false;
+        // (still returns a valid format if the flag 'forCurrentPool' isnt set)
+        format = ShieldedAddressFormat.Generic;
       }
-    } else {
-      // incorrect format
-      return false;
     }
 
-    return true;
+    return format;
   }
 
   // Is address valid (correct checksum and current pool)
   public async verifyShieldedAddress(address: string): Promise<boolean> {
-    if (await this.checkShieldedAddressFormat(address)){
-      return this.zpState().verifyShieldedAddress(address);
+    switch (await this.checkShieldedAddressFormat(address)) {
+      case ShieldedAddressFormat.PoolSpecific:
+        return this.zpState().verifyShieldedAddress(address);
+      case ShieldedAddressFormat.Generic:
+        return this.zpState().verifyUniversalShieldedAddress(address);
     }
 
     return false;
@@ -559,7 +570,8 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Returns true if shieldedAddress belogs to the user's account and the current pool
   public async isMyAddress(shieldedAddress: string): Promise<boolean> {
-    if (await this.checkShieldedAddressFormat(shieldedAddress)){
+    const format = await this.checkShieldedAddressFormat(shieldedAddress);
+    if (format != ShieldedAddressFormat.Unknown){
       return this.zpState().isOwnAddress(shieldedAddress);
     }
 
@@ -568,7 +580,8 @@ export class ZkBobClient extends ZkBobProvider {
 
   public async addressInfo(address: string): Promise<IAddressComponents> {
     const handleAddressError = (e: any) => { throw new ZkAddressParseError(e.message); };
-    if (await this.checkShieldedAddressFormat(address, false)) {
+    const format = await this.checkShieldedAddressFormat(address, false); // expected format by address form
+    if (format != ShieldedAddressFormat.Unknown) {
       let components: IAddressComponents | undefined;
       if (PREFIXED_ADDR_REGEX.test(address)) {
         const prefix = address.split(':')[0].toLowerCase();
@@ -583,13 +596,22 @@ export class ZkBobClient extends ZkBobProvider {
       } else {
         components = await this.zpState().parseAddress(address).catch(handleAddressError);
         if (components) {
-          // prefixless format available for Polygon USDC pool only (backward compatibility)
-          components.pool_id = '0';
+          if (components.format == 'generic') {
+            // prefixless format available for Polygon USDC pool only (backward compatibility)
+            components.pool_id = '0';
+          } else {
+            components = undefined;
+          }
         }
       }
 
       if (components) { // the address was decoded
-        return components;
+        if ((components.format == 'generic' && format == ShieldedAddressFormat.Generic) ||
+          (components.format == 'pool' && format == ShieldedAddressFormat.PoolSpecific))
+        {
+          // the actual format match the address form
+          return components;
+        }
       }
     }
 
