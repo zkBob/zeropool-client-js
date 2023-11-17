@@ -4986,11 +4986,15 @@ levn@^0.3.0, levn@~0.3.0:
     prelude-ls "~1.1.2"
     type-check "~0.3.2"
 
-"libzkbob-rs-wasm-web-mt@file:../libzkbob-rs/libzkbob-rs-wasm/web-mt":
-  version "1.6.0"
+libzkbob-rs-wasm-web-mt@1.6.0-beta:
+  version "1.6.0-beta"
+  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web-mt/-/libzkbob-rs-wasm-web-mt-1.6.0-beta.tgz#f9c95c820d2b22dd7499cb73788deb6d43987d10"
+  integrity sha512-wy5LubNd3hemhGy4nSKysfdww6Fze90KNBYhI+k9L4jtiAviDV4t8QHm0+qpXjAxAFuDqklMHabrf6R9jBtRmw==
 
-"libzkbob-rs-wasm-web@file:../libzkbob-rs/libzkbob-rs-wasm/web":
-  version "1.6.0"
+libzkbob-rs-wasm-web@1.6.0-beta:
+  version "1.6.0-beta"
+  resolved "https://registry.yarnpkg.com/libzkbob-rs-wasm-web/-/libzkbob-rs-wasm-web-1.6.0-beta.tgz#834236fade1f7c7fc4601ee4de150bedabe49721"
+  integrity sha512-ZkbjyJoQuAZ3tWxVP1X9l9xniw39hJcUIct50M68MSYGMh8AXZjsYRQV/MGbtqGlTDIdZ8NMqEYTxoF47QpKIg==
 
 lie@3.1.1:
   version "3.1.1"
