@@ -17,7 +17,6 @@ const LIB_VERSION = require('../package.json').version;
 
 const RELAYER_FEE_LIFETIME = 30;  // when to refetch the relayer fee (in seconds)
 const NATIVE_AMOUNT_LIFETIME = 3600;  // when to refetch the max supported swap amount (in seconds)
-const DEFAULT_RELAYER_FEE = BigInt(100000000);
 const MIN_TX_AMOUNT = BigInt(50000000);
 const GIFT_CARD_CODE_VER = 1;
 
@@ -381,17 +380,9 @@ export class ZkBobProvider {
     public async getRelayerFee(): Promise<RelayerFee> {
         let cachedFee = this.relayerFee[this.curPool];
         if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
-            try {
-                const fee = await this.relayer().fee();
-                cachedFee = {fee, timestamp: Date.now()};
-                this.relayerFee[this.curPool] = cachedFee;
-            } catch (err) {
-				const res = this.relayerFee[this.curPool]?.fee ?? 
-                    {fee: DEFAULT_RELAYER_FEE, oneByteFee: 0n};
-                console.error(`Cannot fetch relayer fee, will using default (${res.fee} per tx, ${res.oneByteFee} per byte): ${err}`);
-
-                return res;
-            }
+            const fee = await this.relayer().fee();
+            cachedFee = {fee, timestamp: Date.now()};
+            this.relayerFee[this.curPool] = cachedFee;
         }
 
         return cachedFee.fee;
