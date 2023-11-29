@@ -722,9 +722,9 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                             throw new InternalError(`No signature for approve deposit`);
                         }
                     } else if (tx.txType == RegularTxType.BridgeDeposit) {
-                        txInfo.depositAddr = '0x' + tx.memo.slice(32, 72);
+                        txInfo.depositAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
                     } else if (tx.txType == RegularTxType.Withdraw) {
-                        txInfo.withdrawAddr = '0x' + tx.memo.slice(32, 72);
+                        txInfo.withdrawAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
                     }
 
                     return {
