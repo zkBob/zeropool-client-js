@@ -499,13 +499,8 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Generate shielded address to receive funds
   public async generateAddress(): Promise<string> {
-    try {
-      const prefix = (await this.addressPrefix()).prefix;
-      return `${prefix}:${await this.zpState().generateAddress()}`;
-    } catch(err) {
-      console.warn(`Pool specific address could not be generated (error: ${err.message}). Trying to get generic one`);
-      return this.generateUniversalAddress();
-    }
+    const prefix = (await this.addressPrefix()).prefix;
+    return `${prefix}:${await this.zpState().generateAddress()}`;
   }
 
   public async generateUniversalAddress(): Promise<string> {;
@@ -514,13 +509,8 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Generate address with the specified seed
   public async generateAddressForSeed(seed: Uint8Array): Promise<string> {
-    try {
-      const prefix = (await this.addressPrefix()).prefix;
-      return `${prefix}:${await this.zpState().generateAddressForSeed(seed)}`;
-    } catch(err) {
-      console.warn(`Pool specific address could not be generated (error: ${err.message}). Trying to get generic one`);
-      return `${GENERIC_ADDRESS_PREFIX}:${await this.zpState().generateUniversalAddressForSeed(seed)}`;
-    }
+    const prefix = (await this.addressPrefix()).prefix;
+    return `${prefix}:${await this.zpState().generateAddressForSeed(seed)}`;
   }
 
   // returns address checksum type (pool sspecific includes poolId to checksum calculation)
