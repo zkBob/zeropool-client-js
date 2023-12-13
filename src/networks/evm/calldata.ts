@@ -1,5 +1,5 @@
 import { InternalError } from "../../errors";
-import { ShieldedTx, RegularTxType } from "../../tx";
+import { ShieldedTx, RegularTxType, TxMemoVersion, CURRENT_MEMO_VERSION } from "../../tx";
 import { HexStringReader, assertNotNull } from "../../utils";
 import { PoolSelector } from ".";
 
@@ -64,7 +64,12 @@ export function decodeEvmCalldata(calldata: string): ShieldedTx {
   tx.rootAfter = reader.readBigInt(32)!;
   assertNotNull(tx.rootAfter);
   tx.treeProof = reader.readBigIntArray(8, 32);
-  tx.txType = reader.readHex(2) as RegularTxType;
+  tx.memoVer = reader.readNumber(1) as TxMemoVersion;
+  assertNotNull(tx.memoVer);
+  if (tx.memoVer > CURRENT_MEMO_VERSION) {
+    throw new InternalError('Unsupported memo version');
+  }
+  tx.txType = reader.readHex(1) as RegularTxType;
   assertNotNull(tx.txType);
   const memoSize = reader.readNumber(2);
   assertNotNull(memoSize);

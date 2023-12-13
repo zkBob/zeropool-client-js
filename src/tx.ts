@@ -1,3 +1,10 @@
+export enum TxMemoVersion {
+  InitialVersion = 0,
+  V1 = 1,
+}
+
+export const CURRENT_MEMO_VERSION = TxMemoVersion.V1;
+
 export enum RegularTxType {
   Deposit = '0000',
   Transfer = '0001',
@@ -24,6 +31,7 @@ export class ShieldedTx {
   transactProof: bigint[];
   rootAfter: bigint;
   treeProof: bigint[];
+  memoVer: TxMemoVersion;
   txType: RegularTxType;
   memo: string;
   extra: string;
