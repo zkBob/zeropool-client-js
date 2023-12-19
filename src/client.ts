@@ -841,7 +841,7 @@ export class ZkBobClient extends ZkBobProvider {
     const dataToSign: DepositData = {
       tokenAddress: pool.tokenAddress,
       owner: fromAddress,
-      spender: this.depositDestination(),
+      spender: await this.depositDestination(),
       amount: await this.shieldedAmountToWei(amountGwei + feeGwei),
       deadline: BigInt(deadline),
       nullifier: '0x' + toTwosComplementHex(BigInt(txData.public.nullifier), 32)
@@ -920,7 +920,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     if (pool.depositScheme == DepositType.PermitV2 || pool.depositScheme == DepositType.Approve) {
-      const spender = pool.depositScheme == DepositType.PermitV2 ? PERMIT2_CONTRACT : this.depositDestination();
+      const spender = pool.depositScheme == DepositType.PermitV2 ? PERMIT2_CONTRACT : await this.depositDestination();
       const curAllowance = await state.ephemeralPool().allowance(ephemeralIndex, spender);
       if (curAllowance < amountGwei + neededFee.total) {
         console.log(`Approving tokens for contract ${spender}...`);
