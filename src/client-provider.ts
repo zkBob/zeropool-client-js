@@ -373,6 +373,12 @@ export class ZkBobProvider {
         throw new InternalError(`The current pool (id = 0x${poolId.toString(16)}) has no configured address prefix`);
     }
 
+    public depositDestination(): string {
+        const pool = this.pool();
+        
+        return pool.guardAddress ?? pool.poolAddress;
+    }
+
     // -------------=========< Converting Amount Routines >=========---------------
     // | Between wei and pool resolution                                          |
     // ----------------------------------------------------------------------------

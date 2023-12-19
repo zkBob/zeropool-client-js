@@ -43,6 +43,7 @@ export interface Pool {
   isNative?: boolean;
   ddSubgraph?: string;
   parameters?: string;
+  guardAddress?: string,
 }
 
 export enum ProverMode {
