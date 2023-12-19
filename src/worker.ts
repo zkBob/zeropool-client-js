@@ -115,11 +115,11 @@ const obj = {
 
   // accountId is a unique string depends on network, poolId and sk
   // The local db will be named with accountId
-  async createAccount(accountId: string, sk: Uint8Array, poolId: number, network: string): Promise<void> {
+  async createAccount(accountId: string, sk: Uint8Array, poolId: number): Promise<void> {
     console.debug('Web worker: createAccount');
     try {
       const state = await wasm.UserState.init(accountId);
-      zpAccounts[accountId] = new wasm.UserAccount(sk, poolId, state, network);
+      zpAccounts[accountId] = new wasm.UserAccount(sk, poolId, state);
     } catch (e) {
       console.error(e);
     }
@@ -227,8 +227,16 @@ const obj = {
     return zpAccounts[accountId].generateAddressForSeed(seed);
   },
 
+  async generateUniversalAddressForSeed(accountId: string, seed: Uint8Array): Promise<string> {
+    return zpAccounts[accountId].generateUniversalAddressForSeed(seed);
+  },
+
   async verifyShieldedAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
     return zpAccounts[accountId].validateAddress(shieldedAddress);
+  },
+
+  async verifyUniversalShieldedAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
+    return zpAccounts[accountId].validateUniversalAddress(shieldedAddress);
   },
 
   async isOwnAddress(accountId: string, shieldedAddress: string): Promise<boolean> {
@@ -239,12 +247,16 @@ const obj = {
     return zpAccounts[accountId].assembleAddress(d, p_d);
   },
 
+  async assembleUniversalAddress(accountId: string, d: string, p_d: string): Promise<string> {
+    return zpAccounts[accountId].assembleUniversalAddress(d, p_d);
+  },
+
   async convertAddressToChainSpecific(accountId: string, oldAddress: string): Promise<string> {
     return zpAccounts[accountId].convertAddressToChainSpecific(oldAddress);
   },
 
-  async parseAddress(accountId: string, shieldedAddress: string): Promise<IAddressComponents> {
-    return zpAccounts[accountId].parseAddress(shieldedAddress);
+  async parseAddress(accountId: string, shieldedAddress: string, poolId?: number): Promise<IAddressComponents> {
+    return zpAccounts[accountId].parseAddress(shieldedAddress, poolId);
   },
 
   async accountNullifier(accountId: string): Promise<string> {

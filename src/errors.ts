@@ -111,3 +111,9 @@ export class PoolJobError extends BobError {
         super(`Tx ${txHash} (job ${jobId}) was reverted on the contract with reason: ${reason}`);
     }
 }
+
+export class ZkAddressParseError extends BobError {s
+    constructor(public description: string) {
+        super(`Address parse error: ${description}`);
+    }
+}

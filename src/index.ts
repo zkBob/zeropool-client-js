@@ -1,6 +1,7 @@
 export { ClientConfig, AccountConfig, accountId,
         ProverMode, Chain, Pool, Chains, Pools,
         SnarkConfigParams, Parameters, DepositType,
+        ZkAddressPrefix,
       } from './config';
 export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount,
         ClientState, ClientStateCallback,
