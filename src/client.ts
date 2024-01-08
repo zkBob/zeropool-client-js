@@ -1109,7 +1109,7 @@ export class ZkBobClient extends ZkBobProvider {
     }
 
     const usedFee = relayerFee ?? await this.getRelayerFee();
-    const txParts = await this.getTransactionParts(RegularTxType.Withdraw, [{amountGwei, destination: address}], usedFee);
+    const txParts = await this.getTransactionParts(RegularTxType.Withdraw, [{amountGwei, destination: address}], usedFee, swapAmount);
 
     if (txParts.length == 0) {
       const available = await this.calcMaxAvailableTransfer(RegularTxType.Withdraw, usedFee, swapAmount, false);
