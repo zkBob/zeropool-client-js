@@ -72,6 +72,11 @@ export interface ClientConfig {
   // By default MT mode selects automatically depended on browser
   // This flag can override autoselection behaviour
   forcedMultithreading?: boolean;
+  // Additional shielded address prefixes. You can use it to introduce new pools
+  // The shielded address checksum depends on the associated pool ID
+  // So this structures needed to check is address valid
+  // These prefixes should not conflict with the hardcoded ones (otherwise it will ignored)
+  extraPrefixes?: ZkAddressPrefix[];
 }
 
 export interface AccountConfig {
@@ -86,6 +91,12 @@ export interface AccountConfig {
   birthindex?: number;
   // Current prover mode (local, delegated, delegated with fallback)
   proverMode: ProverMode;
+}
+
+export interface ZkAddressPrefix {
+  poolId: number;
+  prefix: string;
+  name?: string;
 }
 
 // Create account unique ID based on the pool and spending key

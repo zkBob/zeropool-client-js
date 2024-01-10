@@ -611,18 +611,18 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     public toCompactSignature(signature: string): string {
         signature = truncateHexPrefix(signature);
       
-        if (signature.length > 128) {
+        if (signature.length == 130) {
           // it seems it's an extended signature, let's compact it!
-          const v = signature.slice(128, 130);
-          if (v == "1c") {
+          const v = signature.slice(128).toLowerCase();
+          if (v == '1c' || v == '01') {
             return `0x${signature.slice(0, 64)}${(parseInt(signature[64], 16) | 8).toString(16)}${signature.slice(65, 128)}`;
-          } else if (v != "1b") {
-            throw new InternalError("Invalid signature: v should be 27 or 28");
+          } else if (v != '1b' && v != '00') {
+            throw new InternalError('Invalid signature: v should be 27(0) or 28(1)');
           }
       
           return '0x' + signature.slice(0, 128);
-        } else if (signature.length < 128) {
-          throw new InternalError("invalid signature: it should consist at least 64 bytes (128 chars)");
+        } else if (signature.length != 128) {
+          throw new InternalError('Invalid signature: it should consist of 64 or 65 bytes (128\\130 chars)');
         }
       
         // it seems the signature already compact
@@ -636,9 +636,9 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
             if (sig.length == 128) {
             return `0x` + sig;
             } else if (sig.length == 130) {
-            let v = "1b";
+            let v = '1b';
             if (parseInt(sig[64], 16) > 7) {
-                v = "1c";
+                v = '1c';
                 sig = sig.slice(0, 64) + `${(parseInt(sig[64], 16) & 7).toString(16)}` + sig.slice(65);
             }
                 return `0x` + sig + v;
@@ -788,9 +788,9 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                                 throw new InternalError(`No signature for approve deposit`);
                             }
                         } else if (tx.txType == RegularTxType.BridgeDeposit) {
-                            txInfo.depositAddr = '0x' + tx.memo.slice(32, 72);
+                            txInfo.depositAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
                         } else if (tx.txType == RegularTxType.Withdraw) {
-                            txInfo.withdrawAddr = '0x' + tx.memo.slice(32, 72);
+                            txInfo.withdrawAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
                         }
 
                         return {
