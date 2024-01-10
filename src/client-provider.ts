@@ -1,4 +1,4 @@
-import { Chains, ProverMode, Pool, Pools } from "./config";
+import { Chains, ProverMode, Pool, Pools, ZkAddressPrefix } from "./config";
 import { InternalError } from "./errors";
 import { NetworkBackendFactory } from "./networks";
 import { NetworkType } from "./network-type";
@@ -10,6 +10,7 @@ import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
 import { RegularTxType } from "./tx";
 import { ZkBobSubgraph } from "./subgraph";
+import { hardcodedPrefixes } from "./address-prefixes";
 
 const bs58 = require('bs58')
 
@@ -17,7 +18,6 @@ const LIB_VERSION = require('../package.json').version;
 
 const RELAYER_FEE_LIFETIME = 30;  // when to refetch the relayer fee (in seconds)
 const NATIVE_AMOUNT_LIFETIME = 3600;  // when to refetch the max supported swap amount (in seconds)
-const DEFAULT_RELAYER_FEE = BigInt(100000000);
 const MIN_TX_AMOUNT = BigInt(50000000);
 const GIFT_CARD_CODE_VER = 1;
 
@@ -97,13 +97,20 @@ export class ZkBobProvider {
     private relayerFee:       { [name: string]: RelayerFeeFetch } = {};
     private maxSwapAmount:    { [name: string]: MaxSwapAmountFetch } = {};
     private coldStorageCfg:   { [name: string]: ColdStorageConfig } = {};
+    protected addressPrefixes:  ZkAddressPrefix[] = [];
     protected supportId: string | undefined;
 
     // The current pool alias should always be set
     protected curPool: string;
     
     // public constructor
-    constructor(pools: Pools, chains: Chains, currentPool: string, supportId: string | undefined) {
+    constructor(
+        pools: Pools,
+        chains: Chains,
+        currentPool: string,
+        extraPrefixes: ZkAddressPrefix[],
+        supportId: string | undefined
+    ) {
         this.supportId = supportId;
 
         for (const [chainId, chain] of Object.entries(chains)) {
@@ -156,6 +163,19 @@ export class ZkBobProvider {
             throw new InternalError(`Cannot initialize with the unknown current pool (${currentPool})`);
         }
         this.curPool = currentPool;
+
+        this.addressPrefixes.push(...hardcodedPrefixes);
+        const existingPoolIds = this.addressPrefixes.map((val) => val.poolId);
+        const existingAddrPrefs = this.addressPrefixes.map((val) => val.prefix.toLowerCase());
+        for (const aPrefix of extraPrefixes) {
+            if (existingPoolIds.includes(aPrefix.poolId)) {
+                console.warn(`Address prefix for the pool id ${aPrefix.poolId} already exist. Ignoring ${aPrefix.poolId} -> ${aPrefix.prefix}`);
+            } else if (existingAddrPrefs.includes(aPrefix.prefix.toLowerCase())) {
+                console.warn(`Address prefix ${aPrefix.prefix} already exist. Ignoring ${aPrefix.poolId} -> ${aPrefix.prefix}`);
+            } else {
+                this.addressPrefixes.push(aPrefix, )
+            }
+        }
     }
 
     // --------------=========< Configuration properties >=========----------------
@@ -338,6 +358,21 @@ export class ZkBobProvider {
         return undefined;
     }
 
+    protected async addressPrefix(): Promise<ZkAddressPrefix> {
+        const poolId = await this.poolId();
+        const pref = this.addressPrefixes.filter((val) => val.poolId == poolId);
+        if (pref.length > 0) {
+            // Polygon and Sepolia pools share the same pool id (0)
+            // So we should select proper address prefix here
+            if (poolId == 0 && pref.length > 1 && this.pool().chainId == 11155111) {
+                return pref[1];
+            }
+            return pref[0];
+        }
+
+        throw new InternalError(`The current pool (id = 0x${poolId.toString(16)}) has no configured address prefix`);
+    }
+
     // -------------=========< Converting Amount Routines >=========---------------
     // | Between wei and pool resolution                                          |
     // ----------------------------------------------------------------------------
@@ -381,17 +416,9 @@ export class ZkBobProvider {
     public async getRelayerFee(): Promise<RelayerFee> {
         let cachedFee = this.relayerFee[this.curPool];
         if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
-            try {
-                const fee = await this.relayer().fee();
-                cachedFee = {fee, timestamp: Date.now()};
-                this.relayerFee[this.curPool] = cachedFee;
-            } catch (err) {
-				const res = this.relayerFee[this.curPool]?.fee ?? 
-                    {fee: DEFAULT_RELAYER_FEE, oneByteFee: 0n};
-                console.error(`Cannot fetch relayer fee, will using default (${res.fee} per tx, ${res.oneByteFee} per byte): ${err}`);
-
-                return res;
-            }
+            const fee = await this.relayer().fee();
+            cachedFee = {fee, timestamp: Date.now()};
+            this.relayerFee[this.curPool] = cachedFee;
         }
 
         return cachedFee.fee;
