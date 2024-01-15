@@ -630,24 +630,14 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
     
     public toCanonicalSignature(signature: string): string {
-        let sig = truncateHexPrefix(signature);
+        let sig = truncateHexPrefix(this.toCompactSignature(signature));
         
-        if ((sig.length % 2) == 0) {
-            if (sig.length == 128) {
-            return `0x` + sig;
-            } else if (sig.length == 130) {
-            let v = '1b';
-            if (parseInt(sig[64], 16) > 7) {
-                v = '1c';
-                sig = sig.slice(0, 64) + `${(parseInt(sig[64], 16) & 7).toString(16)}` + sig.slice(65);
-            }
-                return `0x` + sig + v;
-            } else {
-                throw new InternalError(`Incorrect signature length (${sig.length}), expected 64 or 65 bytes (128 or 130 chars)`);
-            }
-        } else {
-            throw new InternalError(`Incorrect signature length (${sig.length}), expected an even number`);
+        let v = '1b';
+        if (parseInt(sig[64], 16) > 7) {
+            v = '1c';
+            sig = sig.slice(0, 64) + `${(parseInt(sig[64], 16) & 7).toString(16)}` + sig.slice(65);
         }
+        return `0x` + sig + v;
     }
 
 
