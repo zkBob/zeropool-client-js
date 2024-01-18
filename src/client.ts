@@ -809,22 +809,27 @@ export class ZkBobClient extends ZkBobProvider {
     const feeGwei = estimatedFee.total;
 
     const deadline = Math.floor(Date.now() / 1000) + PERMIT_DEADLINE_INTERVAL;
-
     // Creating raw deposit transaction object
     let txData;
     if (txType == RegularTxType.Deposit) {
       // deposit via approve (deprecated)
       txData = await state.createDeposit({
         amount: (amountGwei + feeGwei).toString(),
-        fee: feeGwei.toString(),
+        proxy: this.network().addressToBytes('0x0000000000000000000000000000000000000000'),
+        proxy_fee: feeGwei.toString(),
+        prover_fee: '123',
+        data: [],
       });
     } else {
       // deposit via permit: permit\permitv2\auth
       txData = await state.createDepositPermittable({ 
         amount: (amountGwei + feeGwei).toString(),
-        fee: feeGwei.toString(),
         deadline: String(deadline),
-        holder: this.network().addressToBytes(fromAddress)
+        holder: this.network().addressToBytes(fromAddress),
+        proxy: this.network().addressToBytes('0x0000000000000000000000000000000000000000'),
+        proxy_fee: feeGwei.toString(),
+        prover_fee: '123',
+        data: [],
       });
     }
 
@@ -1036,7 +1041,10 @@ export class ZkBobClient extends ZkBobProvider {
       const outputs = onePart.outNotes.map((aNote) => { return {to: aNote.destination, amount: `${aNote.amountGwei}`} });
       const oneTx: ITransferData = {
         outputs,
-        fee: onePart.fee.toString(),
+        proxy: this.network().addressToBytes('0x0000000000000000000000000000000000000000'),
+        proxy_fee: onePart.fee.toString(),
+        prover_fee: '123',
+        data: [],
       };
       const oneTxData = await state.createTransferOptimistic(oneTx, optimisticState);
 
@@ -1127,17 +1135,23 @@ export class ZkBobClient extends ZkBobProvider {
       if (onePart.outNotes.length == 0) {
         const oneTx: ITransferData = {
           outputs: [],
-          fee: onePart.fee.toString(),
+          proxy: this.network().addressToBytes('0x0000000000000000000000000000000000000000'),
+          proxy_fee: onePart.fee.toString(),
+          prover_fee: '123',
+          data: [],
         };
         oneTxData = await state.createTransferOptimistic(oneTx, optimisticState);
         txType = RegularTxType.Transfer;
       } else if (onePart.outNotes.length == 1) {
         const oneTx: IWithdrawData = {
           amount: onePart.outNotes[0].amountGwei.toString(),
-          fee: onePart.fee.toString(),
           to: addressBin,
           native_amount: swapAmount.toString(),
           energy_amount: '0',
+          proxy: this.network().addressToBytes('0x0000000000000000000000000000000000000000'),
+          proxy_fee: onePart.fee.toString(),
+          prover_fee: '123',
+          data: [],
         };
         oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
         txType = RegularTxType.Withdraw;
@@ -1217,7 +1231,10 @@ export class ZkBobClient extends ZkBobProvider {
     const actualFee = giftCardBalance - redeemAmount; // fee can be greater than needed to make redemption amount equals to nominal
     const oneTx: ITransferData = {
       outputs: [{to: dstAddr, amount: `${redeemAmount}`}],
-      fee: actualFee.toString(),
+      proxy: this.network().addressToBytes('0x0000000000000000000000000000000000000000'),
+      proxy_fee: actualFee.toString(),
+      prover_fee: '123',
+      data: [],
     };
     const giftCardState = this.auxZpStates[accId];
     const txData = await giftCardState.createTransferOptimistic(oneTx, ZERO_OPTIMISTIC_STATE);
