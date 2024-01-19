@@ -24,6 +24,7 @@ const ZERO_ADDRESS1 = '0x0000000000000000000000000000000000000001';
 export enum PoolSelector {
     Transact = "af989083",
     AppendDirectDeposit = "1dc4cb33",
+    TransactV2 = "5fd28f8c",
   }
 
 export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcManagerDelegate {
@@ -763,7 +764,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                     }
 
                     const txSelector = txData.slice(0, 8).toLowerCase();
-                    if (txSelector == PoolSelector.Transact) {
+                    if (txSelector == PoolSelector.Transact || txSelector == PoolSelector.TransactV2) {
                         const tx = decodeEvmCalldata(txData);
                         const feeAmount = BigInt('0x' + tx.memo.slice(0, 16));
                         

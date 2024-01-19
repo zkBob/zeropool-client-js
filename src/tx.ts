@@ -1,9 +1,10 @@
-export enum TxMemoVersion {
-  InitialVersion = 0,
+// Just available for the regular transactions
+export enum TxCalldataVersion {
   V1 = 1,
+  V2 = 2,
 }
 
-export const CURRENT_MEMO_VERSION = TxMemoVersion.V1;
+export const CURRENT_CALLDATA_VERSION = TxCalldataVersion.V2;
 
 export enum RegularTxType {
   Deposit = '0000',
@@ -23,6 +24,7 @@ export function txTypeToString(txType: RegularTxType): string {
 
 // The raw low-level transaction data used on most networks
 export class ShieldedTx {
+  version: TxCalldataVersion;
   nullifier: bigint;
   outCommit: bigint;
   transferIndex: bigint;
@@ -31,7 +33,6 @@ export class ShieldedTx {
   transactProof: bigint[];
   rootAfter: bigint;
   treeProof: bigint[];
-  memoVer: TxMemoVersion;
   txType: RegularTxType;
   memo: string;
   extra: string;

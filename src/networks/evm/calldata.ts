@@ -1,5 +1,5 @@
 import { InternalError } from "../../errors";
-import { ShieldedTx, RegularTxType, TxMemoVersion, CURRENT_MEMO_VERSION } from "../../tx";
+import { ShieldedTx, RegularTxType, TxCalldataVersion, CURRENT_CALLDATA_VERSION } from "../../tx";
 import { HexStringReader, assertNotNull } from "../../utils";
 import { PoolSelector } from ".";
 
@@ -45,41 +45,52 @@ export function decodeEvmCalldata(calldata: string): ShieldedTx {
   const tx = new ShieldedTx();
   const reader = new HexStringReader(calldata);
 
-  const selector = reader.readHex(4)!;
-  if (selector.toLocaleLowerCase() != PoolSelector.Transact) {
-      throw new InternalError(`[EvmNetwork] Cannot decode transaction: incorrect selector ${selector} (expected ${PoolSelector.Transact})`);
+  const selector = reader.readHex(4)?.toLowerCase()!;
+  switch (selector) {
+    case PoolSelector.Transact:
+      tx.version = TxCalldataVersion.V1;
+      break;
+    case PoolSelector.TransactV2:
+      tx.version = (reader.readNumber(1) as TxCalldataVersion);
+      if (tx.version > CURRENT_CALLDATA_VERSION) {
+        throw new InternalError('Unsupported calldata version');
+      }
+      break;
+    default:
+      throw new InternalError(`[CalldataDecoder] Cannot decode transaction: incorrect selector ${selector} (expected ${PoolSelector.Transact} or ${PoolSelector.TransactV2})`);
+  };
+  tx.nullifier = reader.readBigInt(32)!;
+  tx.outCommit = reader.readBigInt(32)!;
+  tx.transferIndex = reader.readBigInt(6)!;
+  tx.energyAmount = reader.readSignedBigInt(14)!;
+  tx.tokenAmount = reader.readSignedBigInt(8)!;
+  tx.transactProof = reader.readBigIntArray(8, 32);
+
+  if (selector == PoolSelector.Transact) {
+    tx.rootAfter = reader.readBigInt(32)!;
+    tx.treeProof = reader.readBigIntArray(8, 32);
   }
   
-  tx.nullifier = reader.readBigInt(32)!;
-  assertNotNull(tx.nullifier);
-  tx.outCommit = reader.readBigInt(32)!;
-  assertNotNull(tx.outCommit);
-  tx.transferIndex = reader.readBigInt(6)!;
-  assertNotNull(tx.transferIndex);
-  tx.energyAmount = reader.readSignedBigInt(14)!;
-  assertNotNull(tx.energyAmount);
-  tx.tokenAmount = reader.readSignedBigInt(8)!;
-  assertNotNull(tx.tokenAmount);
-  tx.transactProof = reader.readBigIntArray(8, 32);
-  tx.rootAfter = reader.readBigInt(32)!;
-  assertNotNull(tx.rootAfter);
-  tx.treeProof = reader.readBigIntArray(8, 32);
-  tx.memoVer = reader.readNumber(1) as TxMemoVersion;
-  assertNotNull(tx.memoVer);
-  if (tx.memoVer > CURRENT_MEMO_VERSION) {
-    throw new InternalError('Unsupported memo version');
-  }
-  tx.txType = reader.readHex(1) as RegularTxType;
-  assertNotNull(tx.txType);
+  tx.txType = reader.readHex(2) as RegularTxType;
   const memoSize = reader.readNumber(2);
   assertNotNull(memoSize);
   tx.memo = reader.readHex(memoSize)!;
-  assertNotNull(tx.memo);
 
-  // Extra data
+  // Additional data appended to the end of calldata
   // It contains deposit holder signature for deposit transactions
   // or any other data which user can append
   tx.extra = reader.readHexToTheEnd()!;
+
+  // verify all read successfully
+  assertNotNull(tx.nullifier);
+  assertNotNull(tx.outCommit);
+  assertNotNull(tx.transferIndex);
+  assertNotNull(tx.energyAmount);
+  assertNotNull(tx.tokenAmount);
+  assertNotNull(tx.rootAfter);
+  assertNotNull(tx.version);
+  assertNotNull(tx.txType);
+  assertNotNull(tx.memo);
   assertNotNull(tx.extra);
 
   return tx;
