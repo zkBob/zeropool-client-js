@@ -1,7 +1,8 @@
 // Just available for the regular transactions
 export enum TxCalldataVersion {
-  V1 = 1,
-  V2 = 2,
+  V1 = 1, // original tx format
+  V2 = 2, // new tx format (decentalized relayers deployment)
+          // this format doesn't include rootAfter and treeProof
 }
 
 export const CURRENT_CALLDATA_VERSION = TxCalldataVersion.V2;

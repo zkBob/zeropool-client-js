@@ -4,6 +4,86 @@ import { HexStringReader, assertNotNull } from "../../utils";
 import { PoolSelector } from ".";
 
 
+// Calldata components length universal reference
+export class CalldataInfo {
+  static baseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
+    switch (ver) {
+      case TxCalldataVersion.V1: return 644;
+      case TxCalldataVersion.V2: return 357;
+      default: throw new InternalError(`Unknown calldata version: ${ver}`);
+    }
+  };
+
+  static memoApproveDepositBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
+    switch (ver) {
+      case TxCalldataVersion.V1: return 210;
+      case TxCalldataVersion.V2: return 232;
+      default: throw new InternalError(`Unknown calldata version: ${ver}`);
+    }
+  };
+
+  static memoPermitDepositBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
+    switch (ver) {
+      case TxCalldataVersion.V1: return 238;
+      case TxCalldataVersion.V2: return 260;
+      default: throw new InternalError(`Unknown calldata version: ${ver}`);
+    }
+  };
+
+  static memoTransferBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
+    switch (ver) {
+      case TxCalldataVersion.V1: return 210;
+      case TxCalldataVersion.V2: return 232;
+      default: throw new InternalError(`Unknown calldata version: ${ver}`);
+    }
+  };
+
+  static memoNoteBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
+    return 172;
+  };
+
+  static memoWithdrawBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
+    switch (ver) {
+      case TxCalldataVersion.V1: return 238;
+      case TxCalldataVersion.V2: return 260;
+      default: throw new InternalError(`Unknown calldata version: ${ver}`);
+    }
+  };
+
+  static depositSignatureLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
+    return 64;
+  };
+
+  static memoTxSpecificFieldsLength(
+    txType: RegularTxType,
+    ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION
+  ): number {
+    switch (ver) {
+      case TxCalldataVersion.V1:
+        switch (txType) {
+          case RegularTxType.BridgeDeposit: return 8 + 8 + 20; // fee (u64) + deadline (u64) + holder (u160)
+          case RegularTxType.Deposit: case RegularTxType.Transfer: return 8; // fee (u64)
+          case RegularTxType.Withdraw: return 8 + 8 + 20; // fee (u64) + native_amount (u64) + address (u160)
+          default: throw new InternalError(`Unknown transaction type: ${txType}`);
+        }
+      case TxCalldataVersion.V2:
+        switch (txType) {
+          case RegularTxType.BridgeDeposit:
+            // proxy_address (u160) + proxy_fee (u64) + prover_fee (u64) + deadline (u64) + holder (u160)
+            return 20 + 8 + 8 + 8 + 20;
+          case RegularTxType.Deposit: case RegularTxType.Transfer:
+            // proxy_address (u160) + proxy_fee (u64) + prover_fee (u64)
+            return 20 + 8 + 8;
+          case RegularTxType.Withdraw:
+            // proxy_address (u160) + proxy_fee (u64) + prover_fee (u64) + native_amount (u64) + address (u160)
+            return 28 + 8 + 8 + 8 + 20;
+          default: throw new InternalError(`Unknown transaction type: ${txType}`);
+        }
+      default: throw new InternalError(`Unknown calldata version: ${ver}`);
+    }
+  }
+}
+
 // Sizes in bytes
 const MEMO_META_DEFAULT_SIZE: number = 8; // fee (u64)
 const MEMO_META_WITHDRAW_SIZE: number = 8 + 8 + 20; // fee (u64) + amount + address (u160)
