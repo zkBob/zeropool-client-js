@@ -8,7 +8,7 @@ import { ZkBobDelegatedProver } from "./services/prover";
 import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
-import { RegularTxType } from "./tx";
+import { RegularTxType, TxCalldataVersion } from "./tx";
 import { ZkBobSubgraph } from "./subgraph";
 import { hardcodedPrefixes } from "./address-prefixes";
 
@@ -373,6 +373,12 @@ export class ZkBobProvider {
         throw new InternalError(`The current pool (id = 0x${poolId.toString(16)}) has no configured address prefix`);
     }
 
+    protected calldataVersion(): TxCalldataVersion {
+        const configVersion = this.pool().calldataVersion;
+
+        return configVersion ?? TxCalldataVersion.V1;   // obsolete version by default
+    }
+
     // -------------=========< Converting Amount Routines >=========---------------
     // | Between wei and pool resolution                                          |
     // ----------------------------------------------------------------------------
@@ -452,7 +458,7 @@ export class ZkBobProvider {
         withdrawSwapAmount: bigint = 0n,
         roundFee?: boolean,
     ): Promise<bigint> {
-        const calldataBytesCnt = this.network().estimateCalldataLength(txType, notesCnt, extraDataLen);
+        const calldataBytesCnt = this.network().estimateCalldataLength(this.calldataVersion(), txType, notesCnt, extraDataLen);
         const baseFee = await this.executionTxFee(txType, relayerFee);
 
         let totalFee = baseFee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);

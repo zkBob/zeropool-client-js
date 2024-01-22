@@ -1,3 +1,4 @@
+import { TxCalldataVersion } from "./tx";
 import { bufToHex } from "./utils";
 import { hash } from 'tweetnacl';
 
@@ -43,6 +44,7 @@ export interface Pool {
   isNative?: boolean;
   ddSubgraph?: string;
   parameters?: string;
+  calldataVersion?: TxCalldataVersion;
 }
 
 export enum ProverMode {

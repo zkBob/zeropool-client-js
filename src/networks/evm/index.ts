@@ -5,9 +5,9 @@ import { NetworkBackend, PreparedTransaction, L1TxState} from '..';
 import { InternalError } from '../../errors';
 import { accountingABI, ddContractABI, poolContractABI, tokenABI } from './evm-abi';
 import bs58 from 'bs58';
-import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType, DirectDeposit, DirectDepositState } from '../../tx';
+import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType, DirectDeposit, DirectDepositState, TxCalldataVersion } from '../../tx';
 import { addHexPrefix, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
-import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from './calldata';
+import { CalldataInfo, decodeEvmCalldata, getCiphertext } from './calldata';
 import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
         personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
 import { privateToAddress, bufferToHex, isHexPrefixed } from '@ethereumjs/util';
@@ -853,12 +853,12 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         return null;
     }
 
-    public calldataBaseLength(): number {
-        return CALLDATA_BASE_LENGTH;
+    public calldataBaseLength(ver: TxCalldataVersion): number {
+        return CalldataInfo.baseLength(ver);
     }
 
-    public estimateCalldataLength(txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
-        return estimateEvmCalldataLength(txType, notesCnt, extraDataLen)
+    public estimateCalldataLength(ver: TxCalldataVersion, txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
+        return CalldataInfo.estimateEvmCalldataLength(ver, txType, notesCnt, extraDataLen)
     }
 
     public async getTransactionState(txHash: string): Promise<L1TxState> {

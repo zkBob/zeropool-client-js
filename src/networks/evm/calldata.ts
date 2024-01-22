@@ -14,40 +14,34 @@ export class CalldataInfo {
     }
   };
 
-  static memoApproveDepositBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
+  static memoBaseLength(txType: RegularTxType, ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
     switch (ver) {
-      case TxCalldataVersion.V1: return 210;
-      case TxCalldataVersion.V2: return 232;
+      case TxCalldataVersion.V1:
+        switch (txType) {
+          case RegularTxType.BridgeDeposit:
+          case RegularTxType.Withdraw: 
+            return 238;
+          case RegularTxType.Deposit:
+          case RegularTxType.Transfer:
+            return 210;
+          default: throw new InternalError(`Unknown transaction type: ${txType}`);
+        }
+      case TxCalldataVersion.V2:
+        switch (txType) {
+          case RegularTxType.BridgeDeposit:
+          case RegularTxType.Withdraw:
+            return 260;
+          case RegularTxType.Deposit:
+          case RegularTxType.Transfer:
+            return 232;
+          default: throw new InternalError(`Unknown transaction type: ${txType}`);
+        }
       default: throw new InternalError(`Unknown calldata version: ${ver}`);
     }
   };
 
-  static memoPermitDepositBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
-    switch (ver) {
-      case TxCalldataVersion.V1: return 238;
-      case TxCalldataVersion.V2: return 260;
-      default: throw new InternalError(`Unknown calldata version: ${ver}`);
-    }
-  };
-
-  static memoTransferBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
-    switch (ver) {
-      case TxCalldataVersion.V1: return 210;
-      case TxCalldataVersion.V2: return 232;
-      default: throw new InternalError(`Unknown calldata version: ${ver}`);
-    }
-  };
-
-  static memoNoteBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
+  static memoNoteLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
     return 172;
-  };
-
-  static memoWithdrawBaseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
-    switch (ver) {
-      case TxCalldataVersion.V1: return 238;
-      case TxCalldataVersion.V2: return 260;
-      default: throw new InternalError(`Unknown calldata version: ${ver}`);
-    }
   };
 
   static depositSignatureLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
@@ -82,43 +76,15 @@ export class CalldataInfo {
       default: throw new InternalError(`Unknown calldata version: ${ver}`);
     }
   }
-}
 
-// Sizes in bytes
-const MEMO_META_DEFAULT_SIZE: number = 8; // fee (u64)
-const MEMO_META_WITHDRAW_SIZE: number = 8 + 8 + 20; // fee (u64) + amount + address (u160)
-const MEMO_META_PERMITDEPOSIT_SIZE: number = 8 + 8 + 20; // fee (u64) + amount + address (u160)
-
-export const CALLDATA_BASE_LENGTH: number = 644;
-export const CALLDATA_MEMO_APPROVE_DEPOSIT_BASE_LENGTH: number = 210;
-export const CALLDATA_MEMO_DEPOSIT_BASE_LENGTH: number = 238;
-export const CALLDATA_MEMO_TRANSFER_BASE_LENGTH: number = 210;
-export const CALLDATA_MEMO_NOTE_LENGTH: number = 172;
-export const CALLDATA_MEMO_WITHDRAW_BASE_LENGTH: number = 238;
-export const CALLDATA_DEPOSIT_SIGNATURE_LENGTH: number = 64;
-
-
-export function estimateEvmCalldataLength(txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
-  let txSpecificLen = 0;
-  switch (txType) {
-    case RegularTxType.Deposit:
-      txSpecificLen = CALLDATA_MEMO_APPROVE_DEPOSIT_BASE_LENGTH + CALLDATA_DEPOSIT_SIGNATURE_LENGTH;
-      break;
-
-    case RegularTxType.BridgeDeposit:
-      txSpecificLen = CALLDATA_MEMO_DEPOSIT_BASE_LENGTH + CALLDATA_DEPOSIT_SIGNATURE_LENGTH;
-      break;
-
-    case RegularTxType.Transfer:
-      txSpecificLen = CALLDATA_MEMO_TRANSFER_BASE_LENGTH;
-      break;
-
-    case RegularTxType.Withdraw:
-      txSpecificLen = CALLDATA_MEMO_WITHDRAW_BASE_LENGTH;
-      break;
+  static estimateEvmCalldataLength(ver: TxCalldataVersion, txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
+    let txSpecificLen = CalldataInfo.memoBaseLength(txType, ver);
+    if (txType == RegularTxType.Deposit || txType == RegularTxType.BridgeDeposit) {
+      txSpecificLen += CalldataInfo.depositSignatureLength(ver);
+    }
+  
+    return CalldataInfo.baseLength(ver) + txSpecificLen + extraDataLen + notesCnt * CalldataInfo.memoNoteLength(ver);
   }
-
-  return CALLDATA_BASE_LENGTH + txSpecificLen + extraDataLen + notesCnt * CALLDATA_MEMO_NOTE_LENGTH;
 }
 
 export function decodeEvmCalldata(calldata: string): ShieldedTx {
@@ -177,13 +143,7 @@ export function decodeEvmCalldata(calldata: string): ShieldedTx {
 }
 
 export function getCiphertext(tx: ShieldedTx): string {
-  if (tx.txType === RegularTxType.Withdraw) {
-    return tx.memo.slice(MEMO_META_WITHDRAW_SIZE * 2);
-  } else if (tx.txType === RegularTxType.BridgeDeposit) {
-    return tx.memo.slice(MEMO_META_PERMITDEPOSIT_SIZE * 2);
-  }
-
-  return tx.memo.slice(MEMO_META_DEFAULT_SIZE * 2);
+  return tx.memo.slice(CalldataInfo.memoTxSpecificFieldsLength(tx.txType, tx.version) * 2);
 }
 
 export function decodeEvmCalldataAppendDD(calldata: string) {

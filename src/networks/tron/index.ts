@@ -1,10 +1,10 @@
 import { L1TxState, NetworkBackend, PreparedTransaction } from '..';
 import { InternalError, TxType } from '../../index';
-import { DDBatchTxDetails, DirectDeposit, DirectDepositState, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType } from '../../tx';
+import { DDBatchTxDetails, DirectDeposit, DirectDepositState, PoolTxDetails, PoolTxType, RegularTxDetails, RegularTxType, TxCalldataVersion } from '../../tx';
 import tokenAbi from './abi/usdt-abi.json';
 import { ddContractABI as ddAbi, poolContractABI as poolAbi, accountingABI} from '../evm/evm-abi';
 import { bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
-import { CALLDATA_BASE_LENGTH, decodeEvmCalldata, estimateEvmCalldataLength, getCiphertext } from '../evm/calldata';
+import { CalldataInfo, decodeEvmCalldata, getCiphertext } from '../evm/calldata';
 import { hexToBytes } from 'web3-utils';
 import { PoolSelector } from '../evm';
 import { MultiRpcManager, RpcManagerDelegate } from '../rpcman';
@@ -759,12 +759,12 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return null;
     }
 
-    public calldataBaseLength(): number {
-        return CALLDATA_BASE_LENGTH;
+    public calldataBaseLength(ver: TxCalldataVersion): number {
+        return CalldataInfo.baseLength(ver);
     }
 
-    public estimateCalldataLength(txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
-        return estimateEvmCalldataLength(txType, notesCnt, extraDataLen)
+    public estimateCalldataLength(ver: TxCalldataVersion, txType: RegularTxType, notesCnt: number, extraDataLen: number = 0): number {
+        return CalldataInfo.estimateEvmCalldataLength(ver, txType, notesCnt, extraDataLen)
     }
 
     public async getTransactionState(txHash: string): Promise<L1TxState> {

@@ -1245,7 +1245,7 @@ export class ZkBobClient extends ZkBobProvider {
     console.log(`Proof calculation took ${proofTime.toFixed(1)} sec`);
 
     const transaction = {memo: txData.memo, proof: txProof, txType: RegularTxType.Transfer};
-    this.assertCalldataLength(transaction, this.network().estimateCalldataLength(RegularTxType.Transfer, 1, 0));
+    this.assertCalldataLength(transaction, this.network().estimateCalldataLength(this.calldataVersion(), RegularTxType.Transfer, 1, 0));
 
     const relayer = this.relayer();
     const jobId = await relayer.sendTransactions([transaction]);
@@ -1264,7 +1264,7 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   private assertCalldataLength(txToRelayer: any, estimatedLen: number) {
-    let factLen = this.network().calldataBaseLength() + txToRelayer.memo.length / 2;
+    let factLen = this.network().calldataBaseLength(this.calldataVersion()) + txToRelayer.memo.length / 2;
     if (txToRelayer.depositSignature) {
       factLen += txToRelayer.depositSignature.length / 2;
     }
@@ -1335,19 +1335,21 @@ export class ZkBobClient extends ZkBobProvider {
           const curTxType = i < txCnt - 1 ? RegularTxType.Transfer : txType;
           const curFee = roundFee ? (await this.roundFee(parts[i].fee)) : parts[i].fee;
           total += curFee;
-          calldataTotalLength += this.network().estimateCalldataLength(curTxType, curTxType == RegularTxType.Transfer ? parts[i].outNotes.length : 0, 0);
+          const notesCnt = curTxType == RegularTxType.Transfer ? parts[i].outNotes.length : 0;
+          calldataTotalLength += this.network().estimateCalldataLength(this.calldataVersion(), curTxType, notesCnt, 0);
         }
       } else { // if we haven't funds for atomic fee - suppose we can make at least one tx
         txCnt = 1;
         total = await this.atomicTxFee(txType, withdrawSwap);
-        calldataTotalLength = this.network().estimateCalldataLength(txType, txType == RegularTxType.Transfer ? transfersGwei.length : 0, 0);
+        const notesCnt = txType == RegularTxType.Transfer ? transfersGwei.length : 0;
+        calldataTotalLength = this.network().estimateCalldataLength(this.calldataVersion(), txType, notesCnt, 0);
       }
 
       insufficientFunds = (totalSumm < totalRequested || totalSumm + total > totalBalance) ? true : false;
     } else {
       // Deposit and BridgeDeposit cases are independent on the user balance
       // Fee got from the native coins, so any deposit can be make within single tx
-      calldataTotalLength = this.network().estimateCalldataLength(txType, 0, 0)
+      calldataTotalLength = this.network().estimateCalldataLength(this.calldataVersion(), txType, 0, 0)
       total = await this.singleTxFeeInternal(relayerFee, txType, 0, 0, 0n, roundFee);
     }
 
@@ -1466,7 +1468,7 @@ export class ZkBobClient extends ZkBobProvider {
       aggregationParts.push({
         inNotesBalance,
         outNotes: [],
-        calldataLength: this.network().estimateCalldataLength(RegularTxType.Transfer, 0, 0),
+        calldataLength: this.network().estimateCalldataLength(this.calldataVersion(), RegularTxType.Transfer, 0, 0),
         fee: aggregateTxFee,
         accountLimit: BigInt(0)
       });
@@ -1504,7 +1506,7 @@ export class ZkBobClient extends ZkBobProvider {
       parts.push({
         inNotesBalance,
         outNotes: transfers[i].requests,
-        calldataLength: this.network().estimateCalldataLength(txType, numOfNotes, 0),
+        calldataLength: this.network().estimateCalldataLength(this.calldataVersion(), txType, numOfNotes, 0),
         fee, 
         accountLimit: BigInt(0)
       });
