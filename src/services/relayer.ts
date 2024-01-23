@@ -58,6 +58,8 @@ export interface RelayerFee {
   };
   oneByteFee: bigint;
   nativeConvertFee: bigint;
+  proverFee: bigint;
+  proxyAddress: string;
 }
 
 interface Limit { // all values are in Gwei
@@ -273,7 +275,9 @@ export class ZkBobRelayer implements IZkBobService {
           permittableDeposit: BigInt(feeResp.permittableDeposit),
         },
         oneByteFee: BigInt(res.oneByteFee ?? '0'),
-        nativeConvertFee: BigInt(res.nativeConvertFee ?? '0')
+        nativeConvertFee: BigInt(res.nativeConvertFee ?? '0'),
+        proverFee: 0n,    // TODO: fetch prover fee
+        proxyAddress: '', // TODO: get proxy L1 address
       };
     } else if (typeof feeResp === 'string' || 
                 typeof feeResp === 'number' ||
@@ -287,7 +291,9 @@ export class ZkBobRelayer implements IZkBobService {
           permittableDeposit: BigInt(feeResp),
         },
         oneByteFee: BigInt(res.oneByteFee ?? '0'),
-        nativeConvertFee: BigInt(res.nativeConvertFee ?? '0')
+        nativeConvertFee: BigInt(res.nativeConvertFee ?? '0'),
+        proverFee: 0n,    // TODO: fetch prover fee
+        proxyAddress: '', // TODO: get proxy L1 address
       };
     } else {
       throw new ServiceError(this.type(), 200, 'Incorrect fee field');

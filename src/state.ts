@@ -126,6 +126,7 @@ export class ZkBobState {
     networkName: string,
     denominator: bigint,
     poolId: number,
+    isObsoletePool: boolean,  // support for obsolete pools with old calldata format
     addressPrefix: string | undefined,
     tokenAddress: string,
     worker: any,
@@ -140,7 +141,7 @@ export class ZkBobState {
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
     zpState.addressPrefix = addressPrefix;
 
-    await worker.createAccount(zpState.stateId, zpState.sk, poolId);
+    await worker.createAccount(zpState.stateId, zpState.sk, poolId, isObsoletePool);
     zpState.worker = worker;
     
     zpState.history = await HistoryStorage.init(zpState.stateId, network, zpState, subgraph);
@@ -158,6 +159,7 @@ export class ZkBobState {
     network: NetworkBackend,
     networkName: string,
     poolId: number,
+    isObsoletePool: boolean,  // support for obsolete pools with old calldata format
     worker: any,
   ): Promise<ZkBobState> {
     const zpState = new ZkBobState();

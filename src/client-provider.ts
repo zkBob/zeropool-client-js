@@ -27,6 +27,13 @@ interface RelayerFeeFetch {
     timestamp: number;  // when the fee was fetched
 }
 
+export interface TxFee { // all numeric values are in the pool dimension
+    proxyAddress: string; // L1-address of the proxy
+    total: bigint;        // total fee estimation
+    proxyPart: bigint;    // proxy fee of commiting tx to the pool contract
+    proverPart: bigint;   // prover fee of including tx to the Merkle tree
+}
+
 // max supported swap amount + fetching timestamp
 interface MaxSwapAmountFetch {
     amount: bigint;
@@ -443,7 +450,7 @@ export class ZkBobProvider {
 
     // Min transaction fee in pool resolution (for regular transaction without any payload overhead)
     // To estimate fee for the concrete tx use account-based method (feeEstimate from client.ts)
-    public async atomicTxFee(txType: RegularTxType, withdrawSwap: bigint = 0n): Promise<bigint> {
+    public async atomicTxFee(txType: RegularTxType, withdrawSwap: bigint = 0n): Promise<TxFee> {
         const relayerFee = await this.getRelayerFee();
         
         return this.singleTxFeeInternal(relayerFee, txType, txType == RegularTxType.Transfer ? 1 : 0, 0, withdrawSwap, true);
@@ -457,21 +464,23 @@ export class ZkBobProvider {
         extraDataLen: number = 0,
         withdrawSwapAmount: bigint = 0n,
         roundFee?: boolean,
-    ): Promise<bigint> {
+    ): Promise<TxFee> {
         const calldataBytesCnt = this.network().estimateCalldataLength(this.calldataVersion(), txType, notesCnt, extraDataLen);
         const baseFee = await this.executionTxFee(txType, relayerFee);
 
-        let totalFee = baseFee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
+        let proverPart = relayerFee.proverFee;
+        let proxyPart = baseFee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
         if (txType == RegularTxType.Withdraw && withdrawSwapAmount > 0n) {
             // swapping tokens during withdrawal may require additional fee
-            totalFee += relayerFee.nativeConvertFee;
+            proxyPart += relayerFee.nativeConvertFee;
         }
 
         if (roundFee === undefined || roundFee == true) {
-            totalFee = await this.roundFee(totalFee);
+            proxyPart = await this.roundFee(proxyPart);
+            proverPart = await this.roundFee(proverPart);
         }
         
-        return totalFee;
+        return { proxyAddress: relayerFee.proxyAddress, total: proxyPart + proverPart, proxyPart, proverPart };
     }
     
     // Max supported token swap during withdrawal, in token resolution (Gwei)
