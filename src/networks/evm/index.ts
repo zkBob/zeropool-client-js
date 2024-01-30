@@ -766,7 +766,18 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                     const txSelector = txData.slice(0, 8).toLowerCase();
                     if (txSelector == PoolSelector.Transact || txSelector == PoolSelector.TransactV2) {
                         const tx = decodeEvmCalldata(txData);
-                        const feeAmount = BigInt('0x' + tx.memo.slice(0, 16));
+                        let feeAmount = 0n;
+                        switch (tx.version) {
+                            case TxCalldataVersion.V1:
+                                feeAmount = BigInt(addHexPrefix(tx.memo.slice(0, 16)));
+                                break;
+                            case TxCalldataVersion.V2:
+                                feeAmount = BigInt(addHexPrefix(tx.memo.slice(40, 56))) + 
+                                            BigInt(addHexPrefix(tx.memo.slice(56, 72)));
+                                break;
+                            default:
+                                throw new InternalError(`Unknown tx calldata version ${tx.version}`);
+                        }
                         
                         const txInfo = new RegularTxDetails();
                         txInfo.txType = tx.txType;
@@ -789,9 +800,17 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                                 throw new InternalError(`No signature for approve deposit`);
                             }
                         } else if (tx.txType == RegularTxType.BridgeDeposit) {
-                            txInfo.depositAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
+                            if (tx.version == TxCalldataVersion.V1) {
+                                txInfo.depositAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
+                            } else if (tx.version == TxCalldataVersion.V2) {
+                                txInfo.depositAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
+                            }
                         } else if (tx.txType == RegularTxType.Withdraw) {
-                            txInfo.withdrawAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
+                            if (tx.version == TxCalldataVersion.V1) {
+                                txInfo.withdrawAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
+                            } else if (tx.version == TxCalldataVersion.V2) {
+                                txInfo.withdrawAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
+                            }
                         }
 
                         return {

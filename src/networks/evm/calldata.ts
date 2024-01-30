@@ -10,7 +10,7 @@ export class CalldataInfo {
     switch (ver) {
       case TxCalldataVersion.V1: return 644;
       case TxCalldataVersion.V2: return 357;
-      default: throw new InternalError(`Unknown calldata version: ${ver}`);
+      default: throw new InternalError(`[CalldataDecoder] Unknown calldata version: ${ver}`);
     }
   };
 
@@ -24,7 +24,7 @@ export class CalldataInfo {
           case RegularTxType.Deposit:
           case RegularTxType.Transfer:
             return 210;
-          default: throw new InternalError(`Unknown transaction type: ${txType}`);
+          default: throw new InternalError(`[CalldataDecoder] Unknown transaction type: ${txType}`);
         }
       case TxCalldataVersion.V2:
         switch (txType) {
@@ -34,9 +34,9 @@ export class CalldataInfo {
           case RegularTxType.Deposit:
           case RegularTxType.Transfer:
             return 232;
-          default: throw new InternalError(`Unknown transaction type: ${txType}`);
+          default: throw new InternalError(`[CalldataDecoder] Unknown transaction type: ${txType}`);
         }
-      default: throw new InternalError(`Unknown calldata version: ${ver}`);
+      default: throw new InternalError(`[CalldataDecoder] Unknown calldata version: ${ver}`);
     }
   };
 
@@ -58,7 +58,7 @@ export class CalldataInfo {
           case RegularTxType.BridgeDeposit: return 8 + 8 + 20; // fee (u64) + deadline (u64) + holder (u160)
           case RegularTxType.Deposit: case RegularTxType.Transfer: return 8; // fee (u64)
           case RegularTxType.Withdraw: return 8 + 8 + 20; // fee (u64) + native_amount (u64) + address (u160)
-          default: throw new InternalError(`Unknown transaction type: ${txType}`);
+          default: throw new InternalError(`[CalldataDecoder] Unknown transaction type: ${txType}`);
         }
       case TxCalldataVersion.V2:
         switch (txType) {
@@ -71,9 +71,9 @@ export class CalldataInfo {
           case RegularTxType.Withdraw:
             // proxy_address (u160) + proxy_fee (u64) + prover_fee (u64) + native_amount (u64) + address (u160)
             return 28 + 8 + 8 + 8 + 20;
-          default: throw new InternalError(`Unknown transaction type: ${txType}`);
+          default: throw new InternalError(`[CalldataDecoder] Unknown transaction type: ${txType}`);
         }
-      default: throw new InternalError(`Unknown calldata version: ${ver}`);
+      default: throw new InternalError(`[CalldataDecoder] Unknown calldata version: ${ver}`);
     }
   }
 
@@ -99,7 +99,7 @@ export function decodeEvmCalldata(calldata: string): ShieldedTx {
     case PoolSelector.TransactV2:
       tx.version = (reader.readNumber(1) as TxCalldataVersion);
       if (tx.version > CURRENT_CALLDATA_VERSION) {
-        throw new InternalError('Unsupported calldata version');
+        throw new InternalError('[CalldataDecoder] Unsupported calldata version');
       }
       break;
     default:
@@ -143,7 +143,11 @@ export function decodeEvmCalldata(calldata: string): ShieldedTx {
 }
 
 export function getCiphertext(tx: ShieldedTx): string {
-  return tx.memo.slice(CalldataInfo.memoTxSpecificFieldsLength(tx.txType, tx.version) * 2);
+  let ciphertextStartOffset = CalldataInfo.memoTxSpecificFieldsLength(tx.txType, tx.version);
+  if (tx.version == TxCalldataVersion.V2) {
+    ciphertextStartOffset += 2; // message length field
+  }
+  return tx.memo.slice(ciphertextStartOffset * 2);
 }
 
 export function decodeEvmCalldataAppendDD(calldata: string) {
