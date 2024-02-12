@@ -276,8 +276,8 @@ export class ZkBobRelayer implements IZkBobService {
         },
         oneByteFee: BigInt(res.oneByteFee ?? '0'),
         nativeConvertFee: BigInt(res.nativeConvertFee ?? '0'),
-        proverFee: 0n,    // TODO: fetch prover fee
-        proxyAddress: '', // TODO: get proxy L1 address
+        proverFee: 100000000n,    // TODO: fetch prover fee
+        proxyAddress: '0xfec49782fe8e11de9fb3ba645a76fe914fffe3cb', // TODO: get proxy L1 address
       };
     } else if (typeof feeResp === 'string' || 
                 typeof feeResp === 'number' ||
@@ -292,8 +292,8 @@ export class ZkBobRelayer implements IZkBobService {
         },
         oneByteFee: BigInt(res.oneByteFee ?? '0'),
         nativeConvertFee: BigInt(res.nativeConvertFee ?? '0'),
-        proverFee: 0n,    // TODO: fetch prover fee
-        proxyAddress: '', // TODO: get proxy L1 address
+        proverFee: 100000000n,    // TODO: fetch prover fee
+        proxyAddress: '0xfec49782fe8e11de9fb3ba645a76fe914fffe3cb', // TODO: get proxy L1 address
       };
     } else {
       throw new ServiceError(this.type(), 200, 'Incorrect fee field');
