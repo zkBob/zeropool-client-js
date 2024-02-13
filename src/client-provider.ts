@@ -4,7 +4,7 @@ import { NetworkBackendFactory } from "./networks";
 import { NetworkType } from "./network-type";
 import { NetworkBackend } from "./networks";
 import { ServiceVersion } from "./services/common";
-import { ZkBobDelegatedProver } from "./services/prover";
+import { ZkBobDelegatedProver } from "./services/delegated-prover";
 import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";

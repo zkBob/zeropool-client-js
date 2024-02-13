@@ -1,5 +1,5 @@
 import { PoolTxMinimal, RegularTxType } from "../tx";
-import { addHexPrefix, hexToNode } from "../utils";
+import { hexToNode } from "../utils";
 import { InternalError, ServiceError } from "../errors";
 import { IZkBobService, ServiceType,
          ServiceVersion, isServiceVersion, ServiceVersionFetch,
@@ -10,6 +10,13 @@ import { CONSTANTS } from "../constants";
 import { NetworkBackend } from "../networks";
 
 const RELAYER_VERSION_REQUEST_THRESHOLD = 3600; // relayer's version expiration (in seconds)
+
+enum RelayerMode {
+  Unknown,
+  Relayer,
+  ProxyProver,
+  Proxy,
+}
 
 export interface TxToRelayer {
   txType: RegularTxType;
@@ -247,20 +254,35 @@ export class ZkBobRelayer implements IZkBobService {
 
     throw new ServiceError(this.type(), 200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
   }
+
+  protected async proverFee(): Promise<bigint> {
+    // TODO: Implement me!
+    return 100000000n;
+  }
+
+  protected async proxyAddress(): Promise<string> {
+    // TODO: Implement me!
+    return '0xfec49782fe8e11de9fb3ba645a76fe914fffe3cb';
+  }
   
   public async fee(): Promise<RelayerFee> {
     const headers = defaultHeaders(this.supportId);
     const url = new URL('/fee', this.url());
 
-    const res = await fetchJson(url.toString(), {headers}, this.type());
+    const [proxyFee, proxyAddress, proverFee] = await Promise.all([
+      fetchJson(url.toString(), {headers}, this.type()),
+      this.proxyAddress(),
+      this.proverFee(),
+    ]);
 
-    if (typeof res !== 'object' || res === null || 
-        (!res.hasOwnProperty('fee') && !res.hasOwnProperty('baseFee')))
+
+    if (typeof proxyFee !== 'object' || proxyFee === null || 
+        (!proxyFee.hasOwnProperty('fee') && !proxyFee.hasOwnProperty('baseFee')))
     {
       throw new ServiceError(this.type(), 200, 'Incorrect response for dynamic fees');
     }
 
-    const feeResp = res.fee ?? res.baseFee;
+    const feeResp = proxyFee.fee ?? proxyFee.baseFee;
     if (typeof feeResp === 'object' &&
         feeResp.hasOwnProperty('deposit') &&
         feeResp.hasOwnProperty('transfer') &&
@@ -274,10 +296,10 @@ export class ZkBobRelayer implements IZkBobService {
           withdrawal: BigInt(feeResp.withdrawal),
           permittableDeposit: BigInt(feeResp.permittableDeposit),
         },
-        oneByteFee: BigInt(res.oneByteFee ?? '0'),
-        nativeConvertFee: BigInt(res.nativeConvertFee ?? '0'),
-        proverFee: 100000000n,    // TODO: fetch prover fee
-        proxyAddress: '0xfec49782fe8e11de9fb3ba645a76fe914fffe3cb', // TODO: get proxy L1 address
+        oneByteFee: BigInt(proxyFee.oneByteFee ?? '0'),
+        nativeConvertFee: BigInt(proxyFee.nativeConvertFee ?? '0'),
+        proverFee,
+        proxyAddress,
       };
     } else if (typeof feeResp === 'string' || 
                 typeof feeResp === 'number' ||
@@ -290,10 +312,10 @@ export class ZkBobRelayer implements IZkBobService {
           withdrawal: BigInt(feeResp),
           permittableDeposit: BigInt(feeResp),
         },
-        oneByteFee: BigInt(res.oneByteFee ?? '0'),
-        nativeConvertFee: BigInt(res.nativeConvertFee ?? '0'),
-        proverFee: 100000000n,    // TODO: fetch prover fee
-        proxyAddress: '0xfec49782fe8e11de9fb3ba645a76fe914fffe3cb', // TODO: get proxy L1 address
+        oneByteFee: BigInt(proxyFee.oneByteFee ?? '0'),
+        nativeConvertFee: BigInt(proxyFee.nativeConvertFee ?? '0'),
+        proverFee,
+        proxyAddress,
       };
     } else {
       throw new ServiceError(this.type(), 200, 'Incorrect fee field');

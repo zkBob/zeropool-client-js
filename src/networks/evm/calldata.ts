@@ -114,6 +114,7 @@ export function decodeEvmCalldata(calldata: string): ShieldedTx {
 
   if (selector == PoolSelector.Transact) {
     tx.rootAfter = reader.readBigInt(32)!;
+    assertNotNull(tx.rootAfter);
     tx.treeProof = reader.readBigIntArray(8, 32);
   }
   
@@ -133,7 +134,6 @@ export function decodeEvmCalldata(calldata: string): ShieldedTx {
   assertNotNull(tx.transferIndex);
   assertNotNull(tx.energyAmount);
   assertNotNull(tx.tokenAmount);
-  assertNotNull(tx.rootAfter);
   assertNotNull(tx.version);
   assertNotNull(tx.txType);
   assertNotNull(tx.memo);

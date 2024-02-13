@@ -524,10 +524,10 @@ export class ZkBobState {
     const checkIndex = await this.getNextIndex();
     const stableIndex = await this.lastVerifiedIndex();
     if (checkIndex != stableIndex) {
-      const isStateCorrect = await this.verifyState(getPoolState);
-      if (!isStateCorrect) {
-        console.log(`🚑[StateVerify] Merkle tree root at index ${checkIndex} mistmatch!`);
-        if (stableIndex > 0 && stableIndex < checkIndex &&
+      const verified = await this.verifyState(getPoolState);
+      if (!verified.correct) {
+        console.log(`🚑[StateVerify] Merkle tree root at index ${verified.index} mistmatch!`);
+        if (stableIndex > 0 && stableIndex < verified.index &&
           this.rollbackAttempts < CORRUPT_STATE_ROLLBACK_ATTEMPTS
         ) {
           let realRollbackIndex = await this.rollback(stableIndex);
@@ -742,19 +742,28 @@ export class ZkBobState {
     }
   }
 
-  // returns false when the local state is inconsistent
-  private async verifyState(getPoolState: (index?: bigint) => Promise<TreeState>): Promise<boolean> {
-    const checkIndex = await this.getNextIndex();
-    const localRoot = await this.getRoot();
-    const poolRoot = (await getPoolState(checkIndex)).root;
+  // returns common (local\pool_contract) index and consistence flag
+  private async verifyState(getPoolState: (index?: bigint) => Promise<TreeState>):
+    Promise<{index: bigint, correct: boolean}>
+  {
+    const poolState = await getPoolState(); // an actual pool
+    const localIndex = await this.getNextIndex();
 
+    // verify roots only on the index which exist locally and on the pool contract
+    const checkIndex = poolState.index < localIndex ? poolState.index : localIndex;
+    // request appropriate contract root for the checkpoint
+    const poolRoot = checkIndex == poolState.index ? 
+      poolState.root : (await getPoolState(checkIndex)).root;
+    const localRoot = await this.getRootAt(checkIndex);
+
+    let correct = false;
     if (localRoot == poolRoot) {
       await this.setLastVerifiedIndex(checkIndex);
-      
-      return true;
+
+      correct = true;
     }
 
-    return false;
+    return {index: checkIndex, correct};
   }
 
   private isColdSyncAvailable(coldConfig?: ColdStorageConfig, fromIndex?: number, toIndex?: number): boolean {
@@ -849,9 +858,9 @@ export class ZkBobState {
           syncResult.nextIndex = actualRangeEnd;
           syncResult.totalTime = Date.now() - startTime;
           
-          const isStateCorrect = await this.verifyState(getPoolState);
-          if (!isStateCorrect) {
-            console.warn(`🧊[ColdSync] Merkle tree root at index ${await this.getNextIndex()} mistmatch! Wiping the state...`);
+          const verified = await this.verifyState(getPoolState);
+          if (!verified.correct) {
+            console.warn(`🧊[ColdSync] Merkle tree root at index ${verified.index} mistmatch! Wiping the state...`);
             await this.clean();  // rollback to 0
             if (this.lastSyncInfo) this.lastSyncInfo.processedTxCount = 0;
             this.skipColdStorage = true;  // prevent cold storage usage
