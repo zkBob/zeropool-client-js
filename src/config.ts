@@ -36,6 +36,7 @@ export interface Pool {
   poolAddress: string;
   tokenAddress: string,
   relayerUrls: string[];
+  proxyUrls: string[];
   delegatedProverUrls: string[];
   depositScheme: DepositType;
   coldStorageConfigPath?: string;

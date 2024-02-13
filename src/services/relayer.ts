@@ -11,13 +11,6 @@ import { NetworkBackend } from "../networks";
 
 const RELAYER_VERSION_REQUEST_THRESHOLD = 3600; // relayer's version expiration (in seconds)
 
-enum RelayerMode {
-  Unknown,
-  Relayer,
-  ProxyProver,
-  Proxy,
-}
-
 export interface TxToRelayer {
   txType: RegularTxType;
   memo: string;
@@ -65,11 +58,9 @@ export interface RelayerFee {
   };
   oneByteFee: bigint;
   nativeConvertFee: bigint;
-  proverFee: bigint;
-  proxyAddress: string;
 }
 
-interface Limit { // all values are in Gwei
+interface Limit { // all values are in pool dimension (denominated)
   total: bigint;
   available: bigint;
 }
@@ -128,10 +119,10 @@ function LimitsFromJson(json: any): LimitsFetch {
 export class ZkBobRelayer implements IZkBobService {
   // The simplest support for multiple relayer configuration
   // TODO: implement proper relayer swiching / fallbacking
-  private relayerUrls: string[];
-  private curIdx: number;
-  private supportId: string | undefined;
-  private relayerVersions = new Map<string, ServiceVersionFetch>(); // relayer version: URL -> version
+  protected relayerUrls: string[];
+  protected curIdx: number;
+  protected supportId: string | undefined;
+  protected relayerVersions = new Map<string, ServiceVersionFetch>(); // relayer version: URL -> version
 
   public static create(relayerUrls: string[], supportId: string | undefined): ZkBobRelayer {
     if (relayerUrls.length == 0) {
@@ -254,26 +245,12 @@ export class ZkBobRelayer implements IZkBobService {
 
     throw new ServiceError(this.type(), 200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
   }
-
-  protected async proverFee(): Promise<bigint> {
-    // TODO: Implement me!
-    return 100000000n;
-  }
-
-  protected async proxyAddress(): Promise<string> {
-    // TODO: Implement me!
-    return '0xfec49782fe8e11de9fb3ba645a76fe914fffe3cb';
-  }
   
   public async fee(): Promise<RelayerFee> {
     const headers = defaultHeaders(this.supportId);
     const url = new URL('/fee', this.url());
 
-    const [proxyFee, proxyAddress, proverFee] = await Promise.all([
-      fetchJson(url.toString(), {headers}, this.type()),
-      this.proxyAddress(),
-      this.proverFee(),
-    ]);
+    const proxyFee = await fetchJson(url.toString(), {headers}, this.type());
 
 
     if (typeof proxyFee !== 'object' || proxyFee === null || 
@@ -298,8 +275,6 @@ export class ZkBobRelayer implements IZkBobService {
         },
         oneByteFee: BigInt(proxyFee.oneByteFee ?? '0'),
         nativeConvertFee: BigInt(proxyFee.nativeConvertFee ?? '0'),
-        proverFee,
-        proxyAddress,
       };
     } else if (typeof feeResp === 'string' || 
                 typeof feeResp === 'number' ||
@@ -314,8 +289,6 @@ export class ZkBobRelayer implements IZkBobService {
         },
         oneByteFee: BigInt(proxyFee.oneByteFee ?? '0'),
         nativeConvertFee: BigInt(proxyFee.nativeConvertFee ?? '0'),
-        proverFee,
-        proxyAddress,
       };
     } else {
       throw new ServiceError(this.type(), 200, 'Incorrect fee field');
