@@ -159,17 +159,17 @@ export class ZkBobProvider {
 
             this.pools[alias] = pool;
 
-            const hasRelayers = pool.relayerUrls.length > 0;
-            const hasProxies = pool.proxyUrls.length > 0;
+            const hasRelayers = pool.relayerUrls && pool.relayerUrls.length > 0;
+            const hasProxies = pool.proxyUrls && pool.proxyUrls.length > 0;
             if (hasRelayers == hasProxies) {
                 throw new InternalError(`Pool ${alias} should define at least a relayer OR proxy (not both)`);
             }
             this.sequencers[alias] = hasRelayers ? 
-                    ZkBobRelayer.create(pool.relayerUrls, supportId) :
-                    ZkBobProxy.create(pool.proxyUrls, supportId);
+                    ZkBobRelayer.create(pool.relayerUrls as string[], supportId) :
+                    ZkBobProxy.create(pool.proxyUrls as string[], supportId);
 
             // create a delegated prover service if url presented
-            if (pool.delegatedProverUrls.length > 0) {
+            if (pool.delegatedProverUrls && pool.delegatedProverUrls.length > 0) {
                 this.provers[alias] = ZkBobDelegatedProver.create(pool.delegatedProverUrls, supportId);
             }
 
@@ -242,7 +242,8 @@ export class ZkBobProvider {
         if (!this.proverModes[poolAlias]) {
             // apply current prover mode or use a local prover by default
             let proverMode = this.proverModes[this.curPool] ?? ProverMode.Local;
-            if (this.pools[poolAlias].delegatedProverUrls.length == 0) {
+            const proverUrls = this.pools[poolAlias].delegatedProverUrls;
+            if (!proverUrls || proverUrls.length == 0) {
                 proverMode = ProverMode.Local;
             }
 

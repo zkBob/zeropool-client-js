@@ -35,10 +35,10 @@ export interface Pool {
   chainId: number;
   poolAddress: string;
   tokenAddress: string,
-  relayerUrls: string[];
-  proxyUrls: string[];
-  delegatedProverUrls: string[];
   depositScheme: DepositType;
+  relayerUrls?: string[];
+  proxyUrls?: string[];
+  delegatedProverUrls?: string[];
   coldStorageConfigPath?: string;
   minTxAmount?: bigint;
   feeDecimals?: number;

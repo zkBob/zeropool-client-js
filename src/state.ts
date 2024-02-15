@@ -170,7 +170,7 @@ export class ZkBobState {
     const userId = bufToHex(hash(zpState.sk)).slice(0, 32);
     zpState.stateId = `${networkName}.${poolId.toString(16).padStart(6, '0')}.${userId}`; // database name identifier
 
-    await worker.createAccount(zpState.stateId, zpState.sk, poolId);
+    await worker.createAccount(zpState.stateId, zpState.sk, poolId, isObsoletePool);
     zpState.worker = worker;
 
     return zpState;
