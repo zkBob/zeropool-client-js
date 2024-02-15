@@ -1,4 +1,4 @@
-import { PoolTxMinimal, RegularTxType } from "../tx";
+import { PoolTxMinimal, RegularTxType, txStateFrom } from "../tx";
 import { hexToNode } from "../utils";
 import { InternalError, ServiceError } from "../errors";
 import { IZkBobService, ServiceType,
@@ -198,13 +198,13 @@ export class ZkBobRelayer implements IZkBobService {
     const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
     
     return txs.map((tx, txIdx) => {
-      // tx structure from relayer: mined flag + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
+      // tx structure from relayer: state + txHash(32 bytes, 64 chars) + commitment(32 bytes, 64 chars) + memo
       return {
         index: offset + txIdx * OUTPLUSONE,
         commitment: tx.slice(65, 129),
         txHash: network.txHashFromHexString(tx.slice(1, 65)),
         memo: tx.slice(129),
-        isMined: tx.slice(0, 1) === '1',
+        state: txStateFrom(Number(tx.slice(0, 1))),
       }
     });
   }

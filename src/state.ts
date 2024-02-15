@@ -16,6 +16,7 @@ import { NetworkBackend } from './networks';
 import { ZkBobSubgraph } from './subgraph';
 import { Sequencer, TreeState } from './client-provider';
 import { GENERIC_ADDRESS_PREFIX } from './address-prefixes';
+import { TxState } from './tx';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const BATCH_SIZE = 1000;  // number of transactions per request during a sync state
@@ -610,7 +611,7 @@ export class ZkBobState {
             commitment: tx.commitment,
           }
 
-          if (tx.isMined) {
+          if (tx.state == TxState.Finalized) {
             indexedTxs.push(indexedTx);
             maxMinedIndex = Math.max(maxMinedIndex, tx.index);
           } else {
