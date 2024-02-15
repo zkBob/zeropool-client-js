@@ -11,8 +11,8 @@ import {
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxAccountDeadError, TxAccountLocked, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError, ZkAddressParseError,
 } from './errors';
-import { JobInfo, RelayerFee } from './services/relayer';
-import { GiftCardProperties, TreeState, TxFee, ZkBobProvider } from './client-provider';
+import { JobInfo } from './services/relayer';
+import { GiftCardProperties, SequencerFee, TreeState, TxFee, ZkBobProvider, isProxyFee } from './client-provider';
 import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
 import { PERMIT2_CONTRACT } from './signers/permit2-signer';
@@ -77,7 +77,7 @@ export interface FeeAmount {
                         // the following values are reference
   txCnt: number;               // multitransfer case (== 1 for regular tx)
   calldataTotalLength: number; // started from selector, summ for all txs
-  relayerFee: RelayerFee;      // fee from relayer which was used during estimation
+  sequencerFee: SequencerFee;  // fee from sequencer which was used during estimation
   insufficientFunds: boolean;  // true when the local balance is insufficient for requested tx amount
 }
 
@@ -289,7 +289,7 @@ export class ZkBobClient extends ZkBobProvider {
       this.account.birthindex = birthindex;
       if (this.account.birthindex == -1) {  // -1 means `account born right now`
         try { // fetch current birthindex right away
-          let curIndex = Number((await this.relayer().info()).deltaIndex);
+          let curIndex = Number((await this.sequencer().info()).deltaIndex);
           if (curIndex >= (PARTIAL_TREE_USAGE_THRESHOLD * OUTPLUSONE) && curIndex >= OUTPLUSONE) {
             curIndex -= OUTPLUSONE; // we should grab almost one transaction from the regular state
             console.log(`Retrieved account birthindex: ${curIndex}`);
@@ -456,9 +456,9 @@ export class ZkBobClient extends ZkBobProvider {
 
     // update gift card state
     const giftCardState = this.auxZpStates[accId];
-    const relayer = this.relayer();
+    const sequencer = this.sequencer();
     const readyToTransact = await giftCardState.updateState(
-      relayer,
+      sequencer,
       async (index) => this.getPoolState(index),
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),
@@ -621,7 +621,7 @@ export class ZkBobClient extends ZkBobProvider {
     throw new ZkAddressParseError('invalid format');
   }
 
-  // Waiting while relayer process the jobs set
+  // Waiting while sequencer process the jobs set
   public async waitJobsTxHashes(jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
     const promises = jobIds.map(async (jobId) => {
       const txHash = await this.waitJobTxHash(jobId);
@@ -631,7 +631,7 @@ export class ZkBobClient extends ZkBobProvider {
     return Promise.all(promises);
   }
 
-  // Waiting while relayer process the job and send it to the Pool
+  // Waiting while sequencer process the job and send it to the Pool
   // return transaction hash on success or throw an error
   public async waitJobTxHash(jobId: string): Promise<string> {
     this.startJobMonitoring(jobId);
@@ -647,13 +647,12 @@ export class ZkBobClient extends ZkBobProvider {
         if (job.state === 'failed') {
           throw new RelayerJobError(Number(jobId), job.failedReason ? job.failedReason : 'unknown reason');
         } else if (job.state === 'sent') {
-          //if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'sent' state`);
-          if (!job.txHash) console.error(`Relayer return job #${jobId} without txHash in 'sent' state`);
+          if (!job.txHash) console.error(`Sequencer return job #${jobId} without txHash in 'sent' state`);
           break;
         } else if (job.state === 'reverted')  {
           throw new PoolJobError(Number(jobId), job.txHash ? job.txHash : 'no_txhash', job.failedReason ?? 'unknown reason');
         } else if (job.state === 'completed') {
-          if (!job.txHash) throw new InternalError(`Relayer return job #${jobId} without txHash in 'completed' state`);
+          if (!job.txHash) throw new InternalError(`Sequencer return job #${jobId} without txHash in 'completed' state`);
           break;
         }
       }
@@ -684,10 +683,10 @@ export class ZkBobClient extends ZkBobProvider {
   // Returns job in terminal state
   //
   // Job state machine:
-  // 1. `waiting`  : tx in the relayer's verification/sending queue
-  // 2. `failed`   : tx was rejected by relayer (nothing was sent to the Pool)
+  // 1. `waiting`  : tx in the sequencer's verification/sending queue
+  // 2. `failed`   : tx was rejected by sequencer (nothing was sent to the Pool)
   // 3. `sent`     : tx in the optimistic state (sent on the Pool but not mined yet) and it has a txHash
-  // 4. `reverted` : tx was reverted on the Pool contract and will not resend by relayer (txHash presented)
+  // 4. `reverted` : tx was reverted on the Pool contract and will not resend by sequencer (txHash presented)
   // 5. `completed`: tx was mined and included in the regular state (txHash cannot be changed anymore)
   //
   // The normal transaction flow: `waiting` -> `sent` -> `completed`
@@ -695,7 +694,7 @@ export class ZkBobClient extends ZkBobProvider {
   // The job state can be switched from `sent` to `waiting` state - it means transaction was resent
   //
   private async jobMonitoringWorker(jobId: string): Promise<JobInfo> {
-    const relayer = this.relayer();
+    const sequencer = this.sequencer();
     const state = this.zpState();
 
     let issues = 0;
@@ -705,7 +704,7 @@ export class ZkBobClient extends ZkBobProvider {
     let lastTxHash = '';
     let lastJobState = '';
     while (true) {
-      const jobInfo = await relayer.getJob(jobId).catch(() => null);
+      const jobInfo = await sequencer.getJob(jobId).catch(() => null);
 
       if (jobInfo === null) {
         throw new RelayerJobError(Number(jobId), 'not found');
@@ -717,15 +716,15 @@ export class ZkBobClient extends ZkBobProvider {
         this.monitoredJobs.set(jobId, job);
         
         if (job.state === 'waiting')  {
-          // Tx in the relayer's verification/sending queue
+          // Tx in the sequencer's verification/sending queue
           if (job.state != lastJobState) {
-            console.info(`JobMonitoring: ${jobDescr} waiting while relayer processed it`);
+            console.info(`JobMonitoring: ${jobDescr} waiting while sequencer processed it`);
           }
         } else if (job.state === 'failed')  {
-          // [TERMINAL STATE] Transaction was failed during relayer's verification
-          const relayerReason = job.failedReason ?? 'unknown reason';
-          state.history?.setQueuedTransactionFailedByRelayer(jobId, relayerReason);
-          console.info(`JobMonitoring: ${jobDescr} was discarded by relayer with reason '${relayerReason}'`);
+          // [TERMINAL STATE] Transaction was failed during sequencer's verification
+          const sequencerReason = job.failedReason ?? 'unknown reason';
+          state.history?.setQueuedTransactionFailedByRelayer(jobId, sequencerReason);
+          console.info(`JobMonitoring: ${jobDescr} was discarded by sequencer with reason '${sequencerReason}'`);
           break;
         } else if (job.state === 'sent') {
           // Tx should appear in the optimistic state with current txHash
@@ -735,21 +734,21 @@ export class ZkBobClient extends ZkBobProvider {
               console.info(`JobMonitoring: ${jobDescr} was ${job.resolvedJobId != jobId ? 'RE' : ''}sent to the pool: ${job.txHash}`);   
             }
           } else {
-            console.warn(`JobMonitoring: ${jobDescr} was sent to the pool but has no assigned txHash [relayer issue]`);
+            console.warn(`JobMonitoring: ${jobDescr} was sent to the pool but has no assigned txHash [sequencer issue]`);
             issues++;
           }
         } else if (job.state === 'reverted')  {
           // [TERMINAL STATE] Transaction was reverted on the Pool and won't resend
-          // get revert reason first (from the relayer or from the contract directly)
+          // get revert reason first (from the sequencer or from the contract directly)
           let revertReason: string = 'unknown reason';
           if (job.failedReason) {
-            revertReason = job.failedReason;  // reason from the relayer
+            revertReason = job.failedReason;  // reason from the sequencer
           } else if (job.txHash) {
-            // the relayer doesn't provide failure reason - fetch it directly
+            // the sequencer doesn't provide failure reason - fetch it directly
             const retrievedReason = (await this.network().getTxRevertReason(job.txHash));
             revertReason = retrievedReason ?? 'transaction was not found\\reverted'
           } else {
-            console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [relayer issue]`)
+            console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [sequencer issue]`)
             issues++;
           }
 
@@ -762,7 +761,7 @@ export class ZkBobClient extends ZkBobProvider {
           if (job.txHash) {
             console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
           } else {
-            console.warn(`JobMonitoring: ${jobDescr} was mined but has no assigned txHash [relayer issue]`);
+            console.warn(`JobMonitoring: ${jobDescr} was mined but has no assigned txHash [sequencer issue]`);
             issues++;
           }
           break;
@@ -790,16 +789,16 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Universal deposit method based on permit or approve scheme
   // User should sign typed data to allow contract receive his tokens
-  // Returns jobId from the relayer or throw an Error
+  // Returns jobId from the sequencer or throw an Error
   public async deposit(
     amountGwei: bigint,
     signatureCallback: (request: SignatureRequest) => Promise<string>,
     fromAddress: string,
-    relayerFee?: RelayerFee,
+    sequencerFee?: SequencerFee,
     blockNumber?: number, // synchronize internal provider with the block
   ): Promise<string> {
     const pool = this.pool();
-    const relayer = this.relayer();
+    const sequencer = this.sequencer();
     const state = this.zpState();
 
     const minTx = await this.minTxAmount();
@@ -816,7 +815,7 @@ export class ZkBobClient extends ZkBobProvider {
     await this.assertAccountCanTransact();
 
     // Fee estimating
-    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const usedFee = sequencerFee ?? await this.getSequencerFee();
     const txType = pool.depositScheme == DepositType.Approve ? RegularTxType.Deposit : RegularTxType.BridgeDeposit;
     let estimatedFee = await this.feeEstimateInternal([amountGwei], txType, usedFee, 0n, false, true);
     const feeGwei = estimatedFee.fee.proxyPart + estimatedFee.fee.proverPart;
@@ -829,7 +828,7 @@ export class ZkBobClient extends ZkBobProvider {
       // deposit via approve (deprecated)
       txData = await state.createDeposit({
         amount: txAmount.toString(),
-        proxy: this.network().addressToBytes(usedFee.proxyAddress),
+        proxy: this.network().addressToBytes(isProxyFee(usedFee) ? usedFee.proxyAddress : ''),
         proxy_fee: estimatedFee.fee.proxyPart.toString(),
         prover_fee: estimatedFee.fee.proverPart.toString(),
         data: [],
@@ -840,7 +839,7 @@ export class ZkBobClient extends ZkBobProvider {
         amount: txAmount.toString(),
         deadline: String(deadline),
         holder: this.network().addressToBytes(fromAddress),
-        proxy: this.network().addressToBytes(usedFee.proxyAddress),
+        proxy: this.network().addressToBytes(isProxyFee(usedFee) ? usedFee.proxyAddress : ''),
         proxy_fee: estimatedFee.fee.proxyPart.toString(),
         prover_fee: estimatedFee.fee.proverPart.toString(),
         data: [],
@@ -908,7 +907,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     const tx = { txType, memo: txData.memo, proof: txProof, depositSignature: signature };
     this.assertCalldataLength(tx, estimatedFee.calldataTotalLength);
-    const jobId = await relayer.sendTransactions([tx]);
+    const jobId = await sequencer.sendTransactions([tx]);
     this.startJobMonitoring(jobId);
 
     // Temporary save transaction in the history module (to prevent history delays)
@@ -923,7 +922,7 @@ export class ZkBobClient extends ZkBobProvider {
   public async depositEphemeral(
     amountGwei: bigint,
     ephemeralIndex: number,
-    relayerFee?: RelayerFee,
+    sequencerFee?: SequencerFee,
   ): Promise<string> {
     const state = this.zpState();
     const fromAddress = await state.ephemeralPool().getEphemeralAddress(ephemeralIndex);
@@ -931,7 +930,7 @@ export class ZkBobClient extends ZkBobProvider {
     // we should check token balance here since the library is fully responsible
     // for ephemeral address in contrast to depositing from external user's address
     const pool = await this.pool();
-    const actualFee = relayerFee ?? await this.getRelayerFee();
+    const actualFee = sequencerFee ?? await this.getSequencerFee();
     const txType = pool.depositScheme == DepositType.Approve ? RegularTxType.Deposit : RegularTxType.BridgeDeposit;
     const neededFee = await this.feeEstimateInternal([amountGwei], txType, actualFee, 0n, true, true);
     if(fromAddress.tokenBalance < amountGwei + neededFee.fee.total) {
@@ -1019,10 +1018,10 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Transfer shielded funds to the shielded address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
-  // Returns jobIds from the relayer or throw an Error
-  public async transferMulti(transfers: TransferRequest[], relayerFee?: RelayerFee): Promise<string[]> {
+  // Returns jobIds from the sequencer or throw an Error
+  public async transferMulti(transfers: TransferRequest[], sequencerFee?: SequencerFee): Promise<string[]> {
     const state = this.zpState();
-    const relayer = this.relayer();
+    const sequencer = this.sequencer();
 
     await Promise.all(transfers.map(async (aTx) => {
       if (!await this.verifyShieldedAddress(aTx.destination)) {
@@ -1037,7 +1036,7 @@ export class ZkBobClient extends ZkBobProvider {
 
     await this.assertAccountCanTransact();
 
-    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const usedFee = sequencerFee ?? await this.getSequencerFee();
     const txParts = await this.getTransactionParts(RegularTxType.Transfer, transfers, usedFee);
 
     if (txParts.length == 0) {
@@ -1072,7 +1071,7 @@ export class ZkBobClient extends ZkBobProvider {
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: RegularTxType.Transfer};
       this.assertCalldataLength(transaction, onePart.calldataLength);
 
-      const jobId = await relayer.sendTransactions([transaction]);
+      const jobId = await sequencer.sendTransactions([transaction]);
       this.startJobMonitoring(jobId);
       jobsIds.push(jobId);
 
@@ -1092,7 +1091,7 @@ export class ZkBobClient extends ZkBobProvider {
         // if there are few additional tx, we should collect the optimistic state before processing them
         await this.waitJobTxHash(jobId);
 
-        optimisticState = await this.zpState().getNewState(this.relayer(), this.account?.birthindex ?? 0);
+        optimisticState = await this.zpState().getNewState(this.sequencer(), this.account?.birthindex ?? 0);
       }
     }
 
@@ -1101,10 +1100,10 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Withdraw shielded funds to the specified native chain address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
-  // relayerFee - fee from the relayer (request one if undefined)
-  // Returns jobId from the relayer or throw an Error
-  public async withdrawMulti(address: string, amountGwei: bigint, swapAmount: bigint, relayerFee?: RelayerFee): Promise<string[]> {
-    const relayer = this.relayer();
+  // sequencerFee - fee from the sequencer (request one if undefined)
+  // Returns jobId from the sequencer or throw an Error
+  public async withdrawMulti(address: string, amountGwei: bigint, swapAmount: bigint, sequencerFee?: SequencerFee): Promise<string[]> {
+    const sequencer = this.sequencer();
     const state = this.zpState();
 
     // Check is withdrawal address and nonzero
@@ -1130,7 +1129,7 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxLimitError(amountGwei, limits.withdraw.total);
     }
 
-    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const usedFee = sequencerFee ?? await this.getSequencerFee();
     const txParts = await this.getTransactionParts(RegularTxType.Withdraw, [{amountGwei, destination: address}], usedFee, swapAmount);
 
     if (txParts.length == 0) {
@@ -1181,7 +1180,7 @@ export class ZkBobClient extends ZkBobProvider {
       const transaction = {memo: oneTxData.memo, proof: txProof, txType};
       this.assertCalldataLength(transaction, onePart.calldataLength);
 
-      const jobId = await relayer.sendTransactions([transaction]);
+      const jobId = await sequencer.sendTransactions([transaction]);
       this.startJobMonitoring(jobId);
       jobsIds.push(jobId);
 
@@ -1200,7 +1199,7 @@ export class ZkBobClient extends ZkBobProvider {
         // if there are few additional tx, we should collect the optimistic state before processing them
         await this.waitJobTxHash(jobId);
 
-        optimisticState = await this.zpState().getNewState(this.relayer(), this.account?.birthindex ?? 0);
+        optimisticState = await this.zpState().getNewState(this.sequencer(), this.account?.birthindex ?? 0);
       }
     }
 
@@ -1261,8 +1260,8 @@ export class ZkBobClient extends ZkBobProvider {
     const transaction = {memo: txData.memo, proof: txProof, txType: RegularTxType.Transfer};
     this.assertCalldataLength(transaction, this.network().estimateCalldataLength(this.calldataVersion(), RegularTxType.Transfer, 1, 0));
 
-    const relayer = this.relayer();
-    const jobId = await relayer.sendTransactions([transaction]);
+    const sequencer = this.sequencer();
+    const jobId = await sequencer.sendTransactions([transaction]);
     this.startJobMonitoring(jobId);
 
     // Temporary save transaction in the history module for the current account
@@ -1277,10 +1276,10 @@ export class ZkBobClient extends ZkBobProvider {
     return jobId;
   }
 
-  private assertCalldataLength(txToRelayer: any, estimatedLen: number) {
-    let factLen = this.network().calldataBaseLength(this.calldataVersion()) + txToRelayer.memo.length / 2;
-    if (txToRelayer.depositSignature) {
-      factLen += txToRelayer.depositSignature.length / 2;
+  private assertCalldataLength(txToSequencer: any, estimatedLen: number) {
+    let factLen = this.network().calldataBaseLength(this.calldataVersion()) + txToSequencer.memo.length / 2;
+    if (txToSequencer.depositSignature) {
+      factLen += txToSequencer.depositSignature.length / 2;
     }
 
     if (factLen != estimatedLen) {
@@ -1314,28 +1313,32 @@ export class ZkBobClient extends ZkBobProvider {
   //  1. txCnt contains number of transactions for maximum available transfer
   //  2. txCnt can't be less than 1 (e.g. when balance is less than atomic fee)
   public async feeEstimate(transfersGwei: bigint[], txType: RegularTxType, withdrawSwap: bigint = 0n, updateState: boolean = true): Promise<FeeAmount> {
-    const relayerFee = await this.getRelayerFee();
-    return this.feeEstimateInternal(transfersGwei, txType, relayerFee, withdrawSwap, updateState, true);
+    const sequencerFee = await this.getSequencerFee();
+    return this.feeEstimateInternal(transfersGwei, txType, sequencerFee, withdrawSwap, updateState, true);
   }
 
   private async feeEstimateInternal(
     transfersGwei: bigint[],
     txType: RegularTxType,
-    relayerFee: RelayerFee,
+    sequencerFee: SequencerFee,
     withdrawSwap: bigint,
     updateState: boolean,
     roundFee: boolean,
   ): Promise<FeeAmount> {
     let txCnt = 1;
-    //let proxyPart = 0n;
-    let totalFee: TxFee = { proxyAddress: relayerFee.proxyAddress, total: 0n, proxyPart: 0n, proverPart: 0n };
+    let totalFee: TxFee = {
+      proxyAddress: isProxyFee(sequencerFee) ? sequencerFee.proxyAddress : '',
+      total: 0n,
+      proxyPart: 0n,
+      proverPart: 0n
+    };
     let calldataTotalLength = 0;
     let insufficientFunds = false;
 
     if (txType === RegularTxType.Transfer || txType === RegularTxType.Withdraw) {
       // we set allowPartial flag here to get parts anywhere
       const requests: TransferRequest[] = transfersGwei.map((gwei) => { return {amountGwei: gwei, destination: '0'} });  // destination address is ignored for estimation purposes
-      const parts = await this.getTransactionParts(txType, requests, relayerFee, withdrawSwap, updateState, true);
+      const parts = await this.getTransactionParts(txType, requests, sequencerFee, withdrawSwap, updateState, true);
       const totalBalance = await this.getTotalBalance(false);
 
       const totalSumm = parts
@@ -1353,36 +1356,35 @@ export class ZkBobClient extends ZkBobProvider {
           const notesCnt = curTxType == RegularTxType.Transfer ? parts[i].outNotes.length : 0;
           calldataTotalLength += this.network().estimateCalldataLength(this.calldataVersion(), curTxType, notesCnt, 0);
         }
+        totalFee.total = totalFee.proxyPart + totalFee.proverPart;
       } else { // if we haven't funds for atomic fee - suppose we can make at least one tx
         txCnt = 1;
-        totalFee = await this.singleTxFeeInternal(relayerFee, txType, txType == RegularTxType.Transfer ? 1 : 0, 0, withdrawSwap, true)
+        totalFee = await this.singleTxFeeInternal(sequencerFee, txType, txType == RegularTxType.Transfer ? 1 : 0, 0, withdrawSwap, true)
         
         const notesCnt = txType == RegularTxType.Transfer ? transfersGwei.length : 0;
         calldataTotalLength = this.network().estimateCalldataLength(this.calldataVersion(), txType, notesCnt, 0);
       }
 
-      insufficientFunds = (totalSumm < totalRequested || totalSumm + totalFee.total + relayerFee.proverFee > totalBalance) ? true : false;
+      insufficientFunds = (totalSumm < totalRequested || totalSumm + totalFee.total > totalBalance) ? true : false;
     } else {
       // Deposit and BridgeDeposit cases are independent on the user balance
       // Fee got from the native coins, so any deposit can be make within single tx
       calldataTotalLength = this.network().estimateCalldataLength(this.calldataVersion(), txType, 0, 0)
-      totalFee = await this.singleTxFeeInternal(relayerFee, txType, 0, 0, 0n, roundFee);
+      totalFee = await this.singleTxFeeInternal(sequencerFee, txType, 0, 0, 0n, roundFee);
     }
-
-    totalFee.total = totalFee.proxyPart + totalFee.proverPart;
 
     return {
       fee: totalFee,
       txCnt,
       calldataTotalLength,
-      relayerFee,
+      sequencerFee: sequencerFee,
       insufficientFunds
     };
   }
 
   // Account + notes balance excluding fee needed to transfer or withdraw it
   // TODO: need to optimize for edge cases (account limit calculating)
-  public async calcMaxAvailableTransfer(txType: RegularTxType, relayerFee?: RelayerFee, withdrawSwap: bigint = 0n, updateState: boolean = true): Promise<bigint> {
+  public async calcMaxAvailableTransfer(txType: RegularTxType, sequencerFee?: SequencerFee, withdrawSwap: bigint = 0n, updateState: boolean = true): Promise<bigint> {
     if (txType != RegularTxType.Transfer && txType != RegularTxType.Withdraw) {
       throw new InternalError(`Attempting to invoke \'calcMaxAvailableTransfer\' for ${txTypeToString(txType)} tx (only transfer\\withdraw are supported)`);
     }
@@ -1392,7 +1394,7 @@ export class ZkBobClient extends ZkBobProvider {
       await this.updateState();
     }
 
-    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const usedFee = sequencerFee ?? await this.getSequencerFee();
     const aggregateTxFee = await this.singleTxFeeInternal(usedFee, RegularTxType.Transfer, 0, 0, 0n);
     const finalTxFee = await this.singleTxFeeInternal(usedFee, txType, txType == RegularTxType.Transfer ? 1 : 0, 0, withdrawSwap);
 
@@ -1424,7 +1426,7 @@ export class ZkBobClient extends ZkBobProvider {
   public async getTransactionParts(
     txType: RegularTxType,
     transfers: TransferRequest[],
-    relayerFee?: RelayerFee,
+    sequencerFee?: SequencerFee,
     withdrawSwap: bigint = 0n,
     updateState: boolean = true,
     allowPartial: boolean = false,
@@ -1458,7 +1460,7 @@ export class ZkBobClient extends ZkBobProvider {
     let aggregationParts: Array<TransferConfig> = [];
     let txParts: Array<TransferConfig> = [];
 
-    const usedFee = relayerFee ?? await this.getRelayerFee();
+    const usedFee = sequencerFee ?? await this.getSequencerFee();
     
     let i = 0;
     do {
@@ -1509,7 +1511,7 @@ export class ZkBobClient extends ZkBobProvider {
   private async tryToPrepareTransfers(
     txType: RegularTxType,
     balance: bigint,
-    relayerFee: RelayerFee,
+    sequencerFee: SequencerFee,
     groupedNotesBalances: Array<bigint>,
     transfers: MultinoteTransferRequest[],
     withdrawSwap: bigint = 0n,
@@ -1520,7 +1522,7 @@ export class ZkBobClient extends ZkBobProvider {
       const inNotesBalance = i < groupedNotesBalances.length ? groupedNotesBalances[i] : BigInt(0);
 
       const numOfNotes = (txType == RegularTxType.Transfer) ? transfers[i].requests.length : 0;
-      const fee = await this.singleTxFeeInternal(relayerFee, txType, numOfNotes, 0, withdrawSwap);
+      const fee = await this.singleTxFeeInternal(sequencerFee, txType, numOfNotes, 0, withdrawSwap);
 
       if (accountBalance + inNotesBalance < transfers[i].totalAmount + fee.total) {
         // We haven't enough funds to perform such tx
@@ -1562,8 +1564,8 @@ export class ZkBobClient extends ZkBobProvider {
     await super.setProverMode(mode).finally(async () => {
       // The invoked setProverMode method doesn't ensure the requested mode will set
       if (this.getProverMode() != ProverMode.Delegated) {
-        const relayerParamsHash = await this.relayer().txParamsHash().catch(() => undefined);
-        this.worker.loadTxParams(this.snarkParamsAlias(), relayerParamsHash);
+        const sequencerParamsHash = await this.sequencer().txParamsHash().catch(() => undefined);
+        this.worker.loadTxParams(this.snarkParamsAlias(), sequencerParamsHash);
       }
     });
   }
@@ -1678,7 +1680,7 @@ export class ZkBobClient extends ZkBobProvider {
     await this.zpState().clean();
   }
 
-  // Request the latest state from the relayer
+  // Request the latest state from the sequencer
   // Returns isReadyToTransact flag
   public async updateState(): Promise<boolean> {
     this.setState(ClientState.StateUpdating);
@@ -1722,7 +1724,7 @@ export class ZkBobClient extends ZkBobProvider {
     let noOwnTxsInOptimisticState = true;
 
     noOwnTxsInOptimisticState = await this.zpState().updateState(
-      this.relayer(),
+      this.sequencer(),
       async (index) => this.getPoolState(index),
       await this.coldStorageConfig(),
       this.coldStorageBaseURL(),

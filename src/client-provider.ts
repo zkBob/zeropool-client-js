@@ -3,9 +3,10 @@ import { InternalError } from "./errors";
 import { NetworkBackendFactory } from "./networks";
 import { NetworkType } from "./network-type";
 import { NetworkBackend } from "./networks";
-import { ServiceVersion } from "./services/common";
+import { ServiceType, ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/delegated-prover";
 import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
+import { ProxyFee, ZkBobProxy } from "./services/proxy";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
 import { RegularTxType, TxCalldataVersion } from "./tx";
@@ -16,14 +17,26 @@ const bs58 = require('bs58')
 
 const LIB_VERSION = require('../package.json').version;
 
-const RELAYER_FEE_LIFETIME = 30;  // when to refetch the relayer fee (in seconds)
+const SEQUENCER_FEE_LIFETIME = 30;  // when to refetch the sequencer fee (in seconds)
 const NATIVE_AMOUNT_LIFETIME = 3600;  // when to refetch the max supported swap amount (in seconds)
 const MIN_TX_AMOUNT = BigInt(50000000);
 const GIFT_CARD_CODE_VER = 1;
 
-// relayer fee + fetching timestamp
-interface RelayerFeeFetch {
-    fee: RelayerFee;
+// We support both Relayer (centralized sequencer) and Proxy (decentralized one) interaction
+export type Sequencer = ZkBobRelayer | ZkBobProxy;
+export type SequencerFee = RelayerFee | ProxyFee;
+// type guards
+export function isProxy(seq: Sequencer): seq is ZkBobProxy {
+    return seq.type() == ServiceType.Proxy;
+}
+export function isProxyFee(fee: SequencerFee): fee is ProxyFee {
+    const proxyFee = fee as ProxyFee;
+    return proxyFee.proxyAddress !== undefined && proxyFee.proverFee !== undefined;
+}
+
+// sequencer fee + fetching timestamp
+interface SequencerFeeFetch {
+    fee: SequencerFee;
     timestamp: number;  // when the fee was fetched
 }
 
@@ -88,20 +101,25 @@ export class GiftCardProperties {
     poolAlias: string;
 }
 
+export enum SequencerType {
+    CentralizedRelayer,
+    DecentralizedProxy,
+}
+
 // Provides base functionality for the zkBob solution
 // within the specified configuration and selected pool
 // without attaching the user account
 export class ZkBobProvider {
     private chains:           { [chainId: string]: ChainConfig } = {};
     private pools:            { [name: string]: Pool } = {};
-    private relayers:         { [name: string]: ZkBobRelayer } = {};
+    private sequencers:       { [name: string]: Sequencer } = {};
     private provers:          { [name: string]: ZkBobDelegatedProver } = {};
     private proverModes:      { [name: string]: ProverMode } = {};
     private subgraphs:        { [name: string]: ZkBobSubgraph } = {};
     private poolDenominators: { [name: string]: bigint } = {};
     private tokenDecimals:    { [name: string]: number } = {};
     private poolIds:          { [name: string]: number } = {};
-    private relayerFee:       { [name: string]: RelayerFeeFetch } = {};
+    private sequencerFee:     { [name: string]: SequencerFeeFetch } = {};
     private maxSwapAmount:    { [name: string]: MaxSwapAmountFetch } = {};
     private coldStorageCfg:   { [name: string]: ColdStorageConfig } = {};
     protected addressPrefixes:  ZkAddressPrefix[] = [];
@@ -140,8 +158,15 @@ export class ZkBobProvider {
             }
 
             this.pools[alias] = pool;
-            const relayer = ZkBobRelayer.create(pool.relayerUrls, supportId);  // will throw error if relayerUrls is empty
-            this.relayers[alias] = relayer;
+
+            const hasRelayers = pool.relayerUrls.length > 0;
+            const hasProxies = pool.proxyUrls.length > 0;
+            if (hasRelayers == hasProxies) {
+                throw new InternalError(`Pool ${alias} should define at least a relayer OR proxy (not both)`);
+            }
+            this.sequencers[alias] = hasRelayers ? 
+                    ZkBobRelayer.create(pool.relayerUrls, supportId) :
+                    ZkBobProxy.create(pool.proxyUrls, supportId);
 
             // create a delegated prover service if url presented
             if (pool.delegatedProverUrls.length > 0) {
@@ -256,13 +281,22 @@ export class ZkBobProvider {
         return chain.networkName;
     }
 
-    protected relayer(): ZkBobRelayer {
-        const relayer = this.relayers[this.curPool];
-        if (!relayer) {
-            throw new InternalError(`No relayer for the pool ${this.curPool}`);
+    protected sequencerType(): SequencerType {
+        const seqType = this.sequencer().type();
+        switch (seqType) {
+            case ServiceType.Relayer: return SequencerType.CentralizedRelayer;
+            case ServiceType.Proxy:   return SequencerType.DecentralizedProxy;
+            default: throw new InternalError(`Bad sequencer service (${seqType}) for the pool ${this.curPool}`);
+        }
+    }
+
+    protected sequencer(): Sequencer {
+        const seq = this.sequencers[this.curPool];
+        if (!seq) {
+            throw new InternalError(`No sequencer exist for the pool ${this.curPool}`);
         }
 
-        return relayer;
+        return seq;
     }
 
     protected prover(): ZkBobDelegatedProver | undefined {
@@ -381,9 +415,9 @@ export class ZkBobProvider {
     }
 
     protected calldataVersion(): TxCalldataVersion {
-        const configVersion = this.pool().calldataVersion;
-
-        return configVersion ?? TxCalldataVersion.V1;   // obsolete version by default
+        return this.sequencerType() == SequencerType.CentralizedRelayer ? 
+            TxCalldataVersion.V1 :
+            TxCalldataVersion.V2;   // decentralized proxies do not support old calldata
     }
 
     // -------------=========< Converting Amount Routines >=========---------------
@@ -424,21 +458,21 @@ export class ZkBobProvider {
     // | Fees and limits, min tx amount (which are not depend on zkAccount)       |
     // ----------------------------------------------------------------------------
 
-    // Relayer raw fee components used to calculate concrete tx cost
+    // Sequencer raw fee components used to calculate concrete tx cost
     // To estimate typical fee for transaction with desired type please use atomicTxFee
-    public async getRelayerFee(): Promise<RelayerFee> {
-        let cachedFee = this.relayerFee[this.curPool];
-        if (!cachedFee || cachedFee.timestamp + RELAYER_FEE_LIFETIME * 1000 < Date.now()) {
-            const fee = await this.relayer().fee();
+    public async getSequencerFee(): Promise<SequencerFee> {
+        let cachedFee = this.sequencerFee[this.curPool];
+        if (!cachedFee || cachedFee.timestamp + SEQUENCER_FEE_LIFETIME * 1000 < Date.now()) {
+            const fee = await this.sequencer().fee();
             cachedFee = {fee, timestamp: Date.now()};
-            this.relayerFee[this.curPool] = cachedFee;
+            this.sequencerFee[this.curPool] = cachedFee;
         }
 
         return cachedFee.fee;
     }
 
-    protected async executionTxFee(txType: RegularTxType, relayerFee?: RelayerFee): Promise<bigint> {
-        const fee = relayerFee ?? await this.getRelayerFee();
+    protected async executionTxFee(txType: RegularTxType, sequencerFee?: SequencerFee): Promise<bigint> {
+        const fee = sequencerFee ?? await this.getSequencerFee();
         switch (txType) {
             case RegularTxType.Deposit: return fee.fee.deposit;
             case RegularTxType.Transfer: return fee.fee.transfer;
@@ -451,14 +485,14 @@ export class ZkBobProvider {
     // Min transaction fee in pool resolution (for regular transaction without any payload overhead)
     // To estimate fee for the concrete tx use account-based method (feeEstimate from client.ts)
     public async atomicTxFee(txType: RegularTxType, withdrawSwap: bigint = 0n): Promise<TxFee> {
-        const relayerFee = await this.getRelayerFee();
+        const sequencerFee = await this.getSequencerFee();
         
-        return this.singleTxFeeInternal(relayerFee, txType, txType == RegularTxType.Transfer ? 1 : 0, 0, withdrawSwap, true);
+        return this.singleTxFeeInternal(sequencerFee, txType, txType == RegularTxType.Transfer ? 1 : 0, 0, withdrawSwap, true);
     }
 
     // dynamic fee calculation routine
     protected async singleTxFeeInternal(
-        relayerFee: RelayerFee,
+        sequencerFee: SequencerFee,
         txType: RegularTxType,
         notesCnt: number,
         extraDataLen: number = 0,
@@ -466,13 +500,13 @@ export class ZkBobProvider {
         roundFee?: boolean,
     ): Promise<TxFee> {
         const calldataBytesCnt = this.network().estimateCalldataLength(this.calldataVersion(), txType, notesCnt, extraDataLen);
-        const baseFee = await this.executionTxFee(txType, relayerFee);
+        const baseFee = await this.executionTxFee(txType, sequencerFee);
 
-        let proverPart = relayerFee.proverFee;
-        let proxyPart = baseFee + relayerFee.oneByteFee * BigInt(calldataBytesCnt);
+        let proverPart = isProxyFee(sequencerFee) ? sequencerFee.proverFee : 0n;
+        let proxyPart = baseFee + sequencerFee.oneByteFee * BigInt(calldataBytesCnt);
         if (txType == RegularTxType.Withdraw && withdrawSwapAmount > 0n) {
             // swapping tokens during withdrawal may require additional fee
-            proxyPart += relayerFee.nativeConvertFee;
+            proxyPart += sequencerFee.nativeConvertFee;
         }
 
         if (roundFee === undefined || roundFee == true) {
@@ -480,7 +514,12 @@ export class ZkBobProvider {
             proverPart = await this.roundFee(proverPart);
         }
         
-        return { proxyAddress: relayerFee.proxyAddress, total: proxyPart + proverPart, proxyPart, proverPart };
+        return {
+            proxyAddress: isProxyFee(sequencerFee) ? sequencerFee.proxyAddress : '',
+            total: proxyPart + proverPart,
+            proxyPart,
+            proverPart
+        };
     }
     
     // Max supported token swap during withdrawal, in token resolution (Gwei)
@@ -488,7 +527,7 @@ export class ZkBobProvider {
         let cachedAmount = this.maxSwapAmount[this.curPool];
         if (!cachedAmount || cachedAmount.timestamp + NATIVE_AMOUNT_LIFETIME * 1000 < Date.now()) {
             try {
-                const amount = await this.relayer().maxSupportedSwapAmount();
+                const amount = await this.sequencer().maxSupportedSwapAmount();
                 cachedAmount = {amount, timestamp: Date.now()};
                 this.maxSwapAmount[this.curPool] = cachedAmount;
             } catch (err) {
@@ -508,11 +547,11 @@ export class ZkBobProvider {
 
     // The deposit and withdraw amount is limited by few factors:
     // https://docs.zkbob.com/bob-protocol/deposit-and-withdrawal-limits
-    // Global limits are fetched from the relayer (except personal deposit limit from the specified address)
+    // Global limits are fetched from the sequencer (except personal deposit limit from the specified address)
     public async getLimits(address: string | undefined, directRequest: boolean = false): Promise<PoolLimits> {
         const pool = this.pool();
         const network = this.network();
-        const relayer = this.relayer();
+        const sequencer = this.sequencer();
 
         async function fetchLimitsFromContract(network: NetworkBackend): Promise<LimitsFetch> {
             const poolLimits = await network.poolLimits(pool.poolAddress, address);
@@ -590,19 +629,19 @@ export class ZkBobProvider {
             try {
                 currentLimits = await fetchLimitsFromContract(network);
             } catch (e) {
-                console.warn(`Cannot fetch limits from the contract (${e}). Try to get them from relayer`);
+                console.warn(`Cannot fetch limits from the contract (${e}). Try to get them from sequencer`);
                 try {
-                    currentLimits = await relayer.limits(address);
+                    currentLimits = await sequencer.limits(address);
                 } catch (err) {
-                    console.warn(`Cannot fetch limits from the relayer (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
+                    console.warn(`Cannot fetch limits from the sequencer (${err}). Getting hardcoded values. Please note your transactions can be reverted with incorrect limits!`);
                     currentLimits = defaultLimits();
                 }
             }
         } else {
             try {
-                currentLimits = await relayer.limits(address);
+                currentLimits = await sequencer.limits(address);
             } catch (e) {
-                console.warn(`Cannot fetch deposit limits from the relayer (${e}). Try to get them from contract directly`);
+                console.warn(`Cannot fetch deposit limits from the sequencer (${e}). Try to get them from contract directly`);
                 try {
                     currentLimits = await fetchLimitsFromContract(network);
                 } catch (err) {
@@ -687,20 +726,20 @@ export class ZkBobProvider {
     }
 
     // ------------------=========< State Processing >=========--------------------
-    // | Getting the remote state (from the relayer and pool)                     |
+    // | Getting the remote state (from the sequencer and pool)                   |
     // ----------------------------------------------------------------------------
 
-    // Get relayer regular root & index
-    public async getRelayerState(): Promise<TreeState> {
-        const relayer = this.relayer();
-        const info = await relayer.info();
+    // Get sequencer regular root & index
+    public async getSequencerState(): Promise<TreeState> {
+        const sequencer = this.sequencer();
+        const info = await sequencer.info();
 
         return {root: BigInt(info.root), index: info.deltaIndex};
     }
 
-    // Get relayer optimistic root & index
-    public async getRelayerOptimisticState(): Promise<TreeState> {
-        const info = await this.relayer().info();
+    // Get sequencer optimistic root & index
+    public async getSequencerOptimisticState(): Promise<TreeState> {
+        const info = await this.sequencer().info();
 
         return {root: BigInt(info.optimisticRoot), index: info.optimisticDeltaIndex};
     }
@@ -721,11 +760,11 @@ export class ZkBobProvider {
         return LIB_VERSION;
     }
 
-    public async getRelayerVersion(): Promise<ServiceVersion> {
-        return this.relayer().version();
+    public async getSequencerVersion(): Promise<ServiceVersion> {
+        return this.sequencer().version();
     }
 
-    public async getProverVersion(): Promise<ServiceVersion> {
+    public async getDelegatedProverVersion(): Promise<ServiceVersion> {
         const prover = this.prover()
         if (!prover) {
             throw new InternalError(`Cannot fetch prover version because delegated prover wasn't initialized for the pool ${this.curPool}`);

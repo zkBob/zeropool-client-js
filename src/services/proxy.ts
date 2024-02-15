@@ -34,7 +34,7 @@ export class ZkBobProxy extends ZkBobRelayer {
     }
 
     // ----------------=========< Proxy Specific Routines >=========----------------
-    // | Reusing from ZkBobRelayer                                                 |
+    // | Reusing ZkBobRelayer methods                                              |
     // -----------------------------------------------------------------------------
 
     protected async proxyAddress(): Promise<string> {
