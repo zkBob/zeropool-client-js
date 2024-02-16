@@ -19,7 +19,7 @@ const LIB_VERSION = require('../package.json').version;
 
 const SEQUENCER_FEE_LIFETIME = 30;  // when to refetch the sequencer fee (in seconds)
 const NATIVE_AMOUNT_LIFETIME = 3600;  // when to refetch the max supported swap amount (in seconds)
-const MIN_TX_AMOUNT = BigInt(50000000);
+const MIN_TX_COIN_PART = 20;    // Min available tx amount is exactly this part of token (1/20)
 const GIFT_CARD_CODE_VER = 1;
 
 // We support both Relayer (centralized sequencer) and Proxy (decentralized one) interaction
@@ -120,6 +120,7 @@ export class ZkBobProvider {
     private tokenDecimals:    { [name: string]: number } = {};
     private poolIds:          { [name: string]: number } = {};
     private sequencerFee:     { [name: string]: SequencerFeeFetch } = {};
+    private minTxAmounts:     { [name: string]: bigint } = {};
     private maxSwapAmount:    { [name: string]: MaxSwapAmountFetch } = {};
     private coldStorageCfg:   { [name: string]: ColdStorageConfig } = {};
     protected addressPrefixes:  ZkAddressPrefix[] = [];
@@ -543,7 +544,22 @@ export class ZkBobProvider {
     }
 
     public async minTxAmount(): Promise<bigint> {
-        return BigInt(this.pool().minTxAmount ?? MIN_TX_AMOUNT);
+        let cachedAmount = this.minTxAmounts[this.curPool];
+        if (!cachedAmount) {
+            const overridenMinTxAmout = this.pool().minTxAmount;
+            if (overridenMinTxAmout !== undefined) {
+                cachedAmount = BigInt(overridenMinTxAmout);
+            } else {
+                const [decimals, denominator] = await Promise.all([this.decimals(), this.denominator()]);
+                const oneTokenNative = BigInt(10 ** decimals);
+                const oneTokenShielded = denominator > 0 ? oneTokenNative / denominator : oneTokenNative * denominator;
+                cachedAmount = oneTokenShielded / BigInt(MIN_TX_COIN_PART);
+            }
+
+            this.minTxAmounts[this.curPool] = cachedAmount;
+        }
+
+        return cachedAmount;
     }
 
     // The deposit and withdraw amount is limited by few factors:
