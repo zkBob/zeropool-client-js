@@ -1,5 +1,5 @@
-import { InternalError } from "../errors";
-import { ServiceType } from "./common";
+import { InternalError, ServiceError } from "../errors";
+import { ServiceType, defaultHeaders, fetchJson } from "./common";
 import { RelayerFee, ZkBobRelayer } from "./relayer";
 
 
@@ -38,13 +38,31 @@ export class ZkBobProxy extends ZkBobRelayer {
     // -----------------------------------------------------------------------------
 
     protected async proxyAddress(): Promise<string> {
-        // TODO: Implement me!
-        return '0xfec49782fe8e11de9fb3ba645a76fe914fffe3cb';
+        const headers = defaultHeaders(this.supportId);
+        const url = new URL('/address', this.url());
+
+        const addrResp = await fetchJson(url.toString(), {headers}, this.type());
+
+
+        if (!addrResp || typeof addrResp !== 'object' || !addrResp.hasOwnProperty('address')) {
+            throw new ServiceError(this.type(), 200, 'Incorrect response for proxy address');
+        }
+
+        return addrResp.address;
     }
 
     protected async proverFee(): Promise<bigint> {
-        // TODO: Implement me!
-        return 100000000n;
+        const headers = defaultHeaders(this.supportId);
+        const url = new URL('/proverFee', this.url());
+
+        const proverFee = await fetchJson(url.toString(), {headers}, this.type());
+
+
+        if (!proverFee || typeof proverFee !== 'object' || !proverFee.hasOwnProperty('fee')) {
+            throw new ServiceError(this.type(), 200, 'Incorrect response for prover fee');
+        }
+
+        return BigInt(proverFee.fee);
     }
 
     public override async fee(): Promise<ProxyFee> {
