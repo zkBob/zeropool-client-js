@@ -64,9 +64,6 @@ export interface TransferConfig {
   outNotes: TransferRequest[];  // tx notes (without fee)
   calldataLength: number; // used to estimate fee
   fee: TxFee;
-  //proxyAddress: string; // needed to create tx object
-  //proxyFee: bigint;  // absolute transaction proxy fee (pool dimension)
-  //proverFee: bigint;  // absolute transaction prover fee (pool dimension)
   accountLimit: bigint;  // minimum account remainder after transaction
                          // (for future use, e.g. complex multi-tx transfers, default: 0)
 }
@@ -1245,8 +1242,8 @@ export class ZkBobClient extends ZkBobProvider {
     const oneTx: ITransferData = {
       outputs: [{to: dstAddr, amount: `${redeemAmount}`}],
       proxy: this.network().addressToBytes(minFee.proxyAddress),
-      proxy_fee: (actualFee - minFee.proverPart).toString(),
-      prover_fee: minFee.proverPart.toString(),
+      proxy_fee: minFee.proxyPart.toString(),
+      prover_fee: (actualFee - minFee.proxyPart).toString(),
       data: [],
     };
     const giftCardState = this.auxZpStates[accId];

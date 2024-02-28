@@ -4,7 +4,7 @@ import { DDBatchTxDetails, DirectDeposit, DirectDepositState, PoolTxDetails, Poo
 import tokenAbi from './abi/usdt-abi.json';
 import { ddContractABI as ddAbi, poolContractABI as poolAbi, accountingABI} from '../evm/evm-abi';
 import { addHexPrefix, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
-import { CalldataInfo, decodeEvmCalldata, getCiphertext } from '../evm/calldata';
+import { CalldataInfo, decodeEvmCalldata, getCiphertext, parseTransactCalldata } from '../evm/calldata';
 import { hexToBytes } from 'web3-utils';
 import { PoolSelector } from '../evm';
 import { MultiRpcManager, RpcManagerDelegate } from '../rpcman';
@@ -698,59 +698,16 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
 
                 const txSelector = txData.slice(0, 8).toLowerCase();
                 if (txSelector == PoolSelector.Transact) {
-                    const tx = decodeEvmCalldata(txData);
-                    let feeAmount = 0n;
-                        switch (tx.version) {
-                            case TxCalldataVersion.V1:
-                                feeAmount = BigInt(addHexPrefix(tx.memo.slice(0, 16)));
-                                break;
-                            case TxCalldataVersion.V2:
-                                feeAmount = BigInt(addHexPrefix(tx.memo.slice(40, 56))) + 
-                                            BigInt(addHexPrefix(tx.memo.slice(56, 72)));
-                                break;
-                            default:
-                                throw new InternalError(`Unknown tx calldata version ${tx.version}`);
-                        }
-                    
-                    const txInfo = new RegularTxDetails();
-                    txInfo.txType = tx.txType;
-                    txInfo.tokenAmount = tx.tokenAmount;
-                    txInfo.feeAmount = feeAmount;
-                    txInfo.txHash = poolTxHash;
-                    txInfo.isMined = isMined
-                    txInfo.timestamp = timestamp / 1000;    // timestamp should be in seconds
-                    txInfo.nullifier = '0x' + toTwosComplementHex(BigInt((tx.nullifier)), 32);
-                    txInfo.commitment = '0x' + toTwosComplementHex(BigInt((tx.outCommit)), 32);
-                    txInfo.ciphertext = getCiphertext(tx);
-
-                    // additional tx-specific fields for deposits and withdrawals
-                    if (tx.txType == RegularTxType.Deposit) {
-                        if (tx.extra && tx.extra.length >= 128) {
-                            const fullSig = this.toCanonicalSignature(tx.extra.slice(0, 128));
-                            txInfo.depositAddr = await this.recoverSigner(txInfo.nullifier, fullSig);
-                        } else {
-                            // incorrect signature
-                            throw new InternalError(`No signature for approve deposit`);
-                        }
-                    } else if (tx.txType == RegularTxType.BridgeDeposit) {
-                        if (tx.version == TxCalldataVersion.V1) {
-                            txInfo.depositAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
-                        } else if (tx.version == TxCalldataVersion.V2) {
-                            txInfo.depositAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
-                        }
-                    } else if (tx.txType == RegularTxType.Withdraw) {
-                        if (tx.version == TxCalldataVersion.V1) {
-                            txInfo.withdrawAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
-                        } else if (tx.version == TxCalldataVersion.V2) {
-                            txInfo.withdrawAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
-                        }
-                    }
-
-                    return {
-                        poolTxType: PoolTxType.Regular,
-                        details: txInfo,
-                        index,
-                    };
+                    const txInfo = await parseTransactCalldata(txData, this);
+                        txInfo.txHash = poolTxHash;
+                        txInfo.isMined = isMined;
+                        txInfo.timestamp = timestamp / 1000;    // timestamp should be in seconds but tronweb returns ms
+                        
+                        return {
+                            poolTxType: PoolTxType.Regular,
+                            details: txInfo,
+                            index,
+                        };
                 } else if (txSelector == PoolSelector.AppendDirectDeposit) {
                     const txInfo = new DDBatchTxDetails();
                     txInfo.txHash = poolTxHash;
@@ -766,7 +723,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                         index,
                     };
                 } else {
-                    throw new InternalError(`[EvmNetwork]: Cannot decode calldata for tx ${poolTxHash} (incorrect selector ${txSelector})`);
+                    throw new InternalError(`[TronNetwork]: Cannot decode calldata for tx ${poolTxHash} (incorrect selector ${txSelector})`);
                 }
             } else {
               console.warn(`[TronNetwork]: cannot get native tx ${poolTxHash} (tx still not mined?)`);
@@ -943,7 +900,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
 
             if (curBlock < blockNumber) {
                 if (!waitMsgLogged) {
-                    console.warn(`[EvmNetwork]: waiting for a block ${blockNumber} (current ${curBlock})...`);
+                    console.warn(`[TronNetwork]: waiting for a block ${blockNumber} (current ${curBlock})...`);
                     waitMsgLogged = true;
                 }
 
@@ -958,7 +915,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         } while(curBlock < blockNumber);
 
         if (waitMsgLogged) {
-            console.log(`[EvmNetwork]: internal provider was synced with block ${blockNumber}`);
+            console.log(`[TronNetwork]: internal provider was synced with block ${blockNumber}`);
         }
 
         return true;

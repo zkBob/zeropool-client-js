@@ -1,7 +1,8 @@
 import { InternalError } from "../../errors";
-import { ShieldedTx, RegularTxType, TxCalldataVersion, CURRENT_CALLDATA_VERSION } from "../../tx";
-import { HexStringReader, assertNotNull } from "../../utils";
+import { ShieldedTx, RegularTxType, TxCalldataVersion, CURRENT_CALLDATA_VERSION, RegularTxDetails } from "../../tx";
+import { HexStringReader, addHexPrefix, assertNotNull, hexToBuf, toTwosComplementHex } from "../../utils";
 import { PoolSelector } from ".";
+import { NetworkBackend } from "..";
 
 
 // Calldata components length universal reference
@@ -150,6 +151,54 @@ export function getCiphertext(tx: ShieldedTx): string {
   return tx.memo.slice(ciphertextStartOffset * 2);
 }
 
-export function decodeEvmCalldataAppendDD(calldata: string) {
+export async function parseTransactCalldata(calldata: string, network: NetworkBackend): Promise<RegularTxDetails> {
+  const tx = decodeEvmCalldata(calldata);
+  let feeAmount = 0n;
+  switch (tx.version) {
+      case TxCalldataVersion.V1:
+          feeAmount = BigInt(addHexPrefix(tx.memo.slice(0, 16)));
+          break;
+      case TxCalldataVersion.V2:
+          feeAmount = BigInt(addHexPrefix(tx.memo.slice(40, 56))) + 
+                      BigInt(addHexPrefix(tx.memo.slice(56, 72)));
+          break;
+      default:
+          throw new InternalError(`Unknown tx calldata version ${tx.version}`);
+  }
   
+  const txInfo = new RegularTxDetails();
+  txInfo.txType = tx.txType;
+  txInfo.tokenAmount = tx.tokenAmount;
+  txInfo.feeAmount = feeAmount;
+  txInfo.txHash = '';
+  txInfo.isMined = false;
+  txInfo.timestamp = 0;
+  txInfo.nullifier = '0x' + toTwosComplementHex(BigInt((tx.nullifier)), 32);
+  txInfo.commitment = '0x' + toTwosComplementHex(BigInt((tx.outCommit)), 32);
+  txInfo.ciphertext = getCiphertext(tx);
+
+  // additional tx-specific fields for deposits and withdrawals
+  if (tx.txType == RegularTxType.Deposit) {
+      if (tx.extra && tx.extra.length >= 128) {
+          const fullSig = network.toCanonicalSignature(tx.extra.slice(0, 128));
+          txInfo.depositAddr = await network.recoverSigner(txInfo.nullifier, fullSig);
+      } else {
+          // incorrect signature
+          throw new InternalError(`No signature for approve deposit`);
+      }
+  } else if (tx.txType == RegularTxType.BridgeDeposit) {
+      if (tx.version == TxCalldataVersion.V1) {
+          txInfo.depositAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
+      } else if (tx.version == TxCalldataVersion.V2) {
+          txInfo.depositAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
+      }
+  } else if (tx.txType == RegularTxType.Withdraw) {
+      if (tx.version == TxCalldataVersion.V1) {
+          txInfo.withdrawAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
+      } else if (tx.version == TxCalldataVersion.V2) {
+          txInfo.withdrawAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
+      }
+  }
+
+  return txInfo;
 }

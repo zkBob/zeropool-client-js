@@ -7,7 +7,7 @@ import { accountingABI, ddContractABI, poolContractABI, tokenABI } from './evm-a
 import bs58 from 'bs58';
 import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType, DirectDeposit, DirectDepositState, TxCalldataVersion } from '../../tx';
 import { addHexPrefix, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
-import { CalldataInfo, decodeEvmCalldata, getCiphertext } from './calldata';
+import { CalldataInfo, decodeEvmCalldata, getCiphertext, parseTransactCalldata } from './calldata';
 import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
         personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
 import { privateToAddress, bufferToHex, isHexPrefixed } from '@ethereumjs/util';
@@ -765,54 +765,11 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
                     const txSelector = txData.slice(0, 8).toLowerCase();
                     if (txSelector == PoolSelector.Transact || txSelector == PoolSelector.TransactV2) {
-                        const tx = decodeEvmCalldata(txData);
-                        let feeAmount = 0n;
-                        switch (tx.version) {
-                            case TxCalldataVersion.V1:
-                                feeAmount = BigInt(addHexPrefix(tx.memo.slice(0, 16)));
-                                break;
-                            case TxCalldataVersion.V2:
-                                feeAmount = BigInt(addHexPrefix(tx.memo.slice(40, 56))) + 
-                                            BigInt(addHexPrefix(tx.memo.slice(56, 72)));
-                                break;
-                            default:
-                                throw new InternalError(`Unknown tx calldata version ${tx.version}`);
-                        }
-                        
-                        const txInfo = new RegularTxDetails();
-                        txInfo.txType = tx.txType;
-                        txInfo.tokenAmount = tx.tokenAmount;
-                        txInfo.feeAmount = feeAmount;
+                        const txInfo = await parseTransactCalldata(txData, this);
                         txInfo.txHash = poolTxHash;
-                        txInfo.isMined = isMined
+                        txInfo.isMined = isMined;
                         txInfo.timestamp = timestamp;
-                        txInfo.nullifier = '0x' + toTwosComplementHex(BigInt((tx.nullifier)), 32);
-                        txInfo.commitment = '0x' + toTwosComplementHex(BigInt((tx.outCommit)), 32);
-                        txInfo.ciphertext = getCiphertext(tx);
-
-                        // additional tx-specific fields for deposits and withdrawals
-                        if (tx.txType == RegularTxType.Deposit) {
-                            if (tx.extra && tx.extra.length >= 128) {
-                                const fullSig = this.toCanonicalSignature(tx.extra.slice(0, 128));
-                                txInfo.depositAddr = await this.recoverSigner(txInfo.nullifier, fullSig);
-                            } else {
-                                // incorrect signature
-                                throw new InternalError(`No signature for approve deposit`);
-                            }
-                        } else if (tx.txType == RegularTxType.BridgeDeposit) {
-                            if (tx.version == TxCalldataVersion.V1) {
-                                txInfo.depositAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
-                            } else if (tx.version == TxCalldataVersion.V2) {
-                                txInfo.depositAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
-                            }
-                        } else if (tx.txType == RegularTxType.Withdraw) {
-                            if (tx.version == TxCalldataVersion.V1) {
-                                txInfo.withdrawAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
-                            } else if (tx.version == TxCalldataVersion.V2) {
-                                txInfo.withdrawAddr = this.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
-                            }
-                        }
-
+                        
                         return {
                             poolTxType: PoolTxType.Regular,
                             details: txInfo,
