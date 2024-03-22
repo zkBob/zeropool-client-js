@@ -60,6 +60,17 @@ export interface RelayerFee {
   nativeConvertFee: bigint;
 }
 
+export function evaluateRelayerFeeValue(fee: RelayerFee): bigint {
+  const avgTx = (fee.fee.deposit + fee.fee.transfer + fee.fee.withdrawal + fee.fee.permittableDeposit) / 4n;
+  const typycalTxLength = 700n;
+
+  return avgTx + fee.oneByteFee * typycalTxLength;
+}
+
+export function compareRelayerFee(fee1: RelayerFee, fee2: RelayerFee): boolean {
+  return evaluateRelayerFeeValue(fee1) < evaluateRelayerFeeValue(fee2);
+}
+
 interface Limit { // all values are in pool dimension (denominated)
   total: bigint;
   available: bigint;
@@ -146,12 +157,25 @@ export class ZkBobRelayer implements IZkBobService {
     return ServiceType.Relayer;
   }
 
-  public url(): string {
-    return this.relayerUrls[this.curIdx];
+  protected safeIndex(idx: number | undefined): number {
+    if (idx === undefined) {
+      return this.curIdx;
+    } else if (idx < 0) {
+      return 0;
+    } else if (idx >= this.relayerUrls.length && this.relayerUrls.length > 0) {
+      return this.relayerUrls.length - 1;
+    }
+
+    return idx;
   }
 
-  public async version(): Promise<ServiceVersion> {
-    const relayerUrl = this.url();
+  public url(idx?: number): string {
+
+    return this.relayerUrls[this.safeIndex(idx)];
+  }
+
+  public async version(idx?: number): Promise<ServiceVersion> {
+    const relayerUrl = this.url(idx);
 
     let cachedVer = this.relayerVersions.get(relayerUrl);
     if (cachedVer === undefined || cachedVer.timestamp + RELAYER_VERSION_REQUEST_THRESHOLD * 1000 < Date.now()) {
@@ -170,9 +194,9 @@ export class ZkBobRelayer implements IZkBobService {
     return cachedVer.version;
   }
 
-  public async healthcheck(): Promise<boolean> {
+  public async healthcheck(idx?: number): Promise<boolean> {
     try {
-      await this.info();
+      await this.info(idx);
     } catch {
       return false;
     }
@@ -234,8 +258,8 @@ export class ZkBobRelayer implements IZkBobService {
     return null;
   }
   
-  public async info(): Promise<RelayerInfo> {
-    const url = new URL('/info', this.url());
+  public async info(idx?: number): Promise<RelayerInfo> {
+    const url = new URL('/info', this.url(idx));
     const headers = defaultHeaders();
     const res = await fetchJson(url.toString(), {headers}, this.type());
 
@@ -246,9 +270,9 @@ export class ZkBobRelayer implements IZkBobService {
     throw new ServiceError(this.type(), 200, `Incorrect response (expected RelayerInfo, got \'${res}\')`)
   }
   
-  public async fee(): Promise<RelayerFee> {
+  public async fee(idx?: number): Promise<RelayerFee> {
     const headers = defaultHeaders(this.supportId);
-    const url = new URL('/fee', this.url());
+    const url = new URL('/fee', this.url(idx));
 
     const proxyFee = await fetchJson(url.toString(), {headers}, this.type());
 
