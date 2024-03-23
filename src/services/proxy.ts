@@ -2,7 +2,7 @@ import { InternalError, ServiceError } from "../errors";
 import { ServiceType, defaultHeaders, fetchJson } from "./common";
 import { RelayerFee, ZkBobRelayer, evaluateRelayerFeeValue } from "./relayer";
 
-const PROXY_BEST_FEE_REQUEST_THRESHOLD = 120; // before requesting new optimal relayer (in seconds)
+const PROXY_BEST_FEE_REQUEST_THRESHOLD = 10; // before requesting new optimal relayer (in seconds)
 
 export interface ProxyFee extends RelayerFee {
     proxyAddress: string;
@@ -78,7 +78,9 @@ export class ZkBobProxy extends ZkBobRelayer {
     }
 
     public override async fee(): Promise<ProxyFee> {
-        if ((Date.now() - this.findOptimalProxyTs) > PROXY_BEST_FEE_REQUEST_THRESHOLD) {
+        if (this.relayerUrls.length > 1 && 
+            (Date.now() - this.findOptimalProxyTs) > PROXY_BEST_FEE_REQUEST_THRESHOLD
+        ) {
             return this.findOptimalFee();
         }
 
@@ -126,6 +128,8 @@ export class ZkBobProxy extends ZkBobRelayer {
                 console.log(`ZkBobProxy: switching seqencer to ${minFeeSeq.index} (${this.url(minFeeSeq.index)}) due to best fee`);
                 this.curIdx = minFeeSeq.index
                 this.findOptimalProxyTs = Date.now();
+            } else {
+                console.log(`ZkBobProxy: the current sequencer with index ${this.curIdx} is still the best choice`);
             }
 
             return minFeeSeq.fee;
