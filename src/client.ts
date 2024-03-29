@@ -826,6 +826,7 @@ export class ZkBobClient extends ZkBobProvider {
       txData = await state.createDeposit({
         amount: txAmount.toString(),
         proxy: this.network().addressToBytes(isProxyFee(usedFee) ? usedFee.proxyAddress : ''),
+        prover: this.network().addressToBytes(isProxyFee(usedFee) ? usedFee.proverAddress : ''),
         proxy_fee: estimatedFee.fee.proxyPart.toString(),
         prover_fee: estimatedFee.fee.proverPart.toString(),
         data: [],
@@ -837,6 +838,7 @@ export class ZkBobClient extends ZkBobProvider {
         deadline: String(deadline),
         holder: this.network().addressToBytes(fromAddress),
         proxy: this.network().addressToBytes(isProxyFee(usedFee) ? usedFee.proxyAddress : ''),
+        prover: this.network().addressToBytes(isProxyFee(usedFee) ? usedFee.proverAddress : ''),
         proxy_fee: estimatedFee.fee.proxyPart.toString(),
         prover_fee: estimatedFee.fee.proverPart.toString(),
         data: [],
@@ -1052,6 +1054,7 @@ export class ZkBobClient extends ZkBobProvider {
       const oneTx: ITransferData = {
         outputs,
         proxy: this.network().addressToBytes(onePart.fee.proxyAddress),
+        prover: this.network().addressToBytes(onePart.fee.proverAddress),
         proxy_fee: onePart.fee.proxyPart.toString(),
         prover_fee: onePart.fee.proverPart.toString(),
         data: [],
@@ -1146,6 +1149,7 @@ export class ZkBobClient extends ZkBobProvider {
         const oneTx: ITransferData = {
           outputs: [],
           proxy: this.network().addressToBytes(onePart.fee.proxyAddress),
+          prover: this.network().addressToBytes(onePart.fee.proverAddress),
           proxy_fee: onePart.fee.proxyPart.toString(),
           prover_fee: onePart.fee.proverPart.toString(),
           data: [],
@@ -1159,6 +1163,7 @@ export class ZkBobClient extends ZkBobProvider {
           native_amount: swapAmount.toString(),
           energy_amount: '0',
           proxy: this.network().addressToBytes(onePart.fee.proxyAddress),
+          prover: this.network().addressToBytes(onePart.fee.proverAddress),
           proxy_fee: onePart.fee.proxyPart.toString(),
           prover_fee: onePart.fee.proverPart.toString(),
           data: [],
@@ -1242,6 +1247,7 @@ export class ZkBobClient extends ZkBobProvider {
     const oneTx: ITransferData = {
       outputs: [{to: dstAddr, amount: `${redeemAmount}`}],
       proxy: this.network().addressToBytes(minFee.proxyAddress),
+      prover: this.network().addressToBytes(minFee.proverAddress),
       proxy_fee: minFee.proxyPart.toString(),
       prover_fee: (actualFee - minFee.proxyPart).toString(),
       data: [],
@@ -1325,6 +1331,7 @@ export class ZkBobClient extends ZkBobProvider {
     let txCnt = 1;
     let totalFee: TxFee = {
       proxyAddress: isProxyFee(sequencerFee) ? sequencerFee.proxyAddress : '',
+      proverAddress: isProxyFee(sequencerFee) ? sequencerFee.proverAddress : '',
       total: 0n,
       proxyPart: 0n,
       proverPart: 0n

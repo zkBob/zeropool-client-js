@@ -7,6 +7,7 @@ import { NetworkBackend } from "..";
 
 // Calldata components length universal reference
 export class CalldataInfo {
+  // from the selector to the memo (memo_size included)
   static baseLength(ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
     switch (ver) {
       case TxCalldataVersion.V1: return 644;
@@ -15,6 +16,7 @@ export class CalldataInfo {
     }
   };
 
+  // memo length (without notes)
   static memoBaseLength(txType: RegularTxType, ver: TxCalldataVersion = CURRENT_CALLDATA_VERSION): number {
     switch (ver) {
       case TxCalldataVersion.V1:
@@ -31,10 +33,10 @@ export class CalldataInfo {
         switch (txType) {
           case RegularTxType.BridgeDeposit:
           case RegularTxType.Withdraw:
-            return 260;
+            return 280;
           case RegularTxType.Deposit:
           case RegularTxType.Transfer:
-            return 232;
+            return 252;
           default: throw new InternalError(`[CalldataDecoder] Unknown transaction type: ${txType}`);
         }
       default: throw new InternalError(`[CalldataDecoder] Unknown calldata version: ${ver}`);
@@ -64,14 +66,16 @@ export class CalldataInfo {
       case TxCalldataVersion.V2:
         switch (txType) {
           case RegularTxType.BridgeDeposit:
-            // proxy_address (u160) + proxy_fee (u64) + prover_fee (u64) + deadline (u64) + holder (u160)
-            return 20 + 8 + 8 + 8 + 20;
+            // proxy_address (u160) + prover_address (u160) + proxy_fee (u64) + prover_fee (u64) + 
+            // + deadline (u64) + holder (u160)
+            return 20 + 20 + 8 + 8 + 8 + 20;
           case RegularTxType.Deposit: case RegularTxType.Transfer:
-            // proxy_address (u160) + proxy_fee (u64) + prover_fee (u64)
-            return 20 + 8 + 8;
+            // proxy_address (u160) + prover_address (u160) + proxy_fee (u64) + prover_fee (u64)
+            return 20 + 20 + 8 + 8;
           case RegularTxType.Withdraw:
-            // proxy_address (u160) + proxy_fee (u64) + prover_fee (u64) + native_amount (u64) + address (u160)
-            return 28 + 8 + 8 + 8 + 20;
+            // proxy_address (u160) + prover_address (u160) + proxy_fee (u64) + prover_fee (u64) +
+            // + native_amount (u64) + address (u160)
+            return 20 + 20 + 8 + 8 + 8 + 20;
           default: throw new InternalError(`[CalldataDecoder] Unknown transaction type: ${txType}`);
         }
       default: throw new InternalError(`[CalldataDecoder] Unknown calldata version: ${ver}`);
@@ -159,8 +163,8 @@ export async function parseTransactCalldata(calldata: string, network: NetworkBa
           feeAmount = BigInt(addHexPrefix(tx.memo.slice(0, 16)));
           break;
       case TxCalldataVersion.V2:
-          feeAmount = BigInt(addHexPrefix(tx.memo.slice(40, 56))) + 
-                      BigInt(addHexPrefix(tx.memo.slice(56, 72)));
+          feeAmount = BigInt(addHexPrefix(tx.memo.slice(80, 96))) + 
+                      BigInt(addHexPrefix(tx.memo.slice(96, 112)));
           break;
       default:
           throw new InternalError(`Unknown tx calldata version ${tx.version}`);
@@ -190,13 +194,13 @@ export async function parseTransactCalldata(calldata: string, network: NetworkBa
       if (tx.version == TxCalldataVersion.V1) {
           txInfo.depositAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
       } else if (tx.version == TxCalldataVersion.V2) {
-          txInfo.depositAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
+          txInfo.depositAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(128, 168), 20));
       }
   } else if (tx.txType == RegularTxType.Withdraw) {
       if (tx.version == TxCalldataVersion.V1) {
           txInfo.withdrawAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(32, 72), 20));
       } else if (tx.version == TxCalldataVersion.V2) {
-          txInfo.withdrawAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(88, 128), 20));
+          txInfo.withdrawAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(128, 168), 20));
       }
   }
 

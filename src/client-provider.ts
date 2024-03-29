@@ -42,6 +42,7 @@ interface SequencerFeeFetch {
 
 export interface TxFee { // all numeric values are in the pool dimension
     proxyAddress: string; // L1-address of the proxy
+    proverAddress: string; // L1-address of the prover
     total: bigint;        // total fee estimation
     proxyPart: bigint;    // proxy fee of commiting tx to the pool contract
     proverPart: bigint;   // prover fee of including tx to the Merkle tree
@@ -518,6 +519,7 @@ export class ZkBobProvider {
         
         return {
             proxyAddress: isProxyFee(sequencerFee) ? sequencerFee.proxyAddress : '',
+            proverAddress: isProxyFee(sequencerFee) ? sequencerFee.proverAddress : '',
             total: proxyPart + proverPart,
             proxyPart,
             proverPart

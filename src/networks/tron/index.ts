@@ -599,7 +599,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     }
 
     public addressToBytes(address: string): Uint8Array {
-        const hexAddr = TronWeb.address.toHex(address);
+        const hexAddr = TronWeb.address.toHex(address.length > 0 ? address : ZERO_ADDRESS);
         if (typeof hexAddr !== 'string' || hexAddr.length != 42) {
             throw new InternalError(`Incorrect address format`);
         }

@@ -6,6 +6,7 @@ const PROXY_BEST_FEE_REQUEST_THRESHOLD = 10; // before requesting new optimal re
 
 export interface ProxyFee extends RelayerFee {
     proxyAddress: string;
+    proverAddress: string;
     proverFee: bigint
 }
   
@@ -55,12 +56,30 @@ export class ZkBobProxy extends ZkBobRelayer {
 
         const addrResp = await fetchJson(url.toString(), {headers}, this.type());
 
-
         if (!addrResp || typeof addrResp !== 'object' || !addrResp.hasOwnProperty('address')) {
             throw new ServiceError(this.type(), 200, 'Incorrect response for proxy address');
         }
 
         return addrResp.address;
+    }
+
+    protected async proverAddress(idx?: number): Promise<string> {
+        const headers = defaultHeaders(this.supportId);
+        const url = new URL('/proverAddress', this.url(idx));
+
+        try {
+            const addrResp = await fetchJson(url.toString(), {headers}, this.type());
+
+            if (!addrResp || typeof addrResp !== 'object' || !addrResp.hasOwnProperty('address')) {
+                throw new ServiceError(this.type(), 200, 'Incorrect response for prover address');
+            }
+
+            return addrResp.address;
+        } catch (err) {
+            console.warn(`ZkBobProxy: cannot fetch prover address (reason: ${err.message})`)
+
+            return '';
+        }
     }
 
     protected async proverFee(idx?: number): Promise<bigint> {
@@ -88,15 +107,17 @@ export class ZkBobProxy extends ZkBobRelayer {
     }
 
     protected async feeInternal(idx?: number): Promise<ProxyFee> {
-        const [fee, proxyAddress, proverFee] = await Promise.all([
+        const [fee, proxyAddress, proverAddress, proverFee] = await Promise.all([
             super.fee(idx),
             this.proxyAddress(idx),
+            this.proverAddress(idx),
             this.proverFee(idx)
         ]);
 
         return {
             ...fee,
             proxyAddress,
+            proverAddress,
             proverFee,
         }
     }
