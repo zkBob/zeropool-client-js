@@ -97,7 +97,7 @@ export class ZkBobProxy extends ZkBobRelayer {
     }
 
     public override async fee(): Promise<ProxyFee> {
-        if (this.relayerUrls.length > 1 && 
+        if (this.relayerUrls.length > 1 && this.primaryIdx === undefined &&
             (Date.now() - this.findOptimalProxyTs) > PROXY_BEST_FEE_REQUEST_THRESHOLD
         ) {
             return this.findOptimalFee();

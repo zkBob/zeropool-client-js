@@ -5,7 +5,7 @@ import { NetworkType } from "./network-type";
 import { NetworkBackend } from "./networks";
 import { ServiceType, ServiceVersion } from "./services/common";
 import { ZkBobDelegatedProver } from "./services/delegated-prover";
-import { RelayerFee, LimitsFetch, ZkBobRelayer } from "./services/relayer";
+import { RelayerFee, LimitsFetch, ZkBobRelayer, SequencerEndpoint } from "./services/relayer";
 import { ProxyFee, ZkBobProxy } from "./services/proxy";
 import { ColdStorageConfig } from "./coldstorage";
 import { bufToHex, HexStringReader, HexStringWriter, hexToBuf, truncateHexPrefix } from "./utils";
@@ -253,6 +253,14 @@ export class ZkBobProvider {
         }
 
         this.curPool = poolAlias;
+    }
+
+    public async sequencerEndpoints(): Promise<SequencerEndpoint[]> {
+        return this.sequencer().getEndpoints();
+    }
+
+    public async prioritizeSequencerEndpoint(index: number): Promise<number | undefined> {
+        return this.sequencer().prioritizeEndpoint(index);
     }
 
     protected pool(): Pool {

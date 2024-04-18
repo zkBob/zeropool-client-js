@@ -127,11 +127,18 @@ function LimitsFromJson(json: any): LimitsFetch {
   };
 }
 
+export interface SequencerEndpoint {  // using for external purposes
+  url: string;
+  isActive: boolean;
+  isPrioritize: boolean;
+}
+
 export class ZkBobRelayer implements IZkBobService {
   // The simplest support for multiple relayer configuration
   // TODO: implement proper relayer swiching / fallbacking
   protected relayerUrls: string[];
   protected curIdx: number;
+  protected primaryIdx?: number;  // use to prioritize a concrete URL
   protected supportId: string | undefined;
   protected relayerVersions = new Map<string, ServiceVersionFetch>(); // relayer version: URL -> version
 
@@ -159,7 +166,7 @@ export class ZkBobRelayer implements IZkBobService {
 
   protected safeIndex(idx: number | undefined): number {
     if (idx === undefined) {
-      return this.curIdx;
+      return this.primaryIdx !== undefined ? this.primaryIdx : this.curIdx;
     } else if (idx < 0) {
       return 0;
     } else if (idx >= this.relayerUrls.length && this.relayerUrls.length > 0) {
@@ -202,6 +209,33 @@ export class ZkBobRelayer implements IZkBobService {
     }
 
     return true;
+  }
+
+  public getEndpoints(): SequencerEndpoint[] {
+    return this.relayerUrls.map((url, idx) => { 
+      return {
+        url,
+        isActive: idx == this.curIdx,
+        isPrioritize: idx == this.primaryIdx,
+      }
+    });
+  }
+
+  public async prioritizeEndpoint(index: number | undefined): Promise<number | undefined> {
+    if (index === undefined || index < 0 || index >= this.relayerUrls.length) {
+      this.primaryIdx = undefined;
+    } else {
+      if ((await this.healthcheck(index)) == true) {
+        this.primaryIdx = index;
+        this.curIdx = index;
+      } else {
+        throw new InternalError(`ZkBobRelayer: cannot prioritize URL ${this.relayerUrls[index]} because it isn't healthy`);
+      }
+    }
+
+    console.info(`ZkBobRelayer: prioritized sequencer is ${this.primaryIdx !== undefined ? this.relayerUrls[this.primaryIdx] : 'not set'}`);
+
+    return this.primaryIdx;
   }
 
   // ----------------=========< Relayer Specific Routines >=========----------------
