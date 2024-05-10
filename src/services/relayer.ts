@@ -34,6 +34,17 @@ const isJobInfo = (obj: any): obj is JobInfo => {
     obj.hasOwnProperty('createdOn') && typeof obj.createdOn === 'number';
 }
 
+export interface SequencerJobInfo extends JobInfo {
+  sequencerIndex: number;
+}
+
+export class SequencerJob { // sequencer job description
+  constructor(public id: string, public seqIdx?: number) {}
+  hash(): string { return `${this.id}_${this.seqIdx}`; }
+  equals(other: SequencerJob): boolean { return this.id == other.id && this.seqIdx == other.seqIdx; }
+  toString(): string { return `${this.id}@seq[${this.seqIdx}]`; }
+}
+
 export interface RelayerInfo {
   root: string;
   optimisticRoot: string;
@@ -164,7 +175,7 @@ export class ZkBobRelayer implements IZkBobService {
     return ServiceType.Relayer;
   }
 
-  protected safeIndex(idx: number | undefined): number {
+  protected safeIndex(idx?: number): number {
     if (idx === undefined) {
       return this.primaryIdx !== undefined ? this.primaryIdx : this.curIdx;
     } else if (idx < 0) {
@@ -268,8 +279,9 @@ export class ZkBobRelayer implements IZkBobService {
   }
   
   // returns transaction job ID
-  public async sendTransactions(txs: TxToRelayer[]): Promise<string> {
-    const url = new URL('/sendTransactions', this.url());
+  public async sendTransactions(txs: TxToRelayer[]): Promise<SequencerJob> {
+    const idx = this.safeIndex();
+    const url = new URL('/sendTransactions', this.url(idx));
     const headers = defaultHeaders(this.supportId);
 
     const res = await fetchJson(url.toString(), { method: 'POST', headers, body: JSON.stringify(txs) }, this.type());
@@ -277,16 +289,17 @@ export class ZkBobRelayer implements IZkBobService {
       throw new ServiceError(this.type(), 200, `Cannot get jobId for transaction (response: ${res})`);
     }
 
-    return res.jobId;
+    return new SequencerJob(res.jobId, idx);
   }
   
-  public async getJob(id: string): Promise<JobInfo | null> {
-    const url = new URL(`/job/${id}`, this.url());
+  public async getJob(job: SequencerJob): Promise<SequencerJobInfo | null> {
+    const sequencerIndex = this.safeIndex(job.seqIdx);
+    const url = new URL(`/job/${job.id}`, this.url(sequencerIndex));
     const headers = defaultHeaders(this.supportId);
     const res = await fetchJson(url.toString(), {headers}, this.type());
   
     if (isJobInfo(res)) {
-      return res;
+      return {sequencerIndex, ...res};
     }
 
     return null;

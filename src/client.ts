@@ -11,7 +11,7 @@ import {
   InternalError, PoolJobError, RelayerJobError, SignatureError, TxAccountDeadError, TxAccountLocked, TxDepositAllowanceTooLow, TxDepositDeadlineExpiredError,
   TxInsufficientFundsError, TxInvalidArgumentError, TxLimitError, TxProofError, TxSmallAmount, TxSwapTooHighError, ZkAddressParseError,
 } from './errors';
-import { JobInfo } from './services/relayer';
+import { JobInfo, SequencerJob } from './services/relayer';
 import { GiftCardProperties, SequencerFee, TreeState, TxFee, ZkBobProvider, isProxyFee } from './client-provider';
 import { DepositData, SignatureRequest } from './signers/abstract-signer';
 import { DepositSignerFactory } from './signers/signer-factory'
@@ -619,10 +619,10 @@ export class ZkBobClient extends ZkBobProvider {
   }
 
   // Waiting while sequencer process the jobs set
-  public async waitJobsTxHashes(jobIds: string[]): Promise<{jobId: string, txHash: string}[]> {
-    const promises = jobIds.map(async (jobId) => {
-      const txHash = await this.waitJobTxHash(jobId);
-      return { jobId, txHash };
+  public async waitJobsTxHashes(jobs: SequencerJob[]): Promise<{job: SequencerJob, txHash: string}[]> {
+    const promises = jobs.map(async (job) => {
+      const txHash = await this.waitJobTxHash(job);
+      return { job, txHash };
     });
     
     return Promise.all(promises);
@@ -630,26 +630,26 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Waiting while sequencer process the job and send it to the Pool
   // return transaction hash on success or throw an error
-  public async waitJobTxHash(jobId: string): Promise<string> {
-    this.startJobMonitoring(jobId);
+  public async waitJobTxHash(job: SequencerJob): Promise<string> {
+    this.startJobMonitoring(job);
 
     const CHECK_PERIOD_MS = 500;
     let txHash = '';
     while (true) {
-      const job = this.monitoredJobs.get(jobId);
+      const jobInfo = this.monitoredJobs.get(job.hash());
 
-      if (job !== undefined) {
-        if (job.txHash) txHash = job.txHash;
+      if (jobInfo !== undefined) {
+        if (jobInfo.txHash) txHash = jobInfo.txHash;
 
-        if (job.state === 'failed') {
-          throw new RelayerJobError(Number(jobId), job.failedReason ? job.failedReason : 'unknown reason');
-        } else if (job.state === 'sent') {
-          if (!job.txHash) console.error(`Sequencer return job #${jobId} without txHash in 'sent' state`);
+        if (jobInfo.state === 'failed') {
+          throw new RelayerJobError(job, jobInfo.failedReason ? jobInfo.failedReason : 'unknown reason');
+        } else if (jobInfo.state === 'sent') {
+          if (!jobInfo.txHash) console.error(`Sequencer return job #${job} without txHash in 'sent' state`);
           break;
-        } else if (job.state === 'reverted')  {
-          throw new PoolJobError(Number(jobId), job.txHash ? job.txHash : 'no_txhash', job.failedReason ?? 'unknown reason');
-        } else if (job.state === 'completed') {
-          if (!job.txHash) throw new InternalError(`Sequencer return job #${jobId} without txHash in 'completed' state`);
+        } else if (jobInfo.state === 'reverted')  {
+          throw new PoolJobError(job, jobInfo.txHash ? jobInfo.txHash : 'no_txhash', jobInfo.failedReason ?? 'unknown reason');
+        } else if (jobInfo.state === 'completed') {
+          if (!jobInfo.txHash) throw new InternalError(`Sequencer return job #${job} without txHash in 'completed' state`);
           break;
         }
       }
@@ -662,13 +662,13 @@ export class ZkBobClient extends ZkBobProvider {
 
   // Start monitoring job
   // Return existing promise or start new one
-  private async startJobMonitoring(jobId: string): Promise<JobInfo> {
-    const existingMonitor = this.jobsMonitors.get(jobId);
+  private async startJobMonitoring(job: SequencerJob): Promise<JobInfo> {
+    const existingMonitor = this.jobsMonitors.get(job.hash());
     if (existingMonitor === undefined) {
-      const newMonitor = this.jobMonitoringWorker(jobId).finally(() => {
-        this.jobsMonitors.delete(jobId);
+      const newMonitor = this.jobMonitoringWorker(job).finally(() => {
+        this.jobsMonitors.delete(job.hash());
       });
-      this.jobsMonitors.set(jobId, newMonitor);
+      this.jobsMonitors.set(job.hash(), newMonitor);
 
       return newMonitor;
     } else {
@@ -690,73 +690,73 @@ export class ZkBobClient extends ZkBobProvider {
   // The following states are terminal (means no any changes in task will happened): `failed`, `reverted`, `completed`
   // The job state can be switched from `sent` to `waiting` state - it means transaction was resent
   //
-  private async jobMonitoringWorker(jobId: string): Promise<JobInfo> {
+  private async jobMonitoringWorker(job: SequencerJob): Promise<JobInfo> {
     const sequencer = this.sequencer();
     const state = this.zpState();
 
     let issues = 0;
     const INTERVAL_MS = 1000;
     const ISSUES_THRESHOLD = 20;
-    let job: JobInfo;
+    let result: JobInfo;
     let lastTxHash = '';
     let lastJobState = '';
     while (true) {
-      const jobInfo = await sequencer.getJob(jobId).catch(() => null);
+      const jobInfo = await sequencer.getJob(job).catch(() => null);
 
       if (jobInfo === null) {
-        throw new RelayerJobError(Number(jobId), 'not found');
+        throw new RelayerJobError(job, 'not found');
       } else {
-        job = jobInfo;
-        const jobDescr = `job #${jobId}${job.resolvedJobId != jobId ? `(->${job.resolvedJobId})` : ''}`;
+        result = jobInfo;
+        const jobDescr = `job #${job.id}${result.resolvedJobId != job.id ? `(->${result.resolvedJobId})` : ''}@seq[${job.seqIdx}]`;
         
         // update local job info
-        this.monitoredJobs.set(jobId, job);
+        this.monitoredJobs.set(job.hash(), result);
         
-        if (job.state === 'waiting')  {
+        if (result.state === 'waiting')  {
           // Tx in the sequencer's verification/sending queue
-          if (job.state != lastJobState) {
+          if (result.state != lastJobState) {
             console.info(`JobMonitoring: ${jobDescr} waiting while sequencer processed it`);
           }
-        } else if (job.state === 'failed')  {
+        } else if (result.state === 'failed')  {
           // [TERMINAL STATE] Transaction was failed during sequencer's verification
-          const sequencerReason = job.failedReason ?? 'unknown reason';
-          state.history?.setQueuedTransactionFailedByRelayer(jobId, sequencerReason);
+          const sequencerReason = result.failedReason ?? 'unknown reason';
+          state.history?.setQueuedTransactionFailedByRelayer(job, sequencerReason);
           console.info(`JobMonitoring: ${jobDescr} was discarded by sequencer with reason '${sequencerReason}'`);
           break;
-        } else if (job.state === 'sent') {
+        } else if (result.state === 'sent') {
           // Tx should appear in the optimistic state with current txHash
-          if (job.txHash) {
-            if (lastTxHash != job.txHash) {
-              state.history?.setTxHashForQueuedTransactions(jobId, job.txHash);
-              console.info(`JobMonitoring: ${jobDescr} was ${job.resolvedJobId != jobId ? 'RE' : ''}sent to the pool: ${job.txHash}`);   
+          if (result.txHash) {
+            if (lastTxHash != result.txHash) {
+              state.history?.setTxHashForQueuedTransactions(job, result.txHash);
+              console.info(`JobMonitoring: ${jobDescr} was ${result.resolvedJobId != job.id ? 'RE' : ''}sent to the pool: ${result.txHash}`);   
             }
           } else {
             console.warn(`JobMonitoring: ${jobDescr} was sent to the pool but has no assigned txHash [sequencer issue]`);
             issues++;
           }
-        } else if (job.state === 'reverted')  {
+        } else if (result.state === 'reverted')  {
           // [TERMINAL STATE] Transaction was reverted on the Pool and won't resend
           // get revert reason first (from the sequencer or from the contract directly)
           let revertReason: string = 'unknown reason';
-          if (job.failedReason) {
-            revertReason = job.failedReason;  // reason from the sequencer
-          } else if (job.txHash) {
+          if (result.failedReason) {
+            revertReason = result.failedReason;  // reason from the sequencer
+          } else if (result.txHash) {
             // the sequencer doesn't provide failure reason - fetch it directly
-            const retrievedReason = (await this.network().getTxRevertReason(job.txHash));
+            const retrievedReason = (await this.network().getTxRevertReason(result.txHash));
             revertReason = retrievedReason ?? 'transaction was not found\\reverted'
           } else {
             console.warn(`JobMonitoring: ${jobDescr} has no txHash in reverted state [sequencer issue]`)
             issues++;
           }
 
-          state.history?.setSentTransactionFailedByPool(jobId, job.txHash ?? '', revertReason);
-          console.info(`JobMonitoring: ${jobDescr} was reverted on pool with reason '${revertReason}': ${job.txHash}`);
+          state.history?.setSentTransactionFailedByPool(job, result.txHash ?? '', revertReason);
+          console.info(`JobMonitoring: ${jobDescr} was reverted on pool with reason '${revertReason}': ${result.txHash}`);
           break;
-        } else if (job.state === 'completed') {
+        } else if (result.state === 'completed') {
           // [TERMINAL STATE] Transaction has been mined successfully and should appear in the regular state
-          state.history?.setQueuedTransactionsCompleted(jobId, job.txHash ?? '');
-          if (job.txHash) {
-            console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${job.txHash}`);
+          state.history?.setQueuedTransactionsCompleted(job, result.txHash ?? '');
+          if (result.txHash) {
+            console.info(`JobMonitoring: ${jobDescr} was mined successfully: ${result.txHash}`);
           } else {
             console.warn(`JobMonitoring: ${jobDescr} was mined but has no assigned txHash [sequencer issue]`);
             issues++;
@@ -764,20 +764,20 @@ export class ZkBobClient extends ZkBobProvider {
           break;
         }
 
-        lastJobState = job.state;
-        if (job.txHash) lastTxHash = job.txHash;
+        lastJobState = result.state;
+        if (result.txHash) lastTxHash = result.txHash;
 
       }
 
       if (issues > ISSUES_THRESHOLD) {
-        console.warn(`JobMonitoring: job #${jobId} issues threshold achieved, stop monitoring`);
+        console.warn(`JobMonitoring: job #${job.toString()} issues threshold achieved, stop monitoring`);
         break;
       }
 
       await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
     }
 
-    return job;
+    return result;
   }
 
   // ------------------=========< Making Transactions >=========-------------------
@@ -793,7 +793,7 @@ export class ZkBobClient extends ZkBobProvider {
     fromAddress: string,
     sequencerFee?: SequencerFee,
     blockNumber?: number, // synchronize internal provider with the block
-  ): Promise<string> {
+  ): Promise<SequencerJob> {
     const pool = this.pool();
     const sequencer = this.sequencer();
     const state = this.zpState();
@@ -906,15 +906,15 @@ export class ZkBobClient extends ZkBobProvider {
 
     const tx = { txType, memo: txData.memo, proof: txProof, depositSignature: signature };
     this.assertCalldataLength(tx, estimatedFee.calldataTotalLength);
-    const jobId = await sequencer.sendTransactions([tx]);
-    this.startJobMonitoring(jobId);
+    const job = await sequencer.sendTransactions([tx]);
+    this.startJobMonitoring(job);
 
     // Temporary save transaction in the history module (to prevent history delays)
     const ts = Math.floor(Date.now() / 1000);
-    const rec = await HistoryRecord.deposit(fromAddress, amountGwei, estimatedFee.fee.total, ts, '0', true);
-    state.history?.keepQueuedTransactions([rec], jobId);
+    const rec = await HistoryRecord.deposit(fromAddress, amountGwei, estimatedFee.fee.total, ts, '0', true, BigInt(txData.public.out_commit));
+    state.history?.keepQueuedTransactions([rec], job);
 
-    return jobId;
+    return job;
   }
 
 
@@ -922,7 +922,7 @@ export class ZkBobClient extends ZkBobProvider {
     amountGwei: bigint,
     ephemeralIndex: number,
     sequencerFee?: SequencerFee,
-  ): Promise<string> {
+  ): Promise<SequencerJob> {
     const state = this.zpState();
     const fromAddress = await state.ephemeralPool().getEphemeralAddress(ephemeralIndex);
 
@@ -1018,7 +1018,7 @@ export class ZkBobClient extends ZkBobProvider {
   // Transfer shielded funds to the shielded address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // Returns jobIds from the sequencer or throw an Error
-  public async transferMulti(transfers: TransferRequest[], sequencerFee?: SequencerFee): Promise<string[]> {
+  public async transferMulti(transfers: TransferRequest[], sequencerFee?: SequencerFee): Promise<SequencerJob[]> {
     const state = this.zpState();
     const sequencer = this.sequencer();
 
@@ -1046,7 +1046,7 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxInsufficientFundsError(totalAmount + feeEst.fee.total, available);
     }
 
-    let jobsIds: string[] = [];
+    let jobs: SequencerJob[] = [];
     let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
@@ -1071,38 +1071,43 @@ export class ZkBobClient extends ZkBobProvider {
       const transaction = {memo: oneTxData.memo, proof: txProof, txType: RegularTxType.Transfer};
       this.assertCalldataLength(transaction, onePart.calldataLength);
 
-      const jobId = await sequencer.sendTransactions([transaction]);
-      this.startJobMonitoring(jobId);
-      jobsIds.push(jobId);
+      const aJob = await sequencer.sendTransactions([transaction]);
+      this.startJobMonitoring(aJob);
+      jobs.push(aJob);
 
       // Temporary save transaction parts in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
       const transfers = outputs.map((out) => { return {to: out.to, amount: BigInt(out.amount)} });
       if (transfers.length == 0) {
-        const record = await HistoryRecord.aggregateNotes(onePart.fee.total, ts, '0', true);
-        state.history?.keepQueuedTransactions([record], jobId);
+        const record = await HistoryRecord.aggregateNotes(onePart.fee.total, ts, '0', true, BigInt(oneTxData.public.out_commit));
+        state.history?.keepQueuedTransactions([record], aJob);
       } else {
-        const record = await HistoryRecord.transferOut(transfers, onePart.fee.total, ts, '0', true, (addr) => this.isMyAddress(addr));
-        state.history?.keepQueuedTransactions([record], jobId);
+        const record = await HistoryRecord.transferOut(transfers, onePart.fee.total, ts, '0', true, (addr) => this.isMyAddress(addr), BigInt(oneTxData.public.out_commit));
+        state.history?.keepQueuedTransactions([record], aJob);
       }
 
       if (index < (txParts.length - 1)) {
-        console.log(`Waiting for the job ${jobId} joining the optimistic state`);
+        console.log(`Waiting for the job ${aJob} joining the optimistic state`);
         // if there are few additional tx, we should collect the optimistic state before processing them
-        await this.waitJobTxHash(jobId);
+        await this.waitJobTxHash(aJob);
 
         optimisticState = await this.zpState().getNewState(this.sequencer(), this.account?.birthindex ?? 0);
       }
     }
 
-    return jobsIds;
+    return jobs;
   }
 
   // Withdraw shielded funds to the specified native chain address
   // This method can produce several transactions in case of insufficient input notes (constants::IN per tx)
   // sequencerFee - fee from the sequencer (request one if undefined)
   // Returns jobId from the sequencer or throw an Error
-  public async withdrawMulti(address: string, amountGwei: bigint, swapAmount: bigint, sequencerFee?: SequencerFee): Promise<string[]> {
+  public async withdrawMulti(
+    address: string,
+    amountGwei: bigint,
+    swapAmount: bigint,
+    sequencerFee?: SequencerFee
+  ): Promise<SequencerJob[]> {
     const sequencer = this.sequencer();
     const state = this.zpState();
 
@@ -1138,7 +1143,7 @@ export class ZkBobClient extends ZkBobProvider {
       throw new TxInsufficientFundsError(amountGwei + feeEst.fee.total, available);
     }
 
-    let jobsIds: string[] = [];
+    let jobs: SequencerJob[] = [];
     let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
@@ -1182,36 +1187,36 @@ export class ZkBobClient extends ZkBobProvider {
       const transaction = {memo: oneTxData.memo, proof: txProof, txType};
       this.assertCalldataLength(transaction, onePart.calldataLength);
 
-      const jobId = await sequencer.sendTransactions([transaction]);
-      this.startJobMonitoring(jobId);
-      jobsIds.push(jobId);
+      const aJob = await sequencer.sendTransactions([transaction]);
+      this.startJobMonitoring(aJob);
+      jobs.push(aJob);
 
       // Temporary save transaction part in the history module (to prevent history delays)
       const ts = Math.floor(Date.now() / 1000);
       if (txType == RegularTxType.Transfer) {
-        const record = await HistoryRecord.aggregateNotes(onePart.fee.total, ts, '0', true);
-        state.history?.keepQueuedTransactions([record], jobId);
+        const record = await HistoryRecord.aggregateNotes(onePart.fee.total, ts, '0', true, BigInt(oneTxData.public.out_commit));
+        state.history?.keepQueuedTransactions([record], aJob);
       } else {
-        const record = await HistoryRecord.withdraw(address, onePart.outNotes[0].amountGwei, onePart.fee.total, ts, '0', true);
-        state.history?.keepQueuedTransactions([record], jobId);
+        const record = await HistoryRecord.withdraw(address, onePart.outNotes[0].amountGwei, onePart.fee.total, ts, '0', true, BigInt(oneTxData.public.out_commit));
+        state.history?.keepQueuedTransactions([record], aJob);
       }
 
       if (index < (txParts.length - 1)) {
-        console.log(`Waiting for the job ${jobId} joining the optimistic state`);
+        console.log(`Waiting for the job ${aJob} joining the optimistic state`);
         // if there are few additional tx, we should collect the optimistic state before processing them
-        await this.waitJobTxHash(jobId);
+        await this.waitJobTxHash(aJob);
 
         optimisticState = await this.zpState().getNewState(this.sequencer(), this.account?.birthindex ?? 0);
       }
     }
 
-    return jobsIds;
+    return jobs;
   }
 
   // Transfer shielded tokens from the gift-card account to the current account
   // NOTE: for simplicity we assume the multitransfer doesn't applicable for gift-cards
   // (i.e. any redemption can be done in a single transaction)
-  public async redeemGiftCard(giftCard: GiftCardProperties, preferredProvingMode?: ProverMode): Promise<string> {
+  public async redeemGiftCard(giftCard: GiftCardProperties, preferredProvingMode?: ProverMode): Promise<SequencerJob> {
     if (!this.account) {
       throw new InternalError(`Cannot redeem gift card to the uninitialized account`);
     }
@@ -1264,19 +1269,19 @@ export class ZkBobClient extends ZkBobProvider {
     this.assertCalldataLength(transaction, this.network().estimateCalldataLength(this.calldataVersion(), RegularTxType.Transfer, 1, 0));
 
     const sequencer = this.sequencer();
-    const jobId = await sequencer.sendTransactions([transaction]);
-    this.startJobMonitoring(jobId);
+    const job = await sequencer.sendTransactions([transaction]);
+    this.startJobMonitoring(job);
 
     // Temporary save transaction in the history module for the current account
     const ts = Math.floor(Date.now() / 1000);
-    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], 0n, ts, '0', true);
-    this.zpState().history?.keepQueuedTransactions([rec], jobId);
+    const rec = await HistoryRecord.transferIn([{to: dstAddr, amount: redeemAmount}], 0n, ts, '0', true, BigInt(txData.public.out_commit));
+    this.zpState().history?.keepQueuedTransactions([rec], job);
 
     // forget the gift card state 
     this.auxZpStates[accId].free();
     delete this.auxZpStates[accId];
 
-    return jobId;
+    return job;
   }
 
   private assertCalldataLength(txToSequencer: any, estimatedLen: number) {

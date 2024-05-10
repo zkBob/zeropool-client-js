@@ -9,7 +9,7 @@ export { ZkBobClient, TransferConfig, TransferRequest, FeeAmount,
 export { ZkBobProvider as ZkBobAccountlessClient, GiftCardProperties, TxFee, SequencerFee } from './client-provider';
 export { SyncStat } from './state';
 export { RegularTxType as TxType, DirectDeposit, TxCalldataVersion } from './tx';
-export { RelayerFee, SequencerEndpoint } from './services/relayer'
+export { RelayerFee, SequencerEndpoint, SequencerJob } from './services/relayer'
 export { ProxyFee } from './services/proxy'
 export { HistoryRecord, HistoryTransactionType, HistoryRecordState, ComplianceHistoryRecord } from './history';
 export { EphemeralAddress, EphemeralPool } from './ephemeral';
