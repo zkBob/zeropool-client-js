@@ -50,6 +50,7 @@ export interface RelayerInfo {
   optimisticRoot: string;
   deltaIndex: bigint;
   optimisticDeltaIndex: bigint;
+  pendingDeltaIndex?: bigint;
 }
 
 const isRelayerInfo = (obj: any): obj is RelayerInfo => {

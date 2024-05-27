@@ -771,6 +771,13 @@ export class ZkBobProvider {
         return {root: BigInt(info.optimisticRoot), index: info.optimisticDeltaIndex};
     }
 
+    // Get sequencer pending (super-optimistic) index
+    public async getSequencerPendingIndex(): Promise<bigint> {
+        const info = await this.sequencer().info();
+
+        return BigInt(info.pendingDeltaIndex ?? info.optimisticDeltaIndex);
+    }
+
     // Get pool info (direct web3 request)
     public async getPoolState(index?: bigint): Promise<TreeState> {
         const token = this.pool();

@@ -17,6 +17,7 @@ import { ZkBobSubgraph } from './subgraph';
 import { Sequencer, TreeState } from './client-provider';
 import { GENERIC_ADDRESS_PREFIX } from './address-prefixes';
 import { TxState } from './tx';
+import { RelayerInfo } from './services/relayer';
 
 const OUTPLUSONE = CONSTANTS.OUT + 1; // number of leaves (account + notes) in a transaction
 const BATCH_SIZE = 1000;  // number of transactions per request during a sync state
@@ -380,13 +381,14 @@ export class ZkBobState {
       const poolState = await getPoolState();
       return {
         root: poolState.root.toString(),
-        optimisticRoot: poolState.root.toString,
+        optimisticRoot: poolState.root.toString(),
         deltaIndex: poolState.index,
-        optimisticDeltaIndex: poolState.index
-      }
+        optimisticDeltaIndex: poolState.index,
+        pendingDeltaIndex: poolState.index,
+      } as RelayerInfo
     });
     const nextIndex = Number(stateInfo.deltaIndex);
-    const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
+    const optimisticIndex = Math.max(Number(stateInfo.optimisticDeltaIndex), Number(stateInfo.pendingDeltaIndex ?? 0n));
 
     let isReadyToTransact = true;
 
@@ -688,7 +690,7 @@ export class ZkBobState {
     const startIndex = Number(await this.getNextIndex());
 
     const stateInfo = await sequencer.info();
-    const optimisticIndex = Number(stateInfo.optimisticDeltaIndex);
+    const optimisticIndex = Math.max(Number(stateInfo.optimisticDeltaIndex), Number(stateInfo.pendingDeltaIndex ?? 0n));
 
     if (optimisticIndex > startIndex) {
       const startTime = Date.now();
