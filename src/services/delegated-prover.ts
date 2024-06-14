@@ -1,3 +1,4 @@
+import { SecretData } from "kalypso-sdk/dist/types";
 import { InternalError, ServiceError } from "../errors";
 import {
   IZkBobService,
@@ -97,23 +98,34 @@ export class ZkBobDelegatedProver implements IZkBobService {
   // --------------------------------------------------------------------------------
 
   public async proveTx(pub: any, sec: any): Promise<any> {
-    const secretInputs = JSON.stringify(
+    console.log("delegated prover proveTx");
+
+    console.log("plain text data");
+
+    console.log({ pub: pub, sec: sec });
+    const encryptionResult: SecretData =
       await KalypsoSdk.SecretInputOperations().encryptDataWithECIESandAES(
-        sec,
+        Buffer.from(JSON.stringify(sec)),
         this.proverPubKey,
-      ),
-    );
+      );
+    // const secretInputs = JSON.stringify(encryptionResult.encryptedData);
     const body = JSON.stringify({
       ...pub,
-      secretInputs,
+      ...encryptionResult,
     });
-    const url = new URL("/prove");
+
+    console.log("using encryption key", this.proverPubKey);
+    console.log("encrypted request");
+
+    console.log(body);
+    const url = new URL("/proveTx", this.url());
 
     const proof = await fetchJson(
       url.toString(),
       {
         method: "POST",
         body,
+        headers: [["Content-type", "application/json"]],
       },
       ServiceType.DelegatedProver,
     );
