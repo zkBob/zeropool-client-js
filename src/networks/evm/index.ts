@@ -24,6 +24,7 @@ const ZERO_ADDRESS1 = '0x0000000000000000000000000000000000000001';
 export enum PoolSelector {
     Transact = "af989083",
     AppendDirectDeposit = "1dc4cb33",
+    AppendDirectDepositV2 = "e6b14272",
     TransactV2 = "5fd28f8c",
   }
 
