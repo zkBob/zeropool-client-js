@@ -10,6 +10,7 @@ import {
   fetchJson,
 } from "./common";
 import { KalypsoSdk } from "kalypso-sdk";
+import { ethers } from "ethers";
 
 const PROVER_VERSION_REQUEST_THRESHOLD = 3600; // prover's version expiration (in seconds)
 
@@ -19,8 +20,8 @@ export class ZkBobDelegatedProver implements IZkBobService {
   private curIdx: number;
   private supportId: string | undefined;
   private proverVersions = new Map<string, ServiceVersionFetch>(); // prover version: URL -> version
-  private proverPubKey: string;
-
+  private config: any;
+  private kalypso: KalypsoSdk;
   public static create(
     proverUrls: string[],
     supportId: string | undefined,
@@ -36,8 +37,6 @@ export class ZkBobDelegatedProver implements IZkBobService {
     object.proverUrls = proverUrls;
     object.supportId = supportId;
     object.curIdx = 0;
-    object.proverPubKey =
-      "04e84450db2948a8efd92fa52342fff3c3286189ca62efde1f8d96ba733247a3080d944e29f2f206d44533afc5523422f492f92fa9140e7bac48740dbb46300e45";
 
     return object;
   }
@@ -83,11 +82,28 @@ export class ZkBobDelegatedProver implements IZkBobService {
 
   public async healthcheck(): Promise<boolean> {
     try {
-      const url = new URL(`/version`, this.url());
+      const url = new URL(`/config`, this.url());
       const headers = defaultHeaders();
 
-      const version = await fetchJson(url.toString(), { headers }, this.type());
-      return isServiceVersion(version);
+      const proverConfig: any = await fetchJson(
+        url.toString(),
+        { headers },
+        this.type(),
+      );
+
+      const provider = new ethers.JsonRpcProvider(proverConfig.rpc);
+      //we don't really need a wallet here, since we're doing only read calls but it's currently required by kalypso
+      this.config = proverConfig;
+      this.kalypso = new KalypsoSdk(
+        new ethers.Wallet(
+          //test test test test test test test test test test test junk
+          "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+          provider,
+        ) as any,
+        proverConfig,
+      );
+
+      return isServiceVersion(proverConfig);
     } catch {
       return false;
     }
@@ -97,28 +113,33 @@ export class ZkBobDelegatedProver implements IZkBobService {
   // |                                                                              |
   // --------------------------------------------------------------------------------
 
-  public async proveTx(pub: any, sec: any): Promise<any> {
+  public async proveTx(pub: any, sec: any, memo: any): Promise<any> {
     console.log("delegated prover proveTx");
 
-    console.log("plain text data");
+    console.log("using config", this.config);
 
-    console.log({ pub: pub, sec: sec });
-    const encryptionResult: SecretData =
-      await KalypsoSdk.SecretInputOperations().encryptDataWithECIESandAES(
+    let abiCoder = new ethers.AbiCoder();
+
+    let inputBytes = abiCoder.encode(
+      ["uint256[5]"],
+      [[pub.root, pub.nullifier, pub.out_commit, pub.delta, pub.memo]],
+    );
+
+    const encryptedRequestData = await this.kalypso
+      .MarketPlace()
+      .createEncryptedRequestData(
+        inputBytes,
         Buffer.from(JSON.stringify(sec)),
-        this.proverPubKey,
+        BigInt(this.config.marketId),
+        this.config.pubKey,
       );
-    // const secretInputs = JSON.stringify(encryptionResult.encryptedData);
+    console.log(encryptedRequestData);
     const body = JSON.stringify({
-      ...pub,
-      ...encryptionResult,
+      ...encryptedRequestData,
+      // memo,
     });
 
-    console.log("using encryption key", this.proverPubKey);
-    console.log("encrypted request");
-
-    console.log(body);
-    const url = new URL("/proveTx", this.url());
+    const url = new URL(this.config.path, this.url());
 
     const proof = await fetchJson(
       url.toString(),
