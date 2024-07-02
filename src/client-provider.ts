@@ -379,14 +379,14 @@ export class ZkBobProvider {
 
     // Convert native pool amount to the base units
     public async shieldedAmountToWei(amountShielded: bigint): Promise<bigint> {
-        const denominator = await this.denominator();
-        return denominator > 0 ? amountShielded * denominator : amountShielded / (-denominator);
+        const denominator = BigInt(await this.denominator());
+        return denominator > 0 ? BigInt(amountShielded) * denominator : BigInt(amountShielded) / (-denominator);
     }
     
     // Convert base units to the native pool amount
     public async weiToShieldedAmount(amountWei: bigint): Promise<bigint> {
-        const denominator = await this.denominator();
-        return denominator > 0 ? amountWei / denominator : amountWei * (-denominator);
+        const denominator = BigInt(await this.denominator());
+        return denominator > 0 ? BigInt(amountWei) / denominator : BigInt(amountWei) * (-denominator);
     }
 
     // Round up the fee if needed with fixed fee decimal places (after point)
