@@ -1,5 +1,4 @@
 import { InternalError } from "../errors";
-import promiseRetry from 'promise-retry';
 
 const RPC_ISSUES_THRESHOLD = 20;    // number of errors needed to switch RPC
 
@@ -26,23 +25,27 @@ export class MultiRpcManager {
     }
 
     // Performs RPC interaction within several attempts. The errors will registered automatically
-    protected commonRpcRetry(closure: () => any, errorPattern: string, retriesCnt: number): Promise<any> {
-        return promiseRetry(
-            async (retry, attempt) => {
-              try {
-                  return await closure();
-              } catch (e) {
-                  console.error(`${errorPattern ?? 'Error occured'} [attempt #${attempt}]: ${e.message}`);
-                  this.registerRpcIssue();
-                  retry(e)
-              }
-            },
-            {
-              retries: retriesCnt,
-              minTimeout: 500,
-              maxTimeout: 500,
+    protected async commonRpcRetry(closure: () => any, errorPattern: string, retriesCnt: number): Promise<any> {
+        let cnt = 0;
+        const attemptMinDelayMs = 500;
+        let lastErr;
+        do {
+            const startTs = Date.now();
+            try {
+                return await closure();
+            } catch (e) {
+                lastErr = e;
+                console.error(`${errorPattern ?? 'Error occured'} [attempt #${cnt + 1}]: ${e.message}`);
+                this.registerRpcIssue();
+
+                const delay = Date.now() - startTs;
+                if (delay < attemptMinDelayMs) {
+                    await new Promise(f => setTimeout(f, attemptMinDelayMs - delay));
+                }
             }
-        );
+        } while (++cnt < retriesCnt);
+        
+        throw new InternalError(`MultRpcManager: ${lastErr.message}`)
     }
 
     // ----------------------=========< RPC switching >=========----------------------
