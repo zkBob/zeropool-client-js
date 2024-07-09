@@ -27,7 +27,7 @@ export enum PoolSelector {
 
 export enum ZkBobContractType {
     Pool = "pool",
-    DD = "dirrect deposit",
+    DD = "direct deposit",
     Token = "token",
     Accounting = "accounting"
 }
