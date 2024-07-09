@@ -192,7 +192,7 @@ export class ZkBobProvider {
         return Object.keys(this.pools);
     }
 
-    // swithing to the another pool
+    // switching to the another pool
     public switchToPool(poolAlias: string) {
         if (!this.pools[poolAlias]) {
             throw new InternalError(`Cannot activate unknown pool ${poolAlias}`);
