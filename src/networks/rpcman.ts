@@ -14,7 +14,7 @@ export class MultiRpcManager {
     private curRpcIdx: number;
     private curRpcIssues = 0;
     private badRpcs: number[] = []; // RPC indexes which are considered to be unstable or unavailable
-    protected swithingAttempts = 0;
+    protected switchingAttempts = 0;
     public delegate?: RpcManagerDelegate;
 
     constructor(rpcUrls: string[]) {
@@ -30,7 +30,7 @@ export class MultiRpcManager {
     protected async commonRpcRetry(closure: () => any, errorPattern: string, disableRetries: boolean = false): Promise<any> {
         let totalAttempts = 0;
         const attemptMinDelayMs = 500;
-        const startAttemptsCnt = this.swithingAttempts;
+        const startAttemptsCnt = this.switchingAttempts;
         do {
             let cnt = 0;
             do {
@@ -48,7 +48,7 @@ export class MultiRpcManager {
                 }
                 totalAttempts++;
             } while (!disableRetries && ++cnt < ATTEMPT_RETRIES_CNT);
-        } while (!disableRetries && (this.swithingAttempts - startAttemptsCnt) < this.rpcUrls.length);
+        } while (!disableRetries && (this.switchingAttempts - startAttemptsCnt) < this.rpcUrls.length);
         
         throw new InternalError(`MultRpcManager: ${disableRetries ? 'RPC interaction error' : 'all RPCs are unavailable'}`)
     }
@@ -83,7 +83,7 @@ export class MultiRpcManager {
             console.log(`[MultiRpcManager]: RPC ${this.curRpcUrl()} marked as bad (${this.curRpcIssues} issues registered)`);
         }
 
-        this.swithingAttempts++;
+        this.switchingAttempts++;
 
         let newRpcIndex = index ?? this.curRpcIdx;
         if (index === undefined && this.rpcUrls.length > 1) {
