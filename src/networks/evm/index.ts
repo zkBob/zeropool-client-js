@@ -7,7 +7,7 @@ import { accountingABI, ddContractABI, poolContractABI, tokenABI } from './evm-a
 import bs58 from 'bs58';
 import { DDBatchTxDetails, RegularTxDetails, PoolTxDetails, RegularTxType, PoolTxType, DirectDeposit, DirectDepositState, TxCalldataVersion } from '../../tx';
 import { addHexPrefix, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
-import { CalldataInfo, decodeEvmCalldata, getCiphertext, parseTransactCalldata } from './calldata';
+import { CalldataInfo, parseTransactCalldata, parseDirectDepositCalldata } from './calldata';
 import { recoverTypedSignature, signTypedData, SignTypedDataVersion,
         personalSign, recoverPersonalSignature } from '@metamask/eth-sig-util'
 import { privateToAddress, bufferToHex, isHexPrefixed } from '@ethereumjs/util';

@@ -1,8 +1,9 @@
 import { InternalError } from "../../errors";
-import { ShieldedTx, RegularTxType, TxCalldataVersion, CURRENT_CALLDATA_VERSION, RegularTxDetails } from "../../tx";
+import { ShieldedTx, RegularTxType, TxCalldataVersion, CURRENT_CALLDATA_VERSION, RegularTxDetails, DDBatchTxDetails } from "../../tx";
 import { HexStringReader, addHexPrefix, assertNotNull, hexToBuf, toTwosComplementHex } from "../../utils";
 import { PoolSelector } from ".";
 import { NetworkBackend } from "..";
+import { poolContractABI } from './evm-abi';
 
 
 // Calldata components length universal reference
@@ -202,6 +203,54 @@ export async function parseTransactCalldata(calldata: string, network: NetworkBa
       } else if (tx.version == TxCalldataVersion.V2) {
           txInfo.withdrawAddr = network.bytesToAddress(hexToBuf(tx.memo.slice(128, 168), 20));
       }
+  }
+
+  return txInfo;
+}
+
+export async function parseDirectDepositCalldata(calldata: string, network: NetworkBackend): Promise<DDBatchTxDetails> {
+  const txInfo = new DDBatchTxDetails();
+  txInfo.deposits = [];
+
+  const reader = new HexStringReader(calldata);
+  const selector = calldata.slice(0, 8).toLowerCase();
+
+  const ddAbis = poolContractABI.filter((val) => val.name == 'appendDirectDeposits');
+  let ddAbi;
+  switch (selector) {
+    case PoolSelector.AppendDirectDeposit:
+      ddAbi = ddAbis.find((val) => val.inputs && [...val.inputs].length == 5)
+      break;
+    case PoolSelector.AppendDirectDepositV2:
+      ddAbi = ddAbis.find((val) => val.inputs && [...val.inputs].length == 4)
+      break;
+    default:
+        throw new InternalError(`Unknown tx calldata selector ${selector}`);
+}
+
+  // get appendDirectDeposits input ABI
+  if (ddAbi && ddAbi.inputs) {
+      const decoded = this.activeWeb3().eth.abi.decodeParameters(ddAbi.inputs, calldata.slice(8));
+      if (decoded._indices && Array.isArray(decoded._indices) && transactionObj.to) {
+          const ddQueue = await this.getDirectDepositQueueContract(transactionObj.to)
+          const directDeposits = (await Promise.all(decoded._indices.map(async (ddIdx) => {
+              const dd = await this.getDirectDeposit(ddQueue, Number(ddIdx), state);
+              const isOwn = dd ? await state.isOwnAddress(dd.destination) : false;
+              return {dd, isOwn}
+          })))
+          .filter((val) => val.dd && val.isOwn )  // exclude not own DDs
+          .map((val) => {
+              const aDD = val.dd as DirectDeposit;
+              aDD.txHash = poolTxHash;
+              aDD.timestamp = timestamp;
+              return aDD;
+          });
+          txInfo.deposits = directDeposits;
+      } else {
+          console.error(`Could not decode appendDirectDeposits calldata`);
+      }
+  } else {
+      console.error(`Could not find appendDirectDeposits method input ABI`);
   }
 
   return txInfo;
