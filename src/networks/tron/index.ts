@@ -4,7 +4,7 @@ import { DDBatchTxDetails, DirectDeposit, DirectDepositState, PoolTxDetails, Poo
 import tokenAbi from './abi/usdt-abi.json';
 import { ddContractABI as ddAbi, poolContractABI as poolAbi, accountingABI} from '../evm/evm-abi';
 import { addHexPrefix, bufToHex, hexToBuf, toTwosComplementHex, truncateHexPrefix } from '../../utils';
-import { CalldataInfo, decodeEvmCalldata, getCiphertext, parseTransactCalldata } from '../evm/calldata';
+import { CalldataInfo, decodeEvmCalldata, getCiphertext, parseDirectDepositCalldata, parseTransactCalldata } from '../evm/calldata';
 import { hexToBytes } from 'web3-utils';
 import { PoolSelector } from '../evm';
 import { MultiRpcManager, RpcManagerDelegate } from '../rpcman';
@@ -697,7 +697,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                 let isMined = txState == L1TxState.MinedSuccess;
 
                 const txSelector = txData.slice(0, 8).toLowerCase();
-                if (txSelector == PoolSelector.Transact) {
+                if (txSelector == PoolSelector.Transact || txSelector == PoolSelector.TransactV2) {
                     const txInfo = await parseTransactCalldata(txData, this);
                         txInfo.txHash = poolTxHash;
                         txInfo.isMined = isMined;
@@ -708,14 +708,23 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
                             details: txInfo,
                             index,
                         };
-                } else if (txSelector == PoolSelector.AppendDirectDeposit) {
-                    const txInfo = new DDBatchTxDetails();
+                } else if (txSelector == PoolSelector.AppendDirectDeposit || txSelector == PoolSelector.AppendDirectDepositV2) {
+                    const contract = tronTransaction?.raw_data?.contract;
+                    let contract_address: any | undefined;
+                    if (Array.isArray(contract) && contract.length > 0) {
+                        contract_address = this.bytesToAddress(hexToBuf(contract[0].parameter?.value?.contract_address));
+                    }
+                    const ddQueue = await this.getDirectDepositQueueContract(contract_address)
+
+                    const txInfo = await parseDirectDepositCalldata(txData, ddQueue, this, state);
                     txInfo.txHash = poolTxHash;
                     txInfo.isMined = isMined;
                     txInfo.timestamp = timestamp / 1000;
-                    txInfo.deposits = [];
-
-                    // TODO: decode input with ABI, request DDs by indexes
+                    
+                    txInfo.deposits.forEach((aDeposit) => {
+                        aDeposit.txHash = poolTxHash;
+                        aDeposit.timestamp = timestamp;
+                    })
 
                     return {
                         poolTxType: PoolTxType.DirectDepositBatch,
@@ -762,6 +771,10 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         }
 
         return L1TxState.NotFound;
+    }
+
+    public async abiDecodeParameters(abi: any, encodedParams: string): Promise<any> {
+        this.activeTronweb().utils.abi.decodeParamsV2ByABI(abi, encodedParams);
     }
 
 

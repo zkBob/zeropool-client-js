@@ -1,9 +1,10 @@
 import { InternalError } from "../../errors";
-import { ShieldedTx, RegularTxType, TxCalldataVersion, CURRENT_CALLDATA_VERSION, RegularTxDetails, DDBatchTxDetails } from "../../tx";
-import { HexStringReader, addHexPrefix, assertNotNull, hexToBuf, toTwosComplementHex } from "../../utils";
+import { ShieldedTx, RegularTxType, TxCalldataVersion, CURRENT_CALLDATA_VERSION, RegularTxDetails, DDBatchTxDetails, DirectDeposit } from "../../tx";
+import { HexStringReader, addHexPrefix, assertNotNull, hexToBuf, toTwosComplementHex, truncateHexPrefix } from "../../utils";
 import { PoolSelector } from ".";
 import { NetworkBackend } from "..";
 import { poolContractABI } from './evm-abi';
+import { ZkBobState } from "../../state";
 
 
 // Calldata components length universal reference
@@ -208,12 +209,17 @@ export async function parseTransactCalldata(calldata: string, network: NetworkBa
   return txInfo;
 }
 
-export async function parseDirectDepositCalldata(calldata: string, network: NetworkBackend): Promise<DDBatchTxDetails> {
+export async function parseDirectDepositCalldata(
+  calldata: string,
+  ddQueueAddress: string,
+  network: NetworkBackend,
+  state: ZkBobState
+): Promise<DDBatchTxDetails> {
   const txInfo = new DDBatchTxDetails();
   txInfo.deposits = [];
 
-  const reader = new HexStringReader(calldata);
-  const selector = calldata.slice(0, 8).toLowerCase();
+  const selector = truncateHexPrefix(calldata).slice(0, 8).toLowerCase();
+  const encodedParams = truncateHexPrefix(calldata).slice(8);
 
   const ddAbis = poolContractABI.filter((val) => val.name == 'appendDirectDeposits');
   let ddAbi;
@@ -226,25 +232,19 @@ export async function parseDirectDepositCalldata(calldata: string, network: Netw
       break;
     default:
         throw new InternalError(`Unknown tx calldata selector ${selector}`);
-}
+  }
 
   // get appendDirectDeposits input ABI
   if (ddAbi && ddAbi.inputs) {
-      const decoded = this.activeWeb3().eth.abi.decodeParameters(ddAbi.inputs, calldata.slice(8));
-      if (decoded._indices && Array.isArray(decoded._indices) && transactionObj.to) {
-          const ddQueue = await this.getDirectDepositQueueContract(transactionObj.to)
+      const decoded = await network.abiDecodeParameters(ddAbi, encodedParams);
+      if (decoded._indices && Array.isArray(decoded._indices)) {
           const directDeposits = (await Promise.all(decoded._indices.map(async (ddIdx) => {
-              const dd = await this.getDirectDeposit(ddQueue, Number(ddIdx), state);
+              const dd = await network.getDirectDeposit(ddQueueAddress, Number(ddIdx), state);
               const isOwn = dd ? await state.isOwnAddress(dd.destination) : false;
               return {dd, isOwn}
           })))
           .filter((val) => val.dd && val.isOwn )  // exclude not own DDs
-          .map((val) => {
-              const aDD = val.dd as DirectDeposit;
-              aDD.txHash = poolTxHash;
-              aDD.timestamp = timestamp;
-              return aDD;
-          });
+          .map((val) => val.dd as DirectDeposit);
           txInfo.deposits = directDeposits;
       } else {
           console.error(`Could not decode appendDirectDeposits calldata`);

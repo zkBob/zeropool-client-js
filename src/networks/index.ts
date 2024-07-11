@@ -81,6 +81,7 @@ export interface NetworkBackend {
     calldataBaseLength(ver: TxCalldataVersion): number;
     estimateCalldataLength(ver: TxCalldataVersion, txType: TxType, notesCnt: number, extraDataLen: number): number;
     getTransactionState(txHash: string): Promise<L1TxState>;
+    abiDecodeParameters(abi: any, encodedParams: string): Promise<any>;
 
     // syncing with external providers
     getBlockNumber(): Promise<number>;

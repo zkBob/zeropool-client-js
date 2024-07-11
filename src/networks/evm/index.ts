@@ -776,38 +776,17 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
                             details: txInfo,
                             index,
                         };
-                    } else if (txSelector == PoolSelector.AppendDirectDeposit) {
-                        const txInfo = new DDBatchTxDetails();
+                    } else if (txSelector == PoolSelector.AppendDirectDeposit || txSelector == PoolSelector.AppendDirectDepositV2) {
+                        const ddQueue = await this.getDirectDepositQueueContract(transactionObj.to!)
+                        const txInfo = await parseDirectDepositCalldata(txData, ddQueue, this, state);
                         txInfo.txHash = poolTxHash;
                         txInfo.isMined = isMined;
                         txInfo.timestamp = timestamp;
-                        txInfo.deposits = [];
 
-                        // get appendDirectDeposits input ABI
-                        const ddAbi = poolContractABI.find((val) => val.name == 'appendDirectDeposits');
-                        if (ddAbi && ddAbi.inputs) {
-                            const decoded = this.activeWeb3().eth.abi.decodeParameters(ddAbi.inputs, txData.slice(8));
-                            if (decoded._indices && Array.isArray(decoded._indices) && transactionObj.to) {
-                                const ddQueue = await this.getDirectDepositQueueContract(transactionObj.to)
-                                const directDeposits = (await Promise.all(decoded._indices.map(async (ddIdx) => {
-                                    const dd = await this.getDirectDeposit(ddQueue, Number(ddIdx), state);
-                                    const isOwn = dd ? await state.isOwnAddress(dd.destination) : false;
-                                    return {dd, isOwn}
-                                })))
-                                .filter((val) => val.dd && val.isOwn )  // exclude not own DDs
-                                .map((val) => {
-                                    const aDD = val.dd as DirectDeposit;
-                                    aDD.txHash = poolTxHash;
-                                    aDD.timestamp = timestamp;
-                                    return aDD;
-                                });
-                                txInfo.deposits = directDeposits;
-                            } else {
-                                console.error(`Could not decode appendDirectDeposits calldata`);
-                            }
-                        } else {
-                            console.error(`Could not find appendDirectDeposits method input ABI`);
-                        }
+                        txInfo.deposits.forEach((aDeposit) => {
+                            aDeposit.txHash = poolTxHash;
+                            aDeposit.timestamp = timestamp;
+                        })
 
                         return {
                             poolTxType: PoolTxType.DirectDepositBatch,
@@ -861,6 +840,10 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         }
 
         return L1TxState.NotFound;
+    }
+
+    public async abiDecodeParameters(abi: any, encodedParams: string): Promise<any> {
+        return this.activeWeb3().eth.abi.decodeParameters(abi.inputs, encodedParams);
     }
 
     // ----------------------=========< Syncing >=========----------------------
