@@ -146,7 +146,7 @@ export class ZkBobProxy extends ZkBobRelayer {
             );
 
             if (this.curIdx != minFeeSeq.index) {
-                console.log(`ZkBobProxy: switching seqencer to ${minFeeSeq.index} (${this.url(minFeeSeq.index)}) due to best fee`);
+                console.log(`ZkBobProxy: switching sequencer to ${minFeeSeq.index} (${this.url(minFeeSeq.index)}) due to best fee`);
                 this.curIdx = minFeeSeq.index
                 this.findOptimalProxyTs = Date.now();
             } else {
