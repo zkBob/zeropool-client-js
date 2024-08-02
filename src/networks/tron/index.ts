@@ -14,7 +14,6 @@ import { CommittedForcedExit, FinalizedForcedExit, ForcedExitRequest } from '../
 const TronWeb = require('tronweb')
 const bs58 = require('bs58')
 
-const RETRY_COUNT = 5;
 const DEFAULT_ENERGY_FEE = 420;
 const DEFAULT_FEE_LIMIT = 100_000_000;
 const ZERO_ADDRESS = 'T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb';
@@ -139,8 +138,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return this.commonRpcRetry(async () => {
                 return await contract[method](...args).call()
             },
-            `[TronNetwork] Contract call (${method}) error`,
-            RETRY_COUNT,
+            `[TronNetwork] Contract call (${method}) error`
         );
     }
 
@@ -150,7 +148,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         if (isSupport === undefined) {
             const contract = await this.commonRpcRetry(() => {
                 return this.tronWeb.trx.getContract(contractAddress);
-            }, 'Unable to retrieve smart contract object', RETRY_COUNT);
+            }, 'Unable to retrieve smart contract object');
             const methods = contract.abi.entrys;
             if (Array.isArray(methods)) {
                 isSupport = methods.find((val) => val.name == methodName) !== undefined;
@@ -630,7 +628,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         try {
             const txInfo = await this.commonRpcRetry(async () => {
                 return this.activeTronweb().trx.getTransactionInfo(txHash);
-            }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
+            }, '[TronNetwork] Cannot get transaction');
 
             if (txInfo && txInfo.receipt) {
                 if (txInfo.result && txInfo.result == 'FAILED') {
@@ -673,7 +671,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     public async getNativeBalance(address: string): Promise<bigint> {
         return this.commonRpcRetry(async () => {
             return BigInt(await this.activeTronweb().trx.getBalance(address));
-        }, '[TronNetwork] Cannot get native balance', RETRY_COUNT);
+        }, '[TronNetwork] Cannot get native balance');
     }
 
     public async getNativeNonce(address: string): Promise<number> {
@@ -684,7 +682,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         try {
             const tronTransaction = await this.commonRpcRetry(async () => {
                 return this.activeTronweb().trx.getTransaction(poolTxHash);
-            }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
+            }, '[TronNetwork] Cannot get transaction');
             const txState = await this.getTransactionState(poolTxHash);
             const timestamp = tronTransaction?.raw_data?.timestamp
             const contract = tronTransaction?.raw_data?.contract;
@@ -756,7 +754,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         try {
             const txInfo = await this.commonRpcRetry(async () => {
                 return this.activeTronweb().trx.getTransactionInfo(txHash);
-            }, '[TronNetwork] Cannot get transaction', RETRY_COUNT);
+            }, '[TronNetwork] Cannot get transaction');
 
             if (txInfo && txInfo.receipt) {
                 // tx is on the blockchain (assume mined)
@@ -806,7 +804,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
             try {
                 const chainParams = await this.commonRpcRetry(async () => {
                     return this.activeTronweb().trx.getChainParameters();
-                }, '[TronNetwork] Cannot get chain parameters', RETRY_COUNT);
+                }, '[TronNetwork] Cannot get chain parameters');
                 for (let aParam of chainParams) {
                     if (aParam.key == 'getEnergyFee') {
                         this.energyFee = Number(aParam.value);
@@ -828,7 +826,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         try {
             const accResources = await this.commonRpcRetry(async () => {
                 return this.activeTronweb().trx.getAccountResources(address);
-            }, '[TronNetwork] Cannot get account resources', RETRY_COUNT);
+            }, '[TronNetwork] Cannot get account resources');
             return Number(accResources.EnergyLimit ?? 0) - Number(accResources.EnergyUsed ?? 0);
         } catch(err) {
             console.warn(`Cannot get account energy: ${err}`);
@@ -884,7 +882,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return this.commonRpcRetry(async () => {
             const block = await this.activeTronweb().trx.getCurrentBlock();
             return block.block_header.raw_data.number;
-        }, '[TronNetwork] Cannot get block number', RETRY_COUNT);
+        }, '[TronNetwork] Cannot get block number');
     }
 
     public async getBlockNumberFrom(rpcurl: string): Promise<number> {
@@ -895,7 +893,7 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
         return this.commonRpcRetry(async () => {
             const block = await tmpTronweb.trx.getCurrentBlock();
             return block.block_header.raw_data.number;
-        }, `[TronNetwork] Cannot get block number from ${rpcurl}`, 2);
+        }, `[TronNetwork] Cannot get block number from ${rpcurl}`, true);
     }
 
     public async waitForBlock(blockNumber: number, timeoutSec?: number): Promise<boolean> {

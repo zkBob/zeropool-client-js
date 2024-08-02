@@ -1,6 +1,6 @@
 import { InternalError } from "../errors";
-import promiseRetry from 'promise-retry';
 
+const ATTEMPT_RETRIES_CNT = 5;
 const RPC_ISSUES_THRESHOLD = 20;    // number of errors needed to switch RPC
 
 export interface RpcManagerDelegate {
@@ -14,6 +14,7 @@ export class MultiRpcManager {
     private curRpcIdx: number;
     private curRpcIssues = 0;
     private badRpcs: number[] = []; // RPC indexes which are considered to be unstable or unavailable
+    protected switchingAttempts = 0;
     public delegate?: RpcManagerDelegate;
 
     constructor(rpcUrls: string[]) {
@@ -26,23 +27,30 @@ export class MultiRpcManager {
     }
 
     // Performs RPC interaction within several attempts. The errors will registered automatically
-    protected commonRpcRetry(closure: () => any, errorPattern: string, retriesCnt: number): Promise<any> {
-        return promiseRetry(
-            async (retry, attempt) => {
-              try {
-                  return await closure();
-              } catch (e) {
-                  console.error(`${errorPattern ?? 'Error occured'} [attempt #${attempt}]: ${e.message}`);
-                  this.registerRpcIssue();
-                  retry(e)
-              }
-            },
-            {
-              retries: retriesCnt,
-              minTimeout: 500,
-              maxTimeout: 500,
-            }
-        );
+    protected async commonRpcRetry(closure: () => any, errorPattern: string, disableRetries: boolean = false): Promise<any> {
+        let totalAttempts = 0;
+        const attemptMinDelayMs = 500;
+        const startAttemptsCnt = this.switchingAttempts;
+        do {
+            let cnt = 0;
+            do {
+                const startTs = Date.now();
+                try {
+                    return await closure();
+                } catch (e) {
+                    console.error(`${errorPattern ?? 'Error occured'} [attempt #${totalAttempts + 1}]: ${e.message}`);
+                    this.registerRpcIssue();
+
+                    const delay = Date.now() - startTs;
+                    if (delay < attemptMinDelayMs) {
+                        await new Promise(f => setTimeout(f, attemptMinDelayMs - delay));
+                    }
+                }
+                totalAttempts++;
+            } while (!disableRetries && ++cnt < ATTEMPT_RETRIES_CNT);
+        } while (!disableRetries && (this.switchingAttempts - startAttemptsCnt) < this.rpcUrls.length);
+        
+        throw new InternalError(`MultRpcManager: ${disableRetries ? 'RPC interaction error' : 'all RPCs are unavailable'}`)
     }
 
     // ----------------------=========< RPC switching >=========----------------------
@@ -75,6 +83,7 @@ export class MultiRpcManager {
             console.log(`[MultiRpcManager]: RPC ${this.curRpcUrl()} marked as bad (${this.curRpcIssues} issues registered)`);
         }
 
+        this.switchingAttempts++;
 
         let newRpcIndex = index ?? this.curRpcIdx;
         if (index === undefined && this.rpcUrls.length > 1) {

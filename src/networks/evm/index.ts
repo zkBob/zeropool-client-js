@@ -17,7 +17,6 @@ import { RpcManagerDelegate, MultiRpcManager } from '../rpcman';
 import { ZkBobState } from '../../state';
 import { CommittedForcedExit, FinalizedForcedExit, ForcedExitRequest } from '../../emergency';
 
-const RETRY_COUNT = 10;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const ZERO_ADDRESS1 = '0x0000000000000000000000000000000000000001';
 
@@ -26,7 +25,14 @@ export enum PoolSelector {
     AppendDirectDeposit = "1dc4cb33",
     AppendDirectDepositV2 = "e6b14272",
     TransactV2 = "5fd28f8c",
-  }
+}
+
+export enum ZkBobContractType {
+    Pool = "pool",
+    DD = "direct deposit",
+    Token = "token",
+    Accounting = "accounting"
+}
 
 export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcManagerDelegate {
     // These properties can be undefined when backend in the disabled state
@@ -89,7 +95,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         return this.web3;
     }
 
-    private poolContract(): Contract {
+    /*private poolContract(): Contract {
         if (!this.pool) {
             throw new InternalError(`EvmNetwork: pool contract object is undefined`);
         }
@@ -119,15 +125,31 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         }
 
         return this.accounting;
+    }*/
+
+    private contractByType(type: ZkBobContractType): Contract {
+        let res: Contract | undefined;
+        switch (type) {
+            case ZkBobContractType.Pool: res = this.pool; break;
+            case ZkBobContractType.DD: res = this.dd; break;
+            case ZkBobContractType.Token: res = this.token; break;
+            case ZkBobContractType.Accounting: res = this.accounting; break;
+        }
+
+        if (!res) {
+            throw new InternalError(`EvmNetwork: ${type} contract object is undefined`);
+        }
+
+        return res;
     }
 
-    private contractCallRetry(contract: Contract, address: string, method: string, args: any[] = []): Promise<any> {
+    private contractCallRetry(contractType: ZkBobContractType, address: string, method: string, args: any[] = []): Promise<any> {
         return this.commonRpcRetry(async () => {
+                const contract = this.contractByType(contractType);
                 contract.options.address = address;
                 return await contract.methods[method](...args).call()
             },
-            `[EvmNetwork] Contract call (${method}) error`,
-            RETRY_COUNT
+            `[EvmNetwork] Contract call (${method}) error`
         );
     }
 
@@ -160,40 +182,40 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     // -------------------------------------------------------------------------------
 
     public async getTokenName(tokenAddress: string): Promise<string> {
-        return this.contractCallRetry(this.tokenContract(), tokenAddress, 'name');
+        return this.contractCallRetry(ZkBobContractType.Token, tokenAddress, 'name');
     }
 
     public async getTokenDecimals(tokenAddress: string): Promise<number> {
-        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'decimals');
+        const res = await this.contractCallRetry(ZkBobContractType.Token, tokenAddress, 'decimals');
         return Number(res);
     }
 
     public async getDomainSeparator(tokenAddress: string): Promise<string> {
-        return this.contractCallRetry(this.tokenContract(), tokenAddress, 'DOMAIN_SEPARATOR');
+        return this.contractCallRetry(ZkBobContractType.Token, tokenAddress, 'DOMAIN_SEPARATOR');
     }
     
     public async getTokenNonce(tokenAddress: string, address: string): Promise<number> {
-        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'nonces', [address]);
+        const res = await this.contractCallRetry(ZkBobContractType.Token, tokenAddress, 'nonces', [address]);
         return Number(res);
     }
 
     public async getTokenBalance(tokenAddress: string, address: string): Promise<bigint> {    // in token base units
-        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'balanceOf', [address]);
+        const res = await this.contractCallRetry(ZkBobContractType.Token, tokenAddress, 'balanceOf', [address]);
         return BigInt(res);
     }
 
     public async allowance(tokenAddress: string, owner: string, spender: string): Promise<bigint> {
-        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'allowance', [owner, spender]);
+        const res = await this.contractCallRetry(ZkBobContractType.Token, tokenAddress, 'allowance', [owner, spender]);
         return BigInt(res);
     }
 
     public async permit2NonceBitmap(permit2Address: string, owner: string, wordPos: bigint): Promise<bigint> {
-        const res = await this.contractCallRetry(this.tokenContract(), permit2Address, 'nonceBitmap', [owner, wordPos]);
+        const res = await this.contractCallRetry(ZkBobContractType.Token, permit2Address, 'nonceBitmap', [owner, wordPos]);
         return BigInt(res);
     }
 
     public async erc3009AuthState(tokenAddress: string, authorizer: string, nonce: bigint): Promise<bigint> {
-        const res = await this.contractCallRetry(this.tokenContract(), tokenAddress, 'authorizationState', [authorizer, `0x${nonce.toString(16)}`]);
+        const res = await this.contractCallRetry(ZkBobContractType.Token, tokenAddress, 'authorizationState', [authorizer, `0x${nonce.toString(16)}`]);
         return BigInt(res);
     }
 
@@ -205,7 +227,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         amount: bigint,
         gasFactor?: number
     ): Promise<string> {
-        const encodedTx = await this.tokenContract().methods.approve(spender, BigInt(amount)).encodeABI();
+        const encodedTx = await this.contractByType(ZkBobContractType.Token).methods.approve(spender, BigInt(amount)).encodeABI();
         let txObject: TransactionConfig = {
             from: holder,
             to: tokenAddress,
@@ -214,10 +236,10 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
         const gas = await this.commonRpcRetry(async () => {
             return Number(await this.activeWeb3().eth.estimateGas(txObject));
-        }, 'Unable to estimate gas', RETRY_COUNT);
+        }, 'Unable to estimate gas');
         const gasPrice = await this.commonRpcRetry(async () => {
             return Number(await this.activeWeb3().eth.getGasPrice());
-        }, 'Unable to get gas price', RETRY_COUNT);
+        }, 'Unable to get gas price');
         txObject.gas = gas;
         txObject.gasPrice = `0x${BigInt(Math.ceil(gasPrice * (gasFactor ?? 1.0))).toString(16)}`;
         txObject.nonce = await this.getNativeNonce(holder);
@@ -226,13 +248,13 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
         const receipt = await this.commonRpcRetry(async () => {
             return this.activeWeb3().eth.sendSignedTransaction(signedTx.rawTransaction ?? '');
-        }, 'Unable to send approve tx', 0); // do not retry sending to avoid any side effects
+        }, 'Unable to send approve tx', true); // do not retry sending to avoid any side effects
 
         return receipt.transactionHash;
     }
 
     public async isSupportNonce(tokenAddress: string): Promise<boolean> {
-        const tokenContract = this.tokenContract();
+        const tokenContract = this.contractByType(ZkBobContractType.Token);
         return this.isMethodSupportedByContract(tokenContract, tokenAddress, 'nonces', [ZERO_ADDRESS]);
     }
 
@@ -242,27 +264,27 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     // -------------------------------------------------------------------------------
 
     public async getPoolId(poolAddress: string): Promise<number> {
-        return Number(await this.contractCallRetry(this.poolContract(), poolAddress, 'pool_id'));
+        return Number(await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'pool_id'));
     }
 
     public async getDenominator(poolAddress: string): Promise<bigint> {
-        return BigInt(await this.contractCallRetry(this.poolContract(), poolAddress, 'denominator'));
+        return BigInt(await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'denominator'));
     }
 
     public async poolState(poolAddress: string, index?: bigint): Promise<{index: bigint, root: bigint}> {
         let idx: string;
         if (index === undefined) {
-            idx = await this.contractCallRetry(this.poolContract(), poolAddress, 'pool_index');
+            idx = await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'pool_index');
         } else {
             idx = index?.toString();
         }
-        let root = BigInt(await this.contractCallRetry(this.poolContract(), poolAddress, 'roots', [idx]));
+        let root = BigInt(await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'roots', [idx]));
         if (root == 0n) {
             // it's seems the RPC node got behind the actual blockchain state
             // let's try to find the best one and retry root request
             const switched = await this.switchToTheBestRPC();
             if (switched) {
-                root = await this.contractCallRetry(this.poolContract(), poolAddress, 'roots', [idx]);
+                root = await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'roots', [idx]);
             }
             if (root == 0n) {
                 console.warn(`[EvmNetwork] cannot retrieve root at index ${idx} (is it exist?)`);
@@ -273,24 +295,24 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async poolLimits(poolAddress: string, address: string | undefined): Promise<any> {
-        let contract: Contract;
+        let contract: ZkBobContractType;
         let contractAddress: string;
-        if (await this.isMethodSupportedByContract(this.poolContract(), poolAddress, 'accounting')) {
+        if (await this.isMethodSupportedByContract(this.contractByType(ZkBobContractType.Pool), poolAddress, 'accounting')) {
             // Current contract deployments (getLimitsFor implemented in the separated ZkBobAccounting contract)
             let accountingAddress = this.accountingAddresses.get(poolAddress);
             if (!accountingAddress) {
-                accountingAddress = await this.contractCallRetry(this.poolContract(), poolAddress, 'accounting');
+                accountingAddress = await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'accounting');
                 if (accountingAddress) {
                     this.accountingAddresses.set(poolAddress, accountingAddress)
                 } else {
                     throw new InternalError(`Cannot retrieve accounting contract address for the pool ${poolAddress}`);
                 }
             }
-            contract = this.accountingContract();
+            contract = ZkBobContractType.Accounting;
             contractAddress = accountingAddress;
         } else {
             // Fallback for the old deployments (getLimitsFor implemented in pool contract)
-            contract = this.poolContract();
+            contract = ZkBobContractType.Pool;
             contractAddress = poolAddress;
         }
 
@@ -298,25 +320,25 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async isSupportForcedExit(poolAddress: string): Promise<boolean> {
-        const poolContract = this.poolContract();
+        const poolContract = this.contractByType(ZkBobContractType.Pool);
         return this.isMethodSupportedByContract(poolContract, poolAddress, 'committedForcedExits', ['0']);
     }
 
     public async nullifierValue(poolAddress: string, nullifier: bigint): Promise<bigint> {
-        const res = await this.contractCallRetry(this.poolContract(), poolAddress, 'nullifiers', [nullifier]);
+        const res = await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'nullifiers', [nullifier]);
         
         return BigInt(res);
     }
 
     public async committedForcedExitHash(poolAddress: string, nullifier: bigint): Promise<bigint> {
-        const res = await this.contractCallRetry(this.poolContract(), poolAddress, 'committedForcedExits', [nullifier.toString()]);
+        const res = await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'committedForcedExits', [nullifier.toString()]);
 
         return BigInt(res);
     }
 
     public async createCommitForcedExitTx(poolAddress: string, forcedExit: ForcedExitRequest): Promise<PreparedTransaction> {
         const method = 'commitForcedExit(address,address,uint256,uint256,uint256,uint256,uint256[8])';
-        const encodedTx = await this.poolContract().methods[method](
+        const encodedTx = await this.contractByType(ZkBobContractType.Pool).methods[method](
             forcedExit.operator,
             forcedExit.to,
             forcedExit.amount.toString(),
@@ -337,7 +359,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async committedForcedExit(poolAddress: string, nullifier: bigint): Promise<CommittedForcedExit | undefined> {
-        const pool = this.poolContract();
+        const pool = this.contractByType(ZkBobContractType.Pool);
         pool.options.address = poolAddress;
 
         const commitEventAbi = poolContractABI.find((val) => val.name == 'CommitForcedExit');
@@ -388,7 +410,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async executedForcedExit(poolAddress: string, nullifier: bigint): Promise<FinalizedForcedExit | undefined> {
-        const pool = this.poolContract();
+        const pool = this.contractByType(ZkBobContractType.Pool);
         pool.options.address = poolAddress;
 
         const executeEventAbi = poolContractABI.find((val) => val.name == 'ForcedExit');
@@ -426,7 +448,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public async createExecuteForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
         const method = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
-        const encodedTx = await this.poolContract().methods[method](
+        const encodedTx = await this.contractByType(ZkBobContractType.Pool).methods[method](
             forcedExit.nullifier.toString(),
             forcedExit.operator,
             forcedExit.to,
@@ -445,7 +467,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
 
     public async createCancelForcedExitTx(poolAddress: string, forcedExit: CommittedForcedExit): Promise<PreparedTransaction> {
         const method = 'executeForcedExit(uint256,address,address,uint256,uint256,uint256,bool)';
-        const encodedTx = await this.poolContract().methods[method](
+        const encodedTx = await this.contractByType(ZkBobContractType.Pool).methods[method](
             forcedExit.nullifier.toString(),
             forcedExit.operator,
             forcedExit.to,
@@ -465,7 +487,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     public async getTokenSellerContract(poolAddress: string): Promise<string> {
         let tokenSellerAddr = this.tokenSellerAddresses.get(poolAddress);
         if (!tokenSellerAddr) {
-            tokenSellerAddr = await this.contractCallRetry(this.poolContract(), poolAddress, 'tokenSeller');
+            tokenSellerAddr = await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'tokenSeller');
             if (tokenSellerAddr) {
                 this.tokenSellerAddresses.set(poolAddress, tokenSellerAddr);
             } else {
@@ -484,7 +506,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     public async getDirectDepositQueueContract(poolAddress: string): Promise<string> {
         let ddContractAddr = this.ddContractAddresses.get(poolAddress);
         if (!ddContractAddr) {
-            ddContractAddr = await this.contractCallRetry(this.poolContract(), poolAddress, 'direct_deposit_queue');
+            ddContractAddr = await this.contractCallRetry(ZkBobContractType.Pool, poolAddress, 'direct_deposit_queue');
             if (ddContractAddr) {
                 this.ddContractAddresses.set(poolAddress, ddContractAddr);
             } else {
@@ -496,7 +518,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async getDirectDepositFee(ddQueueAddress: string): Promise<bigint> {
-        const fee = await this.contractCallRetry(this.directDepositContract(), ddQueueAddress, 'directDepositFee');
+        const fee = await this.contractCallRetry(ZkBobContractType.DD, ddQueueAddress, 'directDepositFee');
         return BigInt(fee);
     }
 
@@ -507,7 +529,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         fallbackAddress: string,
     ): Promise<PreparedTransaction> {
         const zkAddrBytes = `0x${Buffer.from(bs58.decode(zkAddress.substring(zkAddress.indexOf(':') + 1))).toString('hex')}`;
-        const encodedTx = await this.directDepositContract().methods["directDeposit(address,uint256,bytes)"](fallbackAddress, amount, zkAddrBytes).encodeABI();
+        const encodedTx = await this.contractByType(ZkBobContractType.DD).methods["directDeposit(address,uint256,bytes)"](fallbackAddress, amount, zkAddrBytes).encodeABI();
 
         return {
             to: ddQueueAddress,
@@ -523,7 +545,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
         fallbackAddress: string,
     ): Promise<PreparedTransaction> {
         const zkAddrBytes = `0x${Buffer.from(bs58.decode(zkAddress.substring(zkAddress.indexOf(':') + 1))).toString('hex')}`;
-        const encodedTx = await this.directDepositContract().methods["directNativeDeposit(address,bytes)"](fallbackAddress, zkAddrBytes).encodeABI();
+        const encodedTx = await this.contractByType(ZkBobContractType.DD).methods["directNativeDeposit(address,bytes)"](fallbackAddress, zkAddrBytes).encodeABI();
 
         return {
             to: ddQueueAddress,
@@ -533,7 +555,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async getDirectDeposit(ddQueueAddress: string, idx: number, state: ZkBobState): Promise<DirectDeposit | undefined> {
-        const ddInfo = await this.contractCallRetry(this.directDepositContract(), ddQueueAddress, 'getDirectDeposit', [idx]);
+        const ddInfo = await this.contractCallRetry(ZkBobContractType.DD, ddQueueAddress, 'getDirectDeposit', [idx]);
         const ddStatusCode = Number(ddInfo.status);
         if (ddStatusCode != 0) {
             return {
@@ -556,7 +578,7 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     }
 
     public async getDirectDepositNonce(ddQueueAddress: string): Promise<number> {
-        const res = await this.contractCallRetry(this.directDepositContract(), ddQueueAddress, 'directDepositNonce');
+        const res = await this.contractCallRetry(ZkBobContractType.DD, ddQueueAddress, 'directDepositNonce');
 
         return Number(res);
     }
@@ -693,13 +715,13 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     private async getTransaction(txHash: string): Promise<Transaction> {
         return this.commonRpcRetry(() => {
             return this.activeWeb3().eth.getTransaction(txHash);
-        }, 'Cannot get tx', RETRY_COUNT);
+        }, 'Cannot get tx');
     }
 
     private async getTransactionReceipt(txHash: string): Promise<TransactionReceipt> {
         return this.commonRpcRetry(() => {
             return this.activeWeb3().eth.getTransactionReceipt(txHash);
-        }, 'Cannot get tx receipt', RETRY_COUNT);
+        }, 'Cannot get tx receipt');
     }
 
     public async getTxRevertReason(txHash: string): Promise<string | null> {
@@ -729,19 +751,19 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     public async getChainId(): Promise<number> {
         return this.commonRpcRetry(async () => {
             return this.activeWeb3().eth.getChainId();
-        }, 'Cannot get chain ID', RETRY_COUNT);
+        }, 'Cannot get chain ID');
     }
 
     public async getNativeBalance(address: string): Promise<bigint> {
         return this.commonRpcRetry(async () => {
             return BigInt(await this.activeWeb3().eth.getBalance(address));
-        }, 'Cannot get native balance', RETRY_COUNT);
+        }, 'Cannot get native balance');
     }
 
     public async getNativeNonce(address: string): Promise<number> {
         return this.commonRpcRetry(async () => {
             return Number(await this.activeWeb3().eth.getTransactionCount(address))
-        }, 'Cannot get native nonce', RETRY_COUNT);
+        }, 'Cannot get native nonce');
     }
 
     public async getTxDetails(index: number, poolTxHash: string, state: ZkBobState): Promise<PoolTxDetails | null> {
@@ -853,14 +875,14 @@ export class EvmNetwork extends MultiRpcManager implements NetworkBackend, RpcMa
     public async getBlockNumber(): Promise<number> {
         return this.commonRpcRetry(() => {
             return this.activeWeb3().eth.getBlockNumber();
-        }, '[EvmNetwork]: Cannot get block number', RETRY_COUNT);
+        }, '[EvmNetwork]: Cannot get block number');
     }
 
     public async getBlockNumberFrom(rpcurl: string): Promise<number> {
         const tmpWeb3 = new Web3(rpcurl);
         return this.commonRpcRetry(() => {
             return tmpWeb3.eth.getBlockNumber();
-        }, `[EvmNetwork]: Cannot get block number from ${rpcurl}`, 2);
+        }, `[EvmNetwork]: Cannot get block number from ${rpcurl}`, true);
     }
 
     public async waitForBlock(blockNumber: number, timeoutSec?: number): Promise<boolean> {
