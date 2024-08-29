@@ -37,7 +37,8 @@
     "tronweb": "^5.3.0",
     "wasm-feature-detect": "^1.2.11",
     "web3": "1.8.0",
-    "web3-utils": "1.8.0"
+    "web3-utils": "1.8.0",
+    "kalypso-sdk": "1.0.36"
   },
   "devDependencies": {
     "@types/ethereum-protocol": "^1.0.1",
