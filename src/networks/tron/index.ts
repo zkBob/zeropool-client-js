@@ -64,9 +64,16 @@ export class TronNetwork extends MultiRpcManager implements NetworkBackend, RpcM
     public setEnabled(enabled: boolean) {
         if (enabled) {
             if (!this.isEnabled()) {
+                let optKey;
+                try {
+                    optKey = (process as any)?.env?.REACT_APP_TRONGRID_API_KEY ?? 
+                            (window as any)?.REACT_APP_TRONGRID_API_KEY;
+                } catch(_) {}
+
                 this.tronWeb = new TronWeb({
                     fullHost: this.curRpcUrl(),
                     privateKey: '01',
+                    headers: optKey ? { 'TRON-PRO-API-KEY': optKey } : undefined,
                 });
             }
         } else {
