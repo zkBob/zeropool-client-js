@@ -1049,6 +1049,13 @@ export class ZkBobClient extends ZkBobProvider {
     let jobs: SequencerJob[] = [];
     let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
+      
+      // TODO: remove it
+      // disabling optimistic mode
+      if (index > 0) {
+        await this.waitReadyToTransact();
+      }
+
       const onePart = txParts[index];
       const outputs = onePart.outNotes.map((aNote) => { return {to: aNote.destination, amount: `${aNote.amountGwei}`} });
       const oneTx: ITransferData = {
@@ -1091,7 +1098,8 @@ export class ZkBobClient extends ZkBobProvider {
         // if there are few additional tx, we should collect the optimistic state before processing them
         await this.waitJobTxHash(aJob);
 
-        optimisticState = await this.zpState().getNewState(this.sequencer(), this.account?.birthindex ?? 0);
+        // TODO: come back to optimistic transactions [they were temporary disabled due to decentralized sequencer specific]
+        //optimisticState = await this.zpState().getNewState(this.sequencer(), this.account?.birthindex ?? 0);
       }
     }
 
@@ -1147,6 +1155,12 @@ export class ZkBobClient extends ZkBobProvider {
     let optimisticState = ZERO_OPTIMISTIC_STATE;
     for (let index = 0; index < txParts.length; index++) {
       const onePart = txParts[index];
+
+      // TODO: remove it
+      // disabling optimistic mode
+      if (index > 0) {
+        await this.waitReadyToTransact();
+      }
       
       let oneTxData: any;
       let txType: RegularTxType;
@@ -1159,6 +1173,7 @@ export class ZkBobClient extends ZkBobProvider {
           prover_fee: onePart.fee.proverPart.toString(),
           data: [],
         };
+
         oneTxData = await state.createTransferOptimistic(oneTx, optimisticState);
         txType = RegularTxType.Transfer;
       } else if (onePart.outNotes.length == 1) {
@@ -1173,6 +1188,7 @@ export class ZkBobClient extends ZkBobProvider {
           prover_fee: onePart.fee.proverPart.toString(),
           data: [],
         };
+
         oneTxData = await state.createWithdrawalOptimistic(oneTx, optimisticState);
         txType = RegularTxType.Withdraw;
       } else {
@@ -1206,7 +1222,8 @@ export class ZkBobClient extends ZkBobProvider {
         // if there are few additional tx, we should collect the optimistic state before processing them
         await this.waitJobTxHash(aJob);
 
-        optimisticState = await this.zpState().getNewState(this.sequencer(), this.account?.birthindex ?? 0);
+        // TODO: come back to optimistic transactions [they were temporary disabled due to decentralized sequencer specific]
+        //optimisticState = await this.zpState().getNewState(this.sequencer(), this.account?.birthindex ?? 0);
       }
     }
 
